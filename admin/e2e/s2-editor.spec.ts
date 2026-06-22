@@ -101,11 +101,42 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
   }
 
-  test('이름·구성 후 저장하면 완료 토스트가 뜬다', async ({ page }) => {
+  test('실행·이름 입력 후 저장하면 완료 토스트가 뜬다', async ({ page }) => {
     await buildChart(page);
+    // 저장 = 실행 + 캐시 시드(PRD 7.3): 실행 결과가 있어야 저장 가능
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('월별 매출');
     await page.getByRole('button', { name: '저장', exact: true }).click();
     await expect(page.getByText('저장되었습니다')).toBeVisible();
+  });
+
+  test('저장 후 임베드 코드 버튼 활성화 + S3 모달 연결', async ({ page }) => {
+    await buildChart(page);
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
+    await page.getByPlaceholder('차트 이름').fill('신규 차트');
+    await expect(page.getByRole('button', { name: '임베드 코드' })).toBeDisabled();
+
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+    await expect(page.getByText('저장되었습니다')).toBeVisible();
+
+    await expect(page.getByRole('button', { name: '임베드 코드' })).toBeEnabled();
+    await page.getByRole('button', { name: '임베드 코드' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByText(/sdk\.js/)).toBeVisible();
+  });
+
+  test('빌더 변경 시 실행 결과가 무효화되어 재실행 전 저장 불가', async ({ page }) => {
+    await buildChart(page);
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
+    await page.getByPlaceholder('차트 이름').fill('x');
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+
+    // X축 변경 → 결과/SQL 무효화 → 저장 비활성(stale 저장 방지)
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('dept');
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
   });
 
   test('구성이 있을 때 데이터소스 변경은 확인 모달을 거친다', async ({ page }) => {
