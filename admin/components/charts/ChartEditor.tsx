@@ -15,6 +15,7 @@ import { NocodeBuilder } from './NocodeBuilder';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
 import { ChartPreview } from './ChartPreview';
 import { OptionPanel } from './OptionPanel';
+import { EmbedModal } from './EmbedModal';
 
 // optionRegistry storage='column' 키 (chartType 은 별도 state). 저장 시 options JSONB 에서 분리.
 const COLUMN_OPTION_KEYS = ['description', 'refreshMode', 'cacheTtlSeconds'] as const;
@@ -57,6 +58,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [pendingDatasource, setPendingDatasource] = useState<number | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [pendingRun, setPendingRun] = useState(false);
+  const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
+  const [embedOpen, setEmbedOpen] = useState(false);
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources);
@@ -130,8 +133,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setRunning(true);
     setRunError(null);
     try {
-      const res = await queryApi.runBuilder({ datasourceId, builderConfig: builder, chartType, options, mode: 'aggregate' });
+      // 집계(실행 결과) + 조건 적용 원본(원본 데이터, mode:rows) 동시 갱신 — 화면설계 4.2
+      const [res, rawRes] = await Promise.all([
+        queryApi.runBuilder({ datasourceId, builderConfig: builder, chartType, options, mode: 'aggregate' }),
+        queryApi.runBuilder({ datasourceId, builderConfig: builder, chartType, options, mode: 'rows' }),
+      ]);
       setResult(res);
+      setRaw(rawRes);
       setGeneratedSql(res.generatedSql ?? null);
       setOption(res.option ?? null);
       setResultTab('result');
@@ -157,7 +165,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const canSave = !!name.trim() && !!builder.table && !!builder.xAxis && builder.yAxis.length > 0;
+  // 저장 = 실행 + 캐시 시드(PRD 7.3). 현재 구성으로 실행 성공한 결과가 있어야 저장 가능
+  // (빌더 변경 시 result/generatedSql 가 무효화되므로 stale SQL 저장이 방지된다).
+  const canSave = !!name.trim() && !!builder.table && !!builder.xAxis && builder.yAxis.length > 0 && !!result;
 
   const save = async (): Promise<boolean> => {
     if (!canSave || datasourceId == null) return false;
@@ -176,8 +186,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         refreshMode: (cols.refreshMode as RefreshMode) ?? 'ttl',
         cacheTtlSeconds: Number(cols.cacheTtlSeconds ?? 3600),
       };
-      if (chartId == null) await chartsApi.create(input);
-      else await chartsApi.update(chartId, input);
+      if (savedId == null) {
+        const created = await chartsApi.create(input);
+        setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
+      } else {
+        await chartsApi.update(savedId, input);
+      }
       setDirty(false);
       setToast('저장되었습니다');
       return true;
@@ -211,12 +225,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             placeholder="차트 이름"
           />
         </div>
-        {chartId != null && <span className="text-[13px] text-text-tertiary">#{chartId}</span>}
+        {savedId != null && <span className="text-[13px] text-text-tertiary">#{savedId}</span>}
         <div className="flex-1" />
         <Button variant="secondary" size="sm" className="h-8" disabled={!canSave || saving} onClick={save}>
           {saving ? '저장 중…' : '저장'}
         </Button>
-        <Button size="sm" className="h-8" disabled={chartId == null}>
+        <Button size="sm" className="h-8" disabled={savedId == null} onClick={() => setEmbedOpen(true)}>
           임베드 코드
         </Button>
       </header>
@@ -249,8 +263,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
               config={builder}
               tables={tables}
               onChange={(b) => {
+                // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
                 setBuilder(b);
                 setDirty(true);
+                setResult(null);
+                setGeneratedSql(null);
+                setOption(null);
+                setRunError(null);
               }}
               onRun={runBuilder}
               running={running}
@@ -340,6 +359,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         >
           <p className="text-[13px] text-text-secondary">이대로 나가면 변경 내용이 사라집니다.</p>
         </Modal>
+      )}
+
+      {/* 임베드 코드 모달(S3) — 저장된 차트에서만 */}
+      {embedOpen && savedId != null && (
+        <EmbedModal
+          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, updatedAt: new Date().toISOString() }}
+          onClose={() => setEmbedOpen(false)}
+        />
       )}
 
       {/* 저장 토스트 */}

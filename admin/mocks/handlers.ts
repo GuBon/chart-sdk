@@ -12,6 +12,7 @@ let datasources: Datasource[] = seedDatasources.map((d) => ({ ...d }));
 let nextDsId = Math.max(...datasources.map((d) => d.id)) + 1;
 let chartList = charts.map((c) => ({ ...c }));
 let nextChartId = Math.max(...charts.map((c) => c.id)) + 1;
+const savedCharts: Record<number, Record<string, unknown>> = {}; // 생성/수정된 차트 전체 본문
 let tokenList: UserToken[] = seedTokens.map((t) => ({ ...t }));
 let userList: User[] = seedUsers.map((u) => ({ ...u }));
 let nextTokenId = Math.max(...tokenList.map((t) => t.tokenId)) + 1;
@@ -30,7 +31,9 @@ export const handlers = [
     return HttpResponse.json({ charts: list });
   }),
   http.get('/api/v1/charts/:id', ({ params }) => {
-    const summary = chartList.find((c) => c.id === Number(params.id));
+    const id = Number(params.id);
+    if (savedCharts[id]) return HttpResponse.json(savedCharts[id]);
+    const summary = chartList.find((c) => c.id === id);
     return summary ? HttpResponse.json(chartDetail(summary)) : err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
   }),
   http.delete('/api/v1/charts/:id', ({ params }) => {
@@ -42,12 +45,21 @@ export const handlers = [
   http.post('/api/v1/charts', async ({ request }) => {
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
-    return HttpResponse.json({ id: nextChartId++, ...body, createdAt: now, updatedAt: now }, { status: 201 });
+    const id = nextChartId++;
+    const chart = { id, ...body, createdAt: now, updatedAt: now };
+    savedCharts[id] = chart;
+    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, updatedAt: now }, ...chartList];
+    return HttpResponse.json(chart, { status: 201 });
   }),
   http.put('/api/v1/charts/:id', async ({ params, request }) => {
+    const id = Number(params.id);
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
-    return HttpResponse.json({ id: Number(params.id), ...body, createdAt: now, updatedAt: now });
+    const prev = savedCharts[id] as { createdAt?: string } | undefined;
+    const chart = { id, ...body, createdAt: prev?.createdAt ?? now, updatedAt: now };
+    savedCharts[id] = chart;
+    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, updatedAt: now } : c));
+    return HttpResponse.json(chart);
   }),
 
   // ── 데이터소스 ────────────────────────────────────
