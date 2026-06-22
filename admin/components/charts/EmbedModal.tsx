@@ -11,10 +11,14 @@ import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 
 // S3 임베드 코드 모달(273:366). 코드 조립·복사만 담당(토큰 발급/회수는 S7).
-const SDK_SRC = 'https://cdn.example.com/sdk.js';
+// SDK 배포 경로: NEXT_PUBLIC_SDK_SRC 우선, 없으면 현재 출처 기준(/sdk.js).
+function sdkSrc() {
+  if (process.env.NEXT_PUBLIC_SDK_SRC) return process.env.NEXT_PUBLIC_SDK_SRC;
+  return typeof window !== 'undefined' ? `${window.location.origin}/sdk.js` : '/sdk.js';
+}
 
 function snippet(chartId: number, token: string) {
-  return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${SDK_SRC}"></script>`;
+  return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${sdkSrc()}"></script>`;
 }
 
 export function EmbedModal({ chart, onClose }: { chart: ChartSummary; onClose: () => void }) {
