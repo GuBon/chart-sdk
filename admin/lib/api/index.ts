@@ -1,0 +1,66 @@
+// 리소스별 타입 안전 엔드포인트. 화면은 이 함수들만 호출한다(경로·메서드 노출 금지).
+import { request } from './client';
+import type {
+  Chart,
+  ChartInput,
+  ChartSummary,
+  ConnectionTestResult,
+  Datasource,
+  DatasourceInput,
+  IssuedToken,
+  QueryResult,
+  SchemaTable,
+  User,
+  UserToken,
+} from './types';
+
+export { ApiError } from './client';
+export type * from './types';
+
+const qs = (params: Record<string, string | number | undefined>) => {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== '');
+  return entries.length ? `?${new URLSearchParams(entries as [string, string][])}` : '';
+};
+
+export const chartsApi = {
+  list: (q?: string) => request<{ charts: ChartSummary[] }>(`/charts${qs({ q })}`).then((r) => r.charts),
+  get: (id: number) => request<Chart>(`/charts/${id}`),
+  create: (input: ChartInput) => request<Chart>('/charts', { method: 'POST', body: input }),
+  update: (id: number, input: ChartInput) => request<Chart>(`/charts/${id}`, { method: 'PUT', body: input }),
+  remove: (id: number) => request<void>(`/charts/${id}`, { method: 'DELETE' }),
+};
+
+export const queryApi = {
+  /** 노코드 미리보기 — rows + option 동봉 */
+  runBuilder: (body: { datasourceId: number; builderConfig: unknown; chartType: string; options: unknown; mode?: 'aggregate' | 'rows' }) =>
+    request<QueryResult>('/query/run-builder', { method: 'POST', body }),
+  /** SQL 재실행 없이 option 만 재조립 */
+  preview: (body: { chartType: string; options: unknown; rows: { columns: unknown[]; rows: unknown[][] } }) =>
+    request<{ option: Record<string, unknown> }>('/charts/preview', { method: 'POST', body }),
+};
+
+export const datasourcesApi = {
+  list: () => request<{ datasources: Datasource[] }>('/datasources').then((r) => r.datasources),
+  create: (input: DatasourceInput) => request<Datasource>('/datasources', { method: 'POST', body: input }),
+  update: (id: number, input: DatasourceInput) => request<Datasource>(`/datasources/${id}`, { method: 'PUT', body: input }),
+  remove: (id: number) => request<void>(`/datasources/${id}`, { method: 'DELETE' }),
+  test: (input: Omit<DatasourceInput, 'name'>) => request<ConnectionTestResult>('/datasources/test', { method: 'POST', body: input }),
+};
+
+export const schemaApi = {
+  tables: (datasourceId: number) => request<{ tables: SchemaTable[] }>(`/schema/tables${qs({ datasourceId })}`).then((r) => r.tables),
+  preview: (tableName: string, datasourceId: number) =>
+    request<QueryResult>(`/schema/tables/${encodeURIComponent(tableName)}/preview${qs({ datasourceId })}`),
+};
+
+export const tokensApi = {
+  list: () => request<{ tokens: UserToken[] }>('/tokens').then((r) => r.tokens),
+  issue: (userId: number, expiresInDays?: number) =>
+    request<IssuedToken>(`/users/${userId}/tokens`, { method: 'POST', body: { expiresInDays } }),
+  revoke: (tokenId: number) => request<void>(`/tokens/${tokenId}`, { method: 'DELETE' }),
+};
+
+export const usersApi = {
+  list: () => request<{ users: User[] }>('/users').then((r) => r.users),
+  create: (input: { username: string; displayName: string }) => request<User>('/users', { method: 'POST', body: input }),
+};
