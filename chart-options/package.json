@@ -1,0 +1,15 @@
+{
+  "name": "@chartsdk/chart-options",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "차트 시각화 옵션 SSOT — 패널·서버 변환기·options JSONB가 공유하는 단일 레지스트리",
+  "main": "./optionRegistry.ts",
+  "types": "./optionRegistry.ts",
+  "exports": {
+    ".": "./optionRegistry.ts"
+  },
+  "scripts": {
+    "gen": "node scripts/generate-defaults.ts"
+  }
+}
