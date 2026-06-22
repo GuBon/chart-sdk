@@ -24,8 +24,8 @@ const apiBase = resolveApiBase();
 /** 명령형 단일 렌더 — SPA 등 DOM 스캔 타이밍이 어긋나는 환경 대응 */
 export async function render(el: HTMLElement, opts: { chartId: string; token: string }): Promise<void> {
   try {
-    const { option } = await fetchChartOption(apiBase, opts.chartId, opts.token);
-    renderChart(el, option);
+    const { option, computedAt } = await fetchChartOption(apiBase, opts.chartId, opts.token);
+    renderChart(el, option, computedAt);
   } catch {
     renderError(el);
   }
