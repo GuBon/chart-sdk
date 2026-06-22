@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+admin/.next/
+admin/out/
+sdk/dist/
+
+# generated SSOT artifact (run `npm run gen:defaults`)
+chart-options/defaults.json
+
+# java / gradle
+server/build/
+server/.gradle/
+server/bin/
+
+# typescript incremental
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# playwright
+admin/test-results/
+admin/playwright-report/
+admin/blob-report/
+admin/.playwright/
+
+# misc
+*.log
+.DS_Store
+.tmp_*
