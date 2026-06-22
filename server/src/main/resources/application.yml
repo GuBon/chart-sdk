@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: chartsdk-server
+  datasource:
+    # Type A/B 공통 — 값만 .env 로 주입 (앱 코드는 모드를 구분하지 않는다)
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chartsdk}
+    username: ${DATABASE_USER:chartsdk}
+    password: ${DATABASE_PASSWORD:chartsdk}
+  jpa:
+    hibernate:
+      ddl-auto: none # 스키마는 Flyway 가 소유 (mc_ 테이블만). JPA 는 생성/변경하지 않는다.
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: ${PORT:8080}
