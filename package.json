@@ -15,6 +15,9 @@
     "gen:defaults": "npm run gen -w @chartsdk/chart-options",
     "dev": "npm run dev -w @chartsdk/admin",
     "build:sdk": "npm run build -w @chartsdk/sdk",
-    "build": "npm run gen:defaults && npm run build -w @chartsdk/sdk"
+    "build:admin": "npm run build -w @chartsdk/admin",
+    "build": "npm run gen:defaults && npm run build -w @chartsdk/sdk && npm run build -w @chartsdk/admin",
+    "typecheck": "npm run typecheck -w @chartsdk/admin",
+    "test:e2e": "npm run test:e2e -w @chartsdk/admin"
   }
 }
