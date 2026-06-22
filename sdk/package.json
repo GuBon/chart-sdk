@@ -1,0 +1,19 @@
+{
+  "name": "@chartsdk/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "임베드 차트 런타임 sdk.js — [data-chart-id] 스캔 → 데이터 요청 → ECharts setOption",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "echarts": "^5.5.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  }
+}
