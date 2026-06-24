@@ -3,9 +3,9 @@ spring:
     name: chartsdk-server
   datasource:
     # Type A/B 공통 — 값만 .env 로 주입 (앱 코드는 모드를 구분하지 않는다)
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/chartsdk}
-    username: ${DATABASE_USER:chartsdk}
-    password: ${DATABASE_PASSWORD:chartsdk}
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/chartsol}
+    username: ${DATABASE_USER:postgres}
+    password: ${DATABASE_PASSWORD:0218}
   jpa:
     hibernate:
       ddl-auto: none # 스키마는 Flyway 가 소유 (mc_ 테이블만). JPA 는 생성/변경하지 않는다.
@@ -13,6 +13,14 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    baseline-on-migrate: true
 
 server:
   port: ${PORT:8080}
+
+chartsdk:
+  embed:
+    jwt-secret: ${CHARTSDK_EMBED_JWT_SECRET:dev-chartsol-embed-secret-change-me}
+  datasource:
+    # 데이터소스 DB 비밀번호 AES-GCM 키 (.env DATASOURCE_ENC_KEY). 운영에서는 반드시 교체.
+    enc-key: ${DATASOURCE_ENC_KEY:dev-chartsol-datasource-enc-change-me}
