@@ -8,7 +8,7 @@ export type RefreshMode = 'live' | 'ttl' | 'manual';
 export type ChartOptions = Record<string, unknown>;
 
 // 노코드 빌더 (SQL 생성규칙 2장)
-export type AggType = 'sum' | 'avg' | 'count' | 'count_distinct' | 'min' | 'max';
+export type AggType = 'sum' | 'avg' | 'stddev' | 'count' | 'count_distinct' | 'min' | 'max' | 'none';
 export type WhereOp =
   | 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'
   | 'contains' | 'starts_with' | 'in' | 'between' | 'is_null' | 'is_not_null';
@@ -30,14 +30,30 @@ export interface OrderBy {
   direction: 'asc' | 'desc';
 }
 
+/** 표본 추출 (생성규칙 3C) — 대용량 테이블 일부만 스캔해 근사 집계. method 는 SYSTEM 고정(블록 단위, 전체 스캔 회피). */
+export interface SampleConfig {
+  rate: number; // 표본 비율(%) 1~100
+}
+
+export type JoinType = 'inner' | 'left';
+/** 테이블 조인 (생성규칙 11장). N개 체인 — 각 on.leftColumn 은 base 또는 앞서 조인된 테이블의 qualified 컬럼. */
+export interface JoinSpec {
+  table: string; // 조인 대상 테이블
+  type: JoinType; // inner | left (full/right 는 후속)
+  on: { leftColumn: string; rightColumn: string }; // qualified "table.col" 단일 매칭
+}
+
 export interface BuilderConfig {
-  table: string | null; // 신규 차트 초안에선 null 허용
+  table: string | null; // base 테이블. 신규 차트 초안에선 null 허용
+  // 조인이 있으면 모든 컬럼 참조(xAxis·yAxis·where·orderBy·on)는 qualified "table.col". 없으면 기존 "col" 허용(하위호환).
+  joins?: JoinSpec[]; // 생성규칙 11장. 미지정/[] = 단일 테이블
   xAxis: string | null;
   xAxisBucket: XAxisBucket;
   yAxis: YAxisField[];
   where: WhereCond[];
   orderBy: OrderBy | null;
   limit?: number;
+  sample?: SampleConfig | null; // 집계 모드 전용. 지정 시 FROM 에 TABLESAMPLE SYSTEM 주입. 조인과 동시 사용 불가(11장)
 }
 
 /** S1 목록 카드 */
@@ -46,7 +62,17 @@ export interface ChartSummary {
   name: string;
   description: string | null;
   chartType: ChartType;
+  datasourceId: number;
   updatedAt: string;
+}
+
+/** S1 목록 정렬·필터 (API 3.1). 전부 선택 — 미지정 시 owner 범위 전체를 updated_at DESC 로 */
+export type ChartSort = 'updated_desc' | 'updated_asc' | 'name_asc' | 'name_desc';
+export interface ChartListParams {
+  q?: string;
+  type?: ChartType | 'all';
+  datasourceId?: number | 'all';
+  sort?: ChartSort;
 }
 
 /** S2 진입 시 복원용 단건 */
@@ -131,6 +157,8 @@ export interface QueryResult {
   elapsedMs: number;
   generatedSql?: string;
   option?: ChartOptions; // run-builder(aggregate) · preview 에서 동봉
+  approximate?: boolean; // 표본 추출로 계산된 근사 결과
+  sampleRate?: number; // 사용된 표본 비율(%) — approximate 일 때만
 }
 
 /** 임베드 데이터(SDK 가 받는 형태) */

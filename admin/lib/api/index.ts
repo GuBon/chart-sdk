@@ -3,6 +3,7 @@ import { request } from './client';
 import type {
   Chart,
   ChartInput,
+  ChartListParams,
   ChartSummary,
   ConnectionTestResult,
   Datasource,
@@ -23,7 +24,15 @@ const qs = (params: Record<string, string | number | undefined>) => {
 };
 
 export const chartsApi = {
-  list: (q?: string) => request<{ charts: ChartSummary[] }>(`/charts${qs({ q })}`).then((r) => r.charts),
+  list: (params: ChartListParams = {}) =>
+    request<{ charts: ChartSummary[] }>(
+      `/charts${qs({
+        q: params.q,
+        type: params.type && params.type !== 'all' ? params.type : undefined,
+        datasourceId: params.datasourceId && params.datasourceId !== 'all' ? params.datasourceId : undefined,
+        sort: params.sort && params.sort !== 'updated_desc' ? params.sort : undefined,
+      })}`,
+    ).then((r) => r.charts),
   get: (id: number) => request<Chart>(`/charts/${id}`),
   create: (input: ChartInput) => request<Chart>('/charts', { method: 'POST', body: input }),
   update: (id: number, input: ChartInput) => request<Chart>(`/charts/${id}`, { method: 'PUT', body: input }),
@@ -44,7 +53,7 @@ export const datasourcesApi = {
   create: (input: DatasourceInput) => request<Datasource>('/datasources', { method: 'POST', body: input }),
   update: (id: number, input: DatasourceInput) => request<Datasource>(`/datasources/${id}`, { method: 'PUT', body: input }),
   remove: (id: number) => request<void>(`/datasources/${id}`, { method: 'DELETE' }),
-  test: (input: Omit<DatasourceInput, 'name'>) => request<ConnectionTestResult>('/datasources/test', { method: 'POST', body: input }),
+  test: (input: Omit<DatasourceInput, 'name'> & { id?: number }) => request<ConnectionTestResult>('/datasources/test', { method: 'POST', body: input }),
 };
 
 export const schemaApi = {
