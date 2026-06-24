@@ -9,56 +9,141 @@ type Rows = unknown[][];
 const SAMPLE_CATS = ['의류', '식품', '가전', '도서', '생활'];
 const SAMPLE_MONTHS = ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'];
 
-// 별칭 자동 생성 (생성규칙 2장)
-const aliasOf = (y: { column: string; agg: string; alias?: string }) => y.alias || `${y.agg}_${y.column}`;
+// 식별자 quote. "table.col" → "table"."col", 단일 "col" → "col" (생성규칙 11.2)
+const qident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+const qcol = (ref: string) => {
+  const i = ref.indexOf('.');
+  return i < 0 ? qident(ref) : `${qident(ref.slice(0, i))}.${qident(ref.slice(i + 1))}`;
+};
+// qualified 컬럼의 표시명(별칭·헤더) — 테이블 접두 제거
+const colName = (ref: string) => {
+  const i = ref.indexOf('.');
+  return i < 0 ? ref : ref.slice(i + 1);
+};
 
-/** 생성된 SQL 문자열(표시용) — 생성규칙 6·7장 모사 */
-export function buildGeneratedSql(cfg: BuilderConfig): string {
-  if (!cfg.table || !cfg.xAxis || cfg.yAxis.length === 0) return '';
-  const q = (s: string) => `"${s}"`;
-  const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${q(cfg.xAxis)}) AS ${q(cfg.xAxis)}` : q(cfg.xAxis);
-  const aggSql: Record<string, (c: string) => string> = {
-    sum: (c) => `SUM(${q(c)})`,
-    avg: (c) => `AVG(${q(c)})`,
-    count: (c) => `COUNT(${q(c)})`,
-    count_distinct: (c) => `COUNT(DISTINCT ${q(c)})`,
-    min: (c) => `MIN(${q(c)})`,
-    max: (c) => `MAX(${q(c)})`,
-  };
-  const selects = [xCol, ...cfg.yAxis.map((y) => `${aggSql[y.agg](y.column)} AS ${q(aliasOf(y))}`)];
-  const where = cfg.where.length
-    ? ` WHERE ${cfg.where
-        .map((w) => (w.op === 'is_null' ? `${q(w.column)} IS NULL` : w.op === 'is_not_null' ? `${q(w.column)} IS NOT NULL` : `${q(w.column)} ${'='} ?`))
-        .join(' AND ')}`
-    : '';
-  const group = cfg.xAxisBucket ? '1' : q(cfg.xAxis);
-  let order = '';
-  if (cfg.orderBy) {
-    const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + 2; // y0 → 2번째 컬럼
-    order = ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
-  }
-  return `SELECT ${selects.join(', ')}\nFROM ${q(cfg.table)}${where}\nGROUP BY ${group}${order}\nLIMIT 1000`;
+function assertSampleAllowed(cfg: BuilderConfig) {
+  if (cfg.sample && (cfg.joins?.length ?? 0) > 0) throw new Error('JOIN_SAMPLE_NOT_ALLOWED');
 }
+
+// 별칭 자동 생성 (생성규칙 2장) — 조인 시 테이블 접두는 별칭에서 제거
+const aliasOf = (y: { column: string; agg: string; alias?: string }) => y.alias || (y.agg === 'none' ? colName(y.column) : `${y.agg}_${colName(y.column)}`);
+
+function whereSql(w: { column: string; op: string; value?: unknown }): string {
+  const col = qcol(w.column);
+  switch (w.op) {
+    case 'eq':
+      return `${col} = ?`;
+    case 'neq':
+      return `${col} <> ?`;
+    case 'gt':
+      return `${col} > ?`;
+    case 'gte':
+      return `${col} >= ?`;
+    case 'lt':
+      return `${col} < ?`;
+    case 'lte':
+      return `${col} <= ?`;
+    case 'contains':
+      return `${col} ILIKE '%' || ? || '%'`;
+    case 'starts_with':
+      return `${col} ILIKE ? || '%'`;
+    case 'in': {
+      const count = Array.isArray(w.value) && w.value.length > 0 ? w.value.length : 1;
+      return `${col} IN (${Array.from({ length: count }, () => '?').join(', ')})`;
+    }
+    case 'between':
+      return `${col} BETWEEN ? AND ?`;
+    case 'is_null':
+      return `${col} IS NULL`;
+    case 'is_not_null':
+      return `${col} IS NOT NULL`;
+    default:
+      return `${col} = ?`;
+  }
+}
+
+/** 생성된 SQL 문자열(표시용) — 생성규칙 6·7·11장 모사 */
+export function buildGeneratedSql(cfg: BuilderConfig): string {
+  assertSampleAllowed(cfg);
+  if (!cfg.table || !cfg.xAxis || cfg.yAxis.length === 0) return '';
+  const where = cfg.where.length ? ` WHERE ${cfg.where.map((w) => whereSql(w)).join(' AND ')}` : '';
+  // 조인(11.3) — FROM base 뒤에 joins 순서대로 [INNER|LEFT] JOIN ... ON ...
+  const joinSql = (cfg.joins ?? [])
+    .map((j) => ` ${j.type === 'inner' ? 'INNER' : 'LEFT'} JOIN ${qident(j.table)} ON ${qcol(j.on.leftColumn)} = ${qcol(j.on.rightColumn)}`)
+    .join('');
+  const orderSql = () => {
+    if (!cfg.orderBy) return '';
+    const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + 2; // y0 → 2번째 컬럼
+    return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
+  };
+  const rawMode = cfg.yAxis.some((y) => y.agg === 'none');
+  if (rawMode) {
+    const selects = [
+      qcol(cfg.xAxis),
+      ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
+    ];
+    return `SELECT ${selects.join(', ')}\nFROM ${qident(cfg.table)}${joinSql}${where}${orderSql()}\nLIMIT 1000`;
+  }
+  const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${qcol(cfg.xAxis)}) AS ${qident(colName(cfg.xAxis))}` : qcol(cfg.xAxis);
+  const aggSql: Record<string, (c: string) => string> = {
+    sum: (c) => `SUM(${qcol(c)})`,
+    avg: (c) => `AVG(${qcol(c)})`,
+    stddev: (c) => `STDDEV(${qcol(c)})`,
+    count: (c) => `COUNT(${qcol(c)})`,
+    count_distinct: (c) => `COUNT(DISTINCT ${qcol(c)})`,
+    min: (c) => `MIN(${qcol(c)})`,
+    max: (c) => `MAX(${qcol(c)})`,
+  };
+  const selects = [xCol, ...cfg.yAxis.map((y) => `${aggSql[y.agg](y.column)} AS ${qident(aliasOf(y))}`)];
+  const group = cfg.xAxisBucket ? '1' : qcol(cfg.xAxis);
+  // 표본 추출(3C) — base 뒤 TABLESAMPLE SYSTEM. 조인과 동시 사용은 검증 단계에서 차단한다.
+  const sample = cfg.sample ? ` TABLESAMPLE SYSTEM (${clampRate(cfg.sample.rate)})` : '';
+  return `SELECT ${selects.join(', ')}\nFROM ${qident(cfg.table)}${sample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+}
+
+/** 표본 비율 1~100 클램프 (생성규칙 3C·9장) */
+export const clampRate = (rate: number) => Math.max(1, Math.min(100, Math.round(rate)));
 
 /** 집계 결과 rows 생성 — 카테고리/월 라벨 + yAxis별 가짜 값 */
 export function buildAggregateRows(cfg: BuilderConfig): QueryResult {
+  assertSampleAllowed(cfg);
+  if (cfg.yAxis.some((y) => y.agg === 'none')) {
+    const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: 'numeric' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
+    const rows: Rows = Array.from({ length: 12 }, (_, i) => [
+      10 + i * 7,
+      ...cfg.yAxis.map((_, j) => Math.round(40 + i * 9 + j * 15 + (i % 3) * 8)),
+    ]);
+    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 18 };
+  }
   const labels = cfg.xAxisBucket ? SAMPLE_MONTHS : SAMPLE_CATS;
-  const columns: Cols = [{ name: cfg.xAxis ?? 'x', type: 'text' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
+  const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: 'text' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
+  const rate = cfg.sample ? clampRate(cfg.sample.rate) : null;
+  // 표본 추출 시 합계·개수는 비율로 외삽(÷rate%), 나머지는 표본값 자체를 근사치로 표시한다.
+  const factor = (agg: string) => (rate && (agg === 'sum' || agg === 'count') ? 100 / rate : 1);
   const rows: Rows = labels.map((label, i) => [
     label,
-    ...cfg.yAxis.map((_, j) => Math.round(500 - i * 70 + j * 130 + (i % 2) * 40)),
+    ...cfg.yAxis.map((y, j) => Math.round((500 - i * 70 + j * 130 + (i % 2) * 40) * factor(y.agg))),
   ]);
-  return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 40 + rows.length };
+  return {
+    columns,
+    rows,
+    rowCount: rows.length,
+    truncated: false,
+    elapsedMs: (rate ? 12 : 40) + rows.length, // 표본은 전체 스캔을 건너뛰어 더 빠름
+    ...(rate ? { approximate: true, sampleRate: rate } : {}),
+  };
 }
 
 /** 원본 데이터(mode:rows) — 집계 이전 세부 행 */
 export function buildRawRows(cfg: BuilderConfig): QueryResult {
+  assertSampleAllowed(cfg);
+  const rawNumeric = cfg.yAxis.some((y) => y.agg === 'none');
   const columns: Cols = [
-    { name: cfg.xAxis ?? 'category', type: 'text' },
-    ...cfg.yAxis.map((y) => ({ name: y.column, type: 'numeric' })),
+    { name: cfg.xAxis ? colName(cfg.xAxis) : 'category', type: rawNumeric ? 'numeric' : 'text' },
+    ...cfg.yAxis.map((y) => ({ name: colName(y.column), type: 'numeric' })),
   ];
   const rows: Rows = Array.from({ length: 12 }, (_, i) => [
-    SAMPLE_CATS[i % SAMPLE_CATS.length],
+    rawNumeric ? 10 + i * 7 : SAMPLE_CATS[i % SAMPLE_CATS.length],
     ...cfg.yAxis.map((_, j) => Math.round(50 + i * 7 + j * 11)),
   ]);
   return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 18 };
@@ -122,7 +207,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       name: c.name,
       symbolSize: o.scatter?.symbolSize ?? 10,
       symbol: o.scatter?.symbol ?? 'circle',
-      data: result.rows.map((r) => [Number(r[1]) || 0, Number(r[1 + s]) || 0]),
+      data: result.rows.map((r) => [Number(r[0]) || 0, Number(r[1 + s]) || 0]),
       label,
     }));
     return opt;

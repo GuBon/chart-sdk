@@ -2,11 +2,11 @@
 import type { Chart, ChartSummary, Datasource, SchemaTable, User, UserToken } from '@/lib/api/types';
 
 export const charts: ChartSummary[] = [
-  { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', updatedAt: '2026-06-10T09:30:00Z' },
-  { id: 13, name: '일별 방문자', description: '서비스 일별 방문자(UV) 추이', chartType: 'line', updatedAt: '2026-06-09T14:00:00Z' },
-  { id: 14, name: '카테고리별 판매', description: '상품 카테고리별 판매량 비교', chartType: 'bar', updatedAt: '2026-06-08T11:20:00Z' },
-  { id: 15, name: '분기별 이익', description: null, chartType: 'bar', updatedAt: '2026-06-05T16:45:00Z' },
-  { id: 16, name: '시간대별 트래픽', description: '시간대별 API 요청 수', chartType: 'line', updatedAt: '2026-06-03T08:10:00Z' },
+  { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-10T09:30:00Z' },
+  { id: 13, name: '일별 방문자', description: '서비스 일별 방문자(UV) 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-09T14:00:00Z' },
+  { id: 14, name: '카테고리별 판매', description: '상품 카테고리별 판매량 비교', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-08T11:20:00Z' },
+  { id: 15, name: '분기별 이익', description: null, chartType: 'pie', datasourceId: 2, updatedAt: '2026-06-05T16:45:00Z' },
+  { id: 16, name: '시간대별 트래픽', description: '시간대별 API 요청 수', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-03T08:10:00Z' },
 ];
 
 export const datasources: Datasource[] = [
@@ -46,6 +46,26 @@ export const schemaTables: SchemaTable[] = [
       { name: 'visited_at', type: 'timestamp' },
     ],
   },
+  // 조인 데모(생성규칙 11장): sales.id ↔ orders.sale_id, orders.prod_id ↔ products.id
+  {
+    name: 'orders',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'sale_id', type: 'int' },
+      { name: 'prod_id', type: 'int' },
+      { name: 'amount', type: 'numeric' },
+      { name: 'status', type: 'text' },
+    ],
+  },
+  {
+    name: 'products',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'name', type: 'text' },
+      { name: 'category', type: 'text' },
+      { name: 'price', type: 'numeric' },
+    ],
+  },
 ];
 
 export const users: User[] = [
@@ -66,11 +86,10 @@ export const tokens: UserToken[] = [
 /** /charts/:id 복원용 상세(목록 항목을 기반으로 빌더 기본형 부여) */
 export function chartDetail(summary: ChartSummary): Chart {
   return {
-    ...summary,
-    datasourceId: 1,
+    ...summary, // chartType·datasourceId 포함
     defineMode: 'builder',
     sqlQuery: 'SELECT category, SUM(amount) AS total FROM sales GROUP BY category',
-    builderConfig: { table: 'sales', xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null },
+    builderConfig: { table: 'sales', xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null, sample: null },
     options: { colorMode: 'palette', legend: { show: true } },
     refreshMode: 'ttl',
     cacheTtlSeconds: 3600,

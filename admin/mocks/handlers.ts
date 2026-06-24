@@ -6,6 +6,7 @@ import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, s
 import type { User, UserToken } from '@/lib/api';
 import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildTablePreview } from './mockTransform';
 import type { BuilderConfig, ChartType } from '@/lib/api';
+import { builderValidationIssue } from '@/lib/builder';
 
 // 쓰기 가능한 가변 상태(세션 한정)
 let datasources: Datasource[] = seedDatasources.map((d) => ({ ...d }));
@@ -24,10 +25,23 @@ const err = (status: number, code: string, message: string, extra?: Record<strin
 export const handlers = [
   // ── 차트 ──────────────────────────────────────────
   http.get('/api/v1/charts', ({ request }) => {
-    const q = new URL(request.url).searchParams.get('q')?.toLowerCase().trim();
-    const list = q
-      ? chartList.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false))
-      : chartList;
+    const p = new URL(request.url).searchParams;
+    const q = p.get('q')?.toLowerCase().trim();
+    const type = p.get('type');
+    const dsId = p.get('datasourceId');
+    const sort = p.get('sort') ?? 'updated_desc';
+    let list = chartList;
+    if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
+    if (type) list = list.filter((c) => c.chartType === type);
+    if (dsId) list = list.filter((c) => c.datasourceId === Number(dsId));
+    list = [...list].sort((a, b) => {
+      switch (sort) {
+        case 'updated_asc': return a.updatedAt.localeCompare(b.updatedAt);
+        case 'name_asc': return a.name.localeCompare(b.name, 'ko');
+        case 'name_desc': return b.name.localeCompare(a.name, 'ko');
+        default: return b.updatedAt.localeCompare(a.updatedAt); // updated_desc
+      }
+    });
     return HttpResponse.json({ charts: list });
   }),
   http.get('/api/v1/charts/:id', ({ params }) => {
@@ -48,7 +62,7 @@ export const handlers = [
     const id = nextChartId++;
     const chart = { id, ...body, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
-    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, updatedAt: now }, ...chartList];
+    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId: Number(body.datasourceId) || 1, updatedAt: now }, ...chartList];
     return HttpResponse.json(chart, { status: 201 });
   }),
   http.put('/api/v1/charts/:id', async ({ params, request }) => {
@@ -58,7 +72,7 @@ export const handlers = [
     const prev = savedCharts[id] as { createdAt?: string } | undefined;
     const chart = { id, ...body, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
-    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, updatedAt: now } : c));
+    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId: Number(body.datasourceId) || c.datasourceId, updatedAt: now } : c));
     return HttpResponse.json(chart);
   }),
 
@@ -112,6 +126,8 @@ export const handlers = [
   // ── 노코드 실행/미리보기(S2) — 목 변환기 ───────────
   http.post('/api/v1/query/run-builder', async ({ request }) => {
     const body = (await request.json()) as { builderConfig: BuilderConfig; chartType: ChartType; options: Record<string, unknown>; mode?: 'aggregate' | 'rows' };
+    const validationIssue = builderValidationIssue(body.builderConfig, body.chartType, schemaTables);
+    if (validationIssue) return err(400, 'INVALID_BUILDER_CONFIG', validationIssue);
     if (body.mode === 'rows') return HttpResponse.json(buildRawRows(body.builderConfig));
     const result = buildAggregateRows(body.builderConfig);
     const option = assembleOption(result, body.chartType, body.options);
