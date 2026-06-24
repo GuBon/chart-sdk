@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v1.4 — 사용자 토큰 · 다중 데이터소스 · 노코드(MVP)/SQL(2차) · 날짜 버킷팅 · 결과 캐싱 · 목록 검색·복제 (2026-06-19 정정: `options` 예시를 레지스트리 중첩 키로 수정, 토큰 발급 순서 주석, 미리보기 서버 조립 — 2A `option` 반환 + 2B `/charts/preview` 추가)
-**관련 문서:** PRD v1.6, 화면설계서 v2.4, 노코드 SQL 생성규칙 v1.1
+**문서 버전:** v1.5 — v1.4 + 개인 사용자 스코프, updated_at DB 강제, pg_trgm 검색 인덱스 전제
+**관련 문서:** PRD v1.7, 화면설계서 v2.4, 노코드 SQL 생성규칙 v1.4
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -12,6 +12,8 @@
 - 요청/응답 본문은 JSON, UTF-8.
 - 시간은 ISO 8601 (`2026-06-10T12:00:00Z`).
 - 에러 응답은 모든 엔드포인트에서 동일한 형태를 쓴다.
+- 모든 Admin API는 인증 컨텍스트의 `userId`로 자동 스코프한다. 클라이언트는 `ownerId`를 보내지 않는다. 응답에도 기본적으로 `ownerId`를 노출하지 않는다.
+- 임베드 API는 토큰의 `userId`를 기준으로 차트를 조회한다. 유효 토큰이어도 다른 사용자의 `chartId`는 404처럼 취급한다.
 
 ### 공통 에러 형식
 
@@ -32,7 +34,7 @@
 | 401 | TOKEN_INVALID | 토큰 서명 불일치/형식 오류 |
 | 401 | TOKEN_EXPIRED | 토큰 만료 |
 | 401 | TOKEN_REVOKED | 회수된 토큰 (is_active=false) |
-| 404 | CHART_NOT_FOUND | 존재하지 않는 chartId |
+| 404 | CHART_NOT_FOUND | 존재하지 않거나 현재 사용자 범위 밖의 chartId |
 | 408 | QUERY_TIMEOUT | SQL 실행 타임아웃 |
 | 422 | SQL_ERROR | SQL 실행 에러 (DB 에러 메시지 동봉) |
 | 500 | INTERNAL_ERROR | 서버 오류 |
@@ -53,8 +55,8 @@ Authorization: Bearer {임베드 토큰(JWT)}
 1. 토큰 서명 검증 → 실패 시 401 TOKEN_INVALID
 2. 토큰 만료 검증 → 만료 시 401 TOKEN_EXPIRED
 3. 페이로드의 `jti`(= mc_user_token.id)로 PK 단건 조회 → is_active 및 mc_user.is_active 확인 → 401 TOKEN_REVOKED
-4. (전체 공개 모델) 차트별 권한 체크 없음 — 유효 사용자면 모든 차트 조회 가능
-5. mc_chart에서 sql_query + datasource_id + refresh_mode 조회 → 없으면 404
+4. 토큰의 `userId`를 차트 조회 소유자 범위로 사용한다. 차트별 권한 체크는 없지만, 조회 범위는 해당 사용자 소유 차트로 제한한다.
+5. mc_chart에서 `owner_id + chartId`로 sql_query + datasource_id + refresh_mode 조회 → 없으면 404
 6. **캐시 확인 (PRD 7.7)**: `live`면 항상 실행 / `ttl`이면 mc_chart_cache의 computed_at + ttl 이내일 때 캐시 사용(만료 시 재계산 — 2차부터 stale-while-revalidate) / `manual`이면 항상 캐시 사용
 7. (캐시 미스 시) 해당 데이터소스의 커넥션 풀에서 읽기 전용 실행 (타임아웃·행 제한) 후 캐시 갱신
 8. 결과 + chart_type + options를 ECharts option JSON으로 조립해 반환 (방식 A) — `computedAt` 포함
@@ -133,11 +135,13 @@ Content-Type: application/json
 POST /api/v1/query/run-builder
 { "datasourceId": 1, "builderConfig": { ... }, "chartType": "bar", "options": { ... }, "mode": "aggregate" }
 ```
-서버가 builderConfig를 검증(노코드 SQL 생성규칙 9장) → SQL+바인딩 생성 → 실행. 응답은 2번과 동일 형태 + "generatedSql" 필드(표시용 리터럴 사본) 포함.
+서버가 builderConfig를 검증(노코드 SQL 생성규칙 9·11장) → SQL+바인딩 생성 → 실행. 응답은 2번과 동일 형태 + "generatedSql" 필드(표시용 리터럴 사본) 포함.
+
+`builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample` 과는 동시 사용 불가(11.4)이며, aggregate/rows 모드 모두 실행 전에 400 `INVALID_BUILDER_CONFIG` 로 거부한다. 앱은 조인 표본을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
 `mode` (선택, 기본 `"aggregate"`):
-- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭.
-- `"rows"` — 집계·GROUP BY 없이 `SELECT * + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. 자동 호출 허용(단순 조회).
+- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. `builderConfig.sample`(표본 추출, 3C) 지정 시 FROM에 TABLESAMPLE 주입 + 응답에 `approximate: true`·`sampleRate` 동봉(합계·개수는 외삽 보정). 표본은 **aggregate에서만** 적용.
+- `"rows"` — 집계·GROUP BY 없이 `SELECT * + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. 자동 호출 허용(단순 조회). 표본 추출은 무시한다.
 검증 실패는 400(INVALID_IDENTIFIER / AGG_TYPE_MISMATCH / OP_TYPE_MISMATCH / VALUE_PARSE_ERROR / BUCKET_TYPE_MISMATCH) — DB 에러를 노코드 사용자에게 노출하지 않는다.
 2번(raw SQL 실행)은 2차 SQL 탭에서 사용한다.
 
@@ -172,18 +176,27 @@ POST /api/v1/charts/preview
 ### 3.1 목록 — S1
 
 ```
-GET /api/v1/charts?q={검색어}
+GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&sort={정렬}
 ```
 
-- `q`(선택): 이름·설명 부분일치(ILIKE) 필터. 미지정 시 전체. 정렬은 updated_at DESC 고정.
+모든 파라미터는 선택이며, 항상 **현재 사용자 소유(`owner_id`) 범위**로 먼저 좁힌 뒤 적용한다.
+
+| 파라미터 | 값 | 설명 |
+|---|---|---|
+| `q` | 문자열 | 이름·설명 부분일치(ILIKE). DB는 `pg_trgm` GIN 인덱스로 최적화 |
+| `type` | `bar`\|`line`\|`pie`\|`scatter` | 대분류(`chart_type`) 필터. 미지정 시 전체 |
+| `datasourceId` | 정수 | 데이터소스 필터. 미지정 시 전체 |
+| `sort` | `updated_desc`(기본)\|`updated_asc`\|`name_asc`\|`name_desc` | 정렬 |
+
+- 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. `type`·`datasourceId` 필터와 이름 정렬은 owner 범위가 개인 스코프라 소량이므로 인덱스 스캔 후 필터/정렬로 처리한다(전용 인덱스 불요).
 
 응답 200:
 
 ```json
 {
   "charts": [
-    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "updatedAt": "2026-06-10T09:30:00Z" },
-    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "updatedAt": "2026-06-09T14:00:00Z" }
+    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "datasourceId": 2, "updatedAt": "2026-06-10T09:30:00Z" },
+    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "datasourceId": 1, "updatedAt": "2026-06-09T14:00:00Z" }
   ]
 }
 ```
@@ -204,7 +217,7 @@ GET /api/v1/charts/{id}
   "datasourceId": 1,
   "defineMode": "builder",
   "sqlQuery": "SELECT category, SUM(amount) AS total FROM sales GROUP BY category",
-  "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null },
+  "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null, "sample": null },
   "chartType": "bar",
   "options": { "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
   "refreshMode": "ttl",
@@ -233,7 +246,7 @@ PUT  /api/v1/charts/{id}     (수정)
   "datasourceId": 1,
   "defineMode": "builder",
   "sqlQuery": "SELECT category, SUM(amount) AS total FROM sales GROUP BY category",
-  "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null },
+  "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null, "sample": null },
   "chartType": "bar",
   "options": { "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
   "refreshMode": "ttl",
@@ -279,6 +292,7 @@ POST /api/v1/users/{userId}/tokens
 응답 201: { "tokenId", "token", "userId", "expiresAt", "isActive": true }
 
 - **1인 1활성 토큰**: 사용자당 활성 토큰은 최대 1개다(DB: `mc_user_token(user_id) WHERE is_active` 부분 유니크). 재발급 시 서버는 **기존 활성 토큰을 먼저 회수(is_active=false)한 뒤 새 행을 INSERT**한다 — 순서가 뒤집히면 부분 유니크 제약을 일시 위반한다. 회수·만료된 과거 행은 이력으로 보존된다.
+- 토큰의 조회 범위는 해당 사용자 소유 차트 전체다. 차트별 권한은 MVP 범위 밖이다.
 
 ### 4.2 목록
 ```
@@ -307,7 +321,7 @@ PUT    /api/v1/datasources/{id}             → 수정 (dbPassword는 전달 시
 DELETE /api/v1/datasources/{id}             → 삭제 (사용 중 차트 존재 시 409 + 차트 수 반환)
 POST   /api/v1/datasources/test             → 연결 테스트 { host, port, ... } → { ok, message }
 ```
-비밀번호는 AES-GCM 암호화 저장, 응답에 절대 미포함.
+비밀번호는 AES-GCM 암호화 저장, 응답에 절대 미포함. 데이터소스 이름은 사용자별로 유니크하다(`mc_datasource(owner_id, name)`).
 
 ## 5. 스키마 탐색 (S2 좌측 패널)
 
@@ -336,7 +350,7 @@ GET /api/v1/schema/tables?datasourceId={id}
 }
 ```
 
-- 서버는 `information_schema`를 조회한다. `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
+- 서버는 현재 사용자 소유 데이터소스에 연결해 `information_schema`를 조회한다. `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
 
 ### 5.2 테이블 원본 데이터 조회 (최대 1,000행)
 

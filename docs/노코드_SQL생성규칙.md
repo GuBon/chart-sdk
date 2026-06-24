@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v1.1 — 날짜 버킷팅(xAxisBucket) MVP 편입, 시리즈 분할(breakout) 확장 예약 (2026-06-12 갱신)
-**관련 문서:** PRD v1.6 (7.3), API 계약서 v1.4 (builderConfig), 화면설계서 v2.4 (S2 노코드 탭)
+**문서 버전:** v1.4 — 테이블 조인(JOIN, 11장) MVP 편입(inner/left·N테이블·qualified). 원형·분포 SQL 검증·표본 추출 유지, 시리즈 분할(breakout) 확장 예약
+**관련 문서:** PRD v1.7 (7.3·7.7), API 계약서 v1.5 (builderConfig), 화면설계서 v2.4 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -31,20 +31,23 @@
     { "column": "date",   "op": "between", "value": ["2026-01-01", "2026-06-30"] }
   ],
   "orderBy": { "target": "y0", "direction": "desc" },
-  "limit": 1000
+  "limit": 1000,
+  "sample": { "rate": 10 }
 }
 ```
 
 | 필드 | 필수 | 설명 |
 |---|---|---|
-| table | ✓ | 단일 테이블 (MVP: JOIN 미지원) |
-| xAxis | ✓ | X축 컬럼 1개 |
+| table | ✓ | base 테이블. 추가 테이블은 `joins[]` 로 조인 (11장) |
+| joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"테이블.컬럼"` |
+| xAxis | ✓ | X축 컬럼 1개 (조인 시 qualified) |
 | xAxisBucket | — | `"day"` \| `"week"` \| `"month"` \| null. X축이 날짜 타입일 때만 허용. 지정 시 DATE_TRUNC로 묶어 집계 (3A장) |
 | yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. 복수면 다중 시리즈 |
 | yAxis[].alias | — | 시리즈 표시명. 미지정 시 자동 생성 ("sum_amount") |
 | where | — | 조건 배열. 전부 AND 결합 (MVP: OR 미지원) |
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
+| sample | — | `{ rate }` 표본 비율(%, 1~100). 지정 시 FROM에 TABLESAMPLE SYSTEM 주입 (3C장). **집계 모드 전용** — rows 모드는 무시. **JOIN 과 동시 사용 불가** (11.4) |
 
 ## 3. 집계(agg) 템플릿
 
@@ -52,10 +55,14 @@
 |---|---|---|
 | sum | SUM("col") | 숫자 |
 | avg | AVG("col") | 숫자 |
+| stddev | STDDEV("col") | 숫자 |
 | count | COUNT("col") | 모든 타입 |
 | count_distinct | COUNT(DISTINCT "col") | 모든 타입 |
 | min | MIN("col") | 숫자·날짜·문자 |
 | max | MAX("col") | 숫자·날짜·문자 |
+| none | "col" | 분포(scatter) 전용. GROUP BY 없는 원본 행 조회 |
+
+- `none`은 scatter 전용이다. bar/line/pie에서는 사용할 수 없고, scatter에서는 모든 yAxis가 `none`이어야 한다.
 
 - 컬럼 타입은 information_schema.columns의 data_type으로 판정한다. 타입 불일치(문자 컬럼에 sum 등)는 생성 단계에서 400 거부 — 실행까지 가지 않는다.
 - alias는 AS "별칭"으로 감싼다. 별칭도 식별자이므로 큰따옴표 escape(내부 큰따옴표는 "" 로 치환) 적용.
@@ -89,6 +96,25 @@ LIMIT 1000
 - 집계·GROUP BY·xAxisBucket·orderBy는 무시한다. 테이블·조건의 식별자/값 검증(9장)은 동일하게 적용.
 - LIMIT은 시스템 행 제한(1000) 고정. UI는 세로 스크롤로 표시하고, 초과 시 truncated 안내.
 - 단순 조회이므로 자동 호출이 허용된다(집계 모드는 명시적 실행만).
+
+## 3C. 표본 추출 (sample) — 대용량 근사 집계, MVP 포함
+
+몇 GB 테이블 전체를 스캔하지 않고 일부 표본만 읽어 평균·표준편차 등을 **근사**한다. `builderConfig.sample = { rate }`(비율 %, 1~100) 지정 시 FROM 뒤에 `TABLESAMPLE`을 주입한다.
+
+```sql
+SELECT "category", AVG("amount") AS "avg_amount"
+FROM "sales" TABLESAMPLE SYSTEM (10)
+GROUP BY "category"
+LIMIT 1000
+```
+
+- **방식은 SYSTEM 고정** — 디스크 블록 단위로 랜덤 선택해 **선택된 블록만 읽는다**(전체 스캔 회피 = 기능 목적). 행 단위 균일 표본(BERNOULLI)은 전체를 읽어야 해 목적과 충돌하므로 제공하지 않는다.
+- **크기 = 비율(%)만.** TABLESAMPLE이 퍼센트를 인자로 받기 때문. 절대 행 수 지정은 확장(tsm_system_rows) 의존이거나 `ORDER BY random()` 풀스캔이라 비채택.
+- **집계 모드 전용.** rows(3B)·schema preview에는 적용하지 않는다.
+- **JOIN과 동시 사용 금지.** 조인 결과 표본이 필요한 경우에도 앱은 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다. 고객이 직접 관리하는 읽기 전용 VIEW/테이블을 별도 데이터소스로 등록해야 한다.
+- **집계별 정확도(서버 변환기 책임):** avg·stddev는 표본값 그대로, sum·count는 비율로 **외삽(`÷ rate%`)**. min·max·count_distinct는 표본에서 부정확하며 단순 외삽이 무의미하므로 근사 결과임을 명시(UI "근사치" 배지). 응답 `approximate: true`, `sampleRate` 동봉.
+- **랜덤성:** REPEATABLE 미지정 시 실행마다 다른 표본 → 값이 흔들린다. 결과 캐싱(PRD 7.7)과 결합하면 캐시 수명 동안 고정된다. (씨드 고정은 후속.)
+- 검증: rate가 1~100 범위 밖이면 400 INVALID_REQUEST (9장). `joins[]` 와 `sample` 이 함께 들어오면 SQL 생성 전에 400 INVALID_REQUEST 로 차단하며, 생성기가 `TABLESAMPLE`을 조용히 생략해서는 안 된다.
 
 ## 4. WHERE 연산자(op) 목록
 
@@ -141,6 +167,7 @@ generate(config, datasourceId):
 
   sql = "SELECT " + join(select)
       + " FROM " + quote(table)
+      + (config.sample ? " TABLESAMPLE SYSTEM (" + clamp(config.sample.rate, 1, 100) + ")" : "")  # 표본 추출(3C)
       + (whereSql ? " WHERE " + whereSql : "")
       + " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis))
       + (orderSql ? " ORDER BY " + orderSql : "")
@@ -226,16 +253,74 @@ LIMIT 1000
 | 값 파싱(숫자/날짜) | 400 VALUE_PARSE_ERROR |
 | in 빈 배열, between 길이≠2 | 400 INVALID_REQUEST |
 | yAxis 0개 | 400 INVALID_REQUEST |
+| pie yAxis 1개 아님 | 400 INVALID_REQUEST |
+| scatter xAxis 숫자 타입 아님 | 400 AGG_TYPE_MISMATCH |
+| scatter에서 agg가 none 아님 | 400 AGG_TYPE_MISMATCH |
+| 표본 비율 범위(sample.rate 1~100 밖) | 400 INVALID_REQUEST (생성기는 클램프도 적용) |
 
 모두 SQL 생성 전에 차단한다. 노코드 사용자는 DB 에러를 보지 않는 것이 목표다(SQL 모드는 반대로 DB 에러를 그대로 노출 — 사용자층이 다르다).
 
 ## 10. MVP 범위 밖 (확장 예약)
 
 - 시리즈 분할 (breakout, 카테고리로 시리즈 나누기) — **1순위 확장.** "부서별 월 매출을 선 여러 개로" 같은 요구. builderConfig에 `seriesBy`(두 번째 그룹 차원) 필드를 추가하고, 생성 SQL은 `GROUP BY x, seriesBy` 2차원이 된다. 서버 변환기에 피벗 단계가 추가된다: rows(x, seriesBy, 값) → x별로 seriesBy 값을 컬럼으로 전개 → "첫 컬럼=X, 나머지=시리즈" 컨벤션의 입력 형태로 변환. 즉 변환기를 (rows → [피벗] → series 조립) 단계 구조로 두면 피벗 단계만 끼우면 된다. UI는 노코드 폼에 "시리즈 나누기" 행으로 자리만 표기(비활성).
-- 차트 대분류 확장(원형·분포) — 원형: yAxis 1개 제약 검증 추가. 분포(산점도): 집계 `none`(GROUP BY 없이 원본 행) + X축 숫자 타입 허용이 필요 — 3장 agg 표와 6장 생성 알고리즘의 확장 지점. 소분류(variant)는 시각화 전용이라 SQL 생성에 영향 없음
-- JOIN (테이블 2개 이상) — builderConfig에 joins[] 추가로 확장 가능. 우회: 운영 DB에 읽기 전용 뷰를 만들어 데이터소스로 등록하면 단일 테이블 제약이 완화된다
 - OR / 조건 그룹 — where를 중첩 그룹 구조로 확장
 - HAVING (집계 결과 필터)
 - 쿼리 파라미터 {{}} 와의 결합 (파라미터 설계 확정 후)
 
-(날짜 버킷팅은 v1.1에서 MVP로 편입 — 3A장)
+(날짜 버킷팅은 v1.1에서 MVP로 편입 — 3A장 / JOIN 은 v1.4에서 MVP로 편입 — 11장)
+
+## 11. 테이블 조인(JOIN) — MVP 편입 (v1.4)
+
+여러 테이블을 조인해 한 차트를 그린다. `builderConfig.joins[]`(N개 체인). 차트 시각화 목적상 **`inner`/`left` 만** 제공한다 — `full`/`right` 는 미매칭 NULL 행이 X축·집계에 대량 유입돼 차트에 부적합하므로 후속(`right` 는 테이블 순서를 바꾼 `left` 로 흡수).
+
+### 11.1 joins 스키마
+```json
+{
+  "table": "sales",
+  "joins": [
+    { "table": "orders",   "type": "left",  "on": { "leftColumn": "sales.id",      "rightColumn": "orders.sale_id" } },
+    { "table": "products", "type": "inner", "on": { "leftColumn": "orders.prod_id", "rightColumn": "products.id" } }
+  ]
+}
+```
+| 필드 | 설명 |
+|---|---|
+| table | 조인 대상 테이블 (단일, MVP: 서브쿼리 미지원) |
+| type | `inner` \| `left` |
+| on.leftColumn | qualified `"테이블.컬럼"`. **base 또는 앞서 조인된 테이블**의 컬럼만 허용(체인/스타 — 끊긴 조인 차단) |
+| on.rightColumn | qualified `"테이블.컬럼"`. 반드시 `on.table` 자신의 컬럼 |
+
+- **소프트 상한 5개**(성능·fan-out 가드). 초과는 UI 경고(생성기는 차단하지 않음).
+
+### 11.2 컬럼 참조 — qualified 규칙
+- 조인이 **있으면** 모든 컬럼 참조(`xAxis`·`yAxis[].column`·`where[].column`·`on`)는 qualified `"테이블.컬럼"`.
+- 조인이 **없으면** 기존 unqualified `"컬럼"` 그대로(하위호환 — base 테이블 암묵). 기존 차트 마이그레이션 0.
+- 조인 시 unqualified 컬럼은 **모호성으로 400 거부**.
+
+### 11.3 생성 템플릿
+```sql
+SELECT "products"."category", SUM("orders"."amount") AS "sum_amount"
+FROM "sales"
+LEFT JOIN "orders" ON "sales"."id" = "orders"."sale_id"
+INNER JOIN "products" ON "orders"."prod_id" = "products"."id"
+GROUP BY "products"."category"
+LIMIT 1000
+```
+- `FROM "base"` 뒤에 `joins` **순서대로** `[INNER|LEFT] JOIN "table" ON "a"."x" = "b"."y"`.
+- SELECT·GROUP BY·ORDER BY·WHERE 의 식별자는 전부 `"테이블"."컬럼"` qualified quote. 별칭은 두지 않는다(테이블명 그대로 — 단순·명확).
+- `xAxisBucket` 지정 시 첫 컬럼은 `DATE_TRUNC('month', "t"."col") AS "col"`, GROUP BY 는 위치 참조(`1`) 유지.
+
+### 11.4 검증 (9장 확장)
+| 검증 | 실패 응답 |
+|---|---|
+| 조인 테이블/ON 컬럼 화이트리스트 | 400 INVALID_IDENTIFIER |
+| ON 좌·우 컬럼 타입 호환(조인 키 타입 일치) | 400 JOIN_KEY_TYPE_MISMATCH |
+| 체인 규칙 위반(leftColumn 테이블이 base·앞선 조인에 없음) | 400 INVALID_JOIN_CHAIN |
+| 조인 시 unqualified 컬럼(모호) | 400 INVALID_IDENTIFIER |
+| `sample`(TABLESAMPLE) + JOIN 동시 사용 | 400 INVALID_REQUEST (표본은 base 블록만 → 조인 결과 왜곡) |
+
+### 11.5 fan-out 주의
+1:N 조인 후 `SUM`/`COUNT` 는 기준 행이 증식되어 **중복 집계**된다. MVP 는 UI 경고("1:N 조인 시 합계가 중복될 수 있음 — 고유 개수 권장")로 안내하고, 자동 `COUNT(DISTINCT)` 보정은 후속.
+
+### 11.6 FK 자동 추론 (후속 — 백엔드)
+`information_schema.key_column_usage` 로 조인 후보 테이블·ON 컬럼을 추천한다(노코드 UX 핵심). MVP(mock)는 스키마의 FK 힌트로 대체.

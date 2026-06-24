@@ -1,9 +1,9 @@
 # 차트 솔루션 개발 PRD (Product Requirements Document)
 
-**문서 버전:** v1.6
-**작성일:** 2026-06-10 (v1.6 갱신: 2026-06-12 — 페이지별 필수 갭 반영: 미저장 이탈 보호·저장 조건·목록 검색·사용자 인라인 생성·SDK 리사이즈, options 키 명세)
+**문서 버전:** v1.7
+**작성일:** 2026-06-10 (v1.7 갱신: 2026-06-23 — 개인 사용자 스코프, updated_at DB 트리거, pg_trgm 검색 인덱스 반영)
 **기반 문서:** 차트 솔루션 개발 인수인계서 (SDK 설계 명세 v1.0)
-**관련 문서:** 화면설계서 v2.4 (Figma 작업용) · API 계약서 v1.4 · 노코드 SQL 생성규칙 v1.1 · 유사서비스 기능비교표 · Flyway V1__init.sql
+**관련 문서:** 화면설계서 v2.4 (Figma 작업용) · API 계약서 v1.5 · 노코드 SQL 생성규칙 v1.4 · 유사서비스 기능비교표 · Flyway V1__init.sql (v5.0)
 
 ---
 
@@ -26,8 +26,8 @@
 - 개인 계정 단위로 사용한다. 인증은 사내 SSO(통합로그인)를 전제하며, 회사 차원에서 타 솔루션과의 통합로그인이 추진될 가능성이 높다.
 - MVP 단계에서는 인증 없이 동작하며, SSO 로그인은 설계에 포함하되 구현은 최후순위로 둔다.
 - 계정 생성/삭제/비밀번호는 IdP(SSO)가 관리하므로 멤버 관리 화면은 만들지 않는다. 로그인 시 사용자 레코드를 자동 생성(JIT)한다.
-- 차트 가시성: 전체 공개형. 모든 차트를 모두가 볼 수 있고, 수정·삭제는 소유자만 가능하다.
-- 인수인계서 원문은 "고객사 납품(B2B)"을 전제했으나, 본 프로젝트는 사내 전용으로 범위를 한정한다. 이에 따라 멀티테넌시, 외부 토큰 배포 보안 등은 제외한다.
+- 차트 가시성: 개인 사용자 소유 범위. 사용자는 본인이 등록한 데이터소스와 본인이 만든 차트를 보고 수정·삭제한다. 공유/팀 권한은 후속 기능이다.
+- 인수인계서 원문은 "고객사 납품(B2B)"을 전제했으나, 본 프로젝트의 서비스 단위는 조직이 아니라 **개인 사용자**다. 실제 연결 대상 DB는 회사/조직의 업무 DB일 수 있지만, 데이터소스 등록·차트 정의·토큰 발급의 소유 범위는 개인 사용자(`owner_id`/`user_id`)로 잡는다.
 
 ## 4. 개발 조건 및 제약
 
@@ -54,7 +54,7 @@
 
 ### 5.3 데이터 구조 (메타 DB + 다중 데이터 소스)
 
-- 메타 DB 1개: 솔루션이 소유(`mc_` 테이블). 차트 정의·사용자·토큰·데이터소스 목록 저장. Spring + Flyway가 관리.
+- 메타 DB 1개: 솔루션이 소유(`mc_` 객체). 사용자·토큰·개인별 데이터소스·차트 정의 저장. Spring + Flyway가 관리.
 - 데이터 소스 N개: 차트가 데이터를 조회할 PostgreSQL DB들. Admin에서 등록(호스트/포트/계정)하며, 차트마다 하나를 지정한다.
 - 동적 커넥션 풀: 데이터소스별 커넥션 풀(HikariCP)을 런타임에 생성·관리한다. 메타 DB 연결과 분리.
 - 자격증명 보안: 데이터소스 접속 비밀번호는 암호화(AES-GCM)하여 저장한다. 암호화 키는 `.env`. 등록 계정은 읽기 전용을 권장(등록 화면에서 안내).
@@ -68,7 +68,7 @@
 | Type B (임베디드) | 기존 운영 DB에 연결, `mc_` 메타 테이블만 추가 | 기존 DB 가리킴 |
 
 - 애플리케이션 코드는 두 모드를 구분하지 않는다. `DATABASE_URL` 값만 다르며, docker-compose 구성과 `.env`만 달라진다.
-- Type B에서는 기존 운영 DB의 테이블을 절대 건드리지 않아야 한다. Flyway 마이그레이션은 `mc_` 접두사 테이블만 생성/변경하도록 통제한다. (이것이 Type B 지원의 핵심 안전 요건)
+- Type B에서는 기존 운영 DB의 업무 테이블을 절대 건드리지 않아야 한다. Flyway 마이그레이션은 솔루션 소유 `mc_` 객체만 생성/변경한다. 예외적으로 S1 검색 최적화를 위해 PostgreSQL 표준 contrib 확장 `pg_trgm`을 사용하므로, Type B 설치 전 `CREATE EXTENSION pg_trgm` 권한을 확인한다.
 
 ## 6. 데이터 렌더링 방식
 
@@ -146,8 +146,8 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 
 - 토큰은 사용자에 귀속된다: JWT 페이로드 `{userId, iat, exp, v}`. 차트 정보는 토큰에 넣지 않는다.
 - 임베드 코드: `<div data-chart-id data-auth-token>` — chart-id가 차트를 가리키고, auth-token(사용자 토큰)이 인증을 담당한다.
-- 검증: 서명 + 만료 + DB의 is_active(회수). 차트 가시성은 전체 공개 모델이므로 유효한 사용자 토큰이면 모든 차트 조회 가능(차트별 권한 없음).
-- 사용자 토큰 1개로 모든 차트를 임베드할 수 있다(차트마다 발급 불필요). 회수 시 그 사용자의 모든 임베드가 무효화된다.
+- 검증: 서명 + 만료 + DB의 is_active(회수). 유효한 사용자 토큰이면 해당 사용자 소유 차트 전체를 조회할 수 있다(차트별 권한 없음).
+- 사용자 토큰 1개로 본인 소유 모든 차트를 임베드할 수 있다(차트마다 발급 불필요). 회수 시 그 사용자의 모든 임베드가 무효화된다.
 - 로그인: 임시 자체 로그인(ID/PW) 골격만 MVP에 포함. 인증 구현은 개발 과정에서 후순위로 미뤄질 수 있으며, 추후 SSO로 교체한다(토큰 발급부만 교체, 임베드 구조 불변).
 - MVP에서 만료는 길게 설정하고 회수로 관리한다.
 
@@ -160,7 +160,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 - SQL 직접 작성 UI (2차 — SQL 실행 엔진 자체는 MVP 포함)
 - 본격 인증 구현 (임시 자체 로그인 골격만 MVP 포함, 구현은 후순위로 미뤄질 수 있음. SSO 교체는 추후)
 - 멤버/사용자 관리 화면 (MVP는 수동 생성, SSO 전환 시 JIT 자동 생성)
-- 멀티테넌시, 외부 토큰 배포 보안
+- 조직 전환/조직 관리 UI, 외부 토큰 배포 보안. 본 서비스는 개인 사용자 단위로 스코프한다.
 - DB 관리 기능 (테이블 생성/수정/데이터 편집). 본 솔루션은 조회 전용 뷰어이며 DB 편집은 하지 않는다.
 
 ### 7.7 결과 캐싱·갱신 모드 (대용량 대응, 코어)
@@ -179,7 +179,8 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 - 동작 규칙: ① S2 저장 시 실행 결과를 캐시에 시드(첫 임베드도 즉시 응답) ② TTL 만료 시 **stale-while-revalidate** — 일단 캐시를 반환하고 백그라운드 재계산 ③ 같은 차트의 재계산이 진행 중이면 중복 실행하지 않음(thundering herd 방지).
 - 임베드 응답에 `computedAt` 포함 — S4 차트 하단에 "데이터 기준 {시각}" 캡션(옵션, 기본 켬)으로 정적 데이터임을 표시.
 - 무거운 쿼리의 근본 해결은 고객 DB 측 집계 테이블/뷰(ETL)이며, S5 등록 화면 안내문으로 가이드한다.
-- 구현 단계: MVP = 모드 3종 + 저장 시 시드 + TTL 캐시. 2차 = stale-while-revalidate·[지금 갱신]·기준 시각 캡션. 후속 = 스케줄 갱신(매일 06:00 등).
+- **표본 추출(보완 수단, MVP 포함):** 캐싱이 "DB를 덜 자주 때리는" 것이라면, 표본 추출은 "한 번 때릴 때 덜 아프게 때리는" 것이다. 노코드 구성에서 표본 비율(%)을 켜면 생성 SQL의 FROM에 `TABLESAMPLE SYSTEM (rate)`가 주입돼 **테이블 일부 블록만 스캔**(전체 스캔 회피)하고 평균·표준편차 등을 근사한다(생성규칙 3C). 합계·개수는 비율로 외삽하고, 결과엔 "근사치" 배지를 표시한다. 정확도 트레이드오프(표본=근사)를 사용자가 인지하도록 명시한다. 캐싱과 직교 — 함께 쓰면 캐시 수명 동안 표본 결과가 고정된다.
+- 구현 단계: MVP = 모드 3종 + 저장 시 시드 + TTL 캐시 + 표본 추출(집계 모드, SYSTEM·% 입력). 2차 = stale-while-revalidate·[지금 갱신]·기준 시각 캡션. 후속 = 스케줄 갱신(매일 06:00 등)·표본 씨드 고정(REPEATABLE).
 
 ## 8. 비기능 요구사항 / 보안
 
@@ -202,16 +203,21 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 
 - Flyway 마이그레이션은 `mc_` 접두사 테이블 범위 밖을 절대 변경하지 않는다.
 
-## 9. 데이터베이스 스키마 (v3 — UI 전수 매핑 반영)
+## 9. 데이터베이스 스키마 (v5 — 개인 사용자 스코프·운영 최적화 반영)
 
-`mc_` 접두사 적용. 테이블 5개: 사용자 / 사용자토큰 / 데이터소스 / 차트 / 차트캐시. 전체 DDL은 V1__init.sql(v4.1) 참조. **모든 화면의 모든 UI 요소 → DB 매핑은 `docs/DB스키마_UI매핑.md`** 참조. 저장 전략은 하이브리드(엔티티·조회 대상=정규화 컬럼 / 시각화 옵션·빌더 구성=JSONB).
+`mc_` 접두사 적용. 테이블 5개: 사용자 / 사용자토큰 / 데이터소스 / 차트 / 차트캐시. 전체 DDL은 V1__init.sql(v5.0) 참조. **모든 화면의 모든 UI 요소 → DB 매핑은 `docs/DB스키마_UI매핑.md`** 참조. 저장 전략은 하이브리드(엔티티·조회 대상=정규화 컬럼 / 시각화 옵션·빌더 구성=JSONB).
+
+운영 안정성 반영:
+- `updated_at`은 애플리케이션 책임이 아니라 DB 트리거(`mc_touch_updated_at`)로 강제한다.
+- S1 이름·설명 검색은 `pg_trgm` GIN 인덱스(`name`, `description` 각각)로 최적화한다.
+- 개인 사용자 경계는 `owner_id`/`user_id`로 표현하고, `mc_chart`가 다른 사용자의 데이터소스를 참조하지 못하도록 `(datasource_id, owner_id)` 복합 FK를 둔다.
 
 | 테이블 | 핵심 컬럼 | 비고 |
 |---|---|---|
-| mc_user | username, password_hash(임시), display_name, role, is_active | 인증 구현 전엔 수동 생성(S7 인라인). SSO 전환 시 password_hash 미사용 |
+| mc_user | username, password_hash(임시), display_name, role, is_active | 개인 사용자. 인증 구현 전엔 수동 생성(S7 인라인). SSO 전환 시 password_hash 미사용 |
 | mc_user_token | user_id FK, token(원문), expires_at(필수), is_active | 사용자 귀속 임베드 토큰(1인 1활성 토큰 — 본인 것만). id=JWT jti. 회수=is_active false |
-| mc_datasource | name, host, port, database_name, db_user, db_password_enc, max_pool_size, last_tested_at, last_test_ok | 비밀번호 AES-GCM 암호화. max_pool_size=소스별 커넥션 상한(운영 DB 보호). last_test_*=S5 상태 점 영속 |
-| mc_chart | name, description(nullable), datasource_id FK, define_mode, sql_query, builder_config JSONB, chart_type, options JSONB, owner_id, refresh_mode, cache_ttl_seconds | chart_type=대분류 4종(bar/line/pie/scatter), 소분류·외형은 options. builder_config는 노코드 복원용. refresh_mode/ttl은 7.7 |
+| mc_datasource | owner_id, name, host, port, database_name, db_user, db_password_enc, max_pool_size, last_tested_at, last_test_ok | 개인 사용자가 등록한 업무 DB 연결. 비밀번호 AES-GCM 암호화. 데이터소스명은 사용자별 유니크 |
+| mc_chart | owner_id, name, description(nullable), datasource_id FK, define_mode, sql_query, builder_config JSONB, chart_type, options JSONB, refresh_mode, cache_ttl_seconds | 개인 사용자 소유 차트. chart_type=대분류 4종(bar/line/pie/scatter), 소분류·외형은 options. builder_config는 노코드 복원용 |
 | mc_chart_cache | chart_id PK·FK, result JSONB, computed_at, elapsed_ms, row_count, thumbnail, last_error, last_error_at | 차트 결과 캐시 (7.7). result는 항상 "마지막 성공" — 재계산 실패 시 에러만 기록하고 임베드는 성공 캐시로 계속 동작. thumbnail=S1 카드(후속). 차트 삭제 시 CASCADE |
 
 ### 9.2 mc_chart.options JSONB 키 명세 (구현 기준)
@@ -250,7 +256,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 { "userId": 7, "jti": 42, "iat": 1781070087, "exp": 1812606087, "v": 1 }
 ```
 
-- 토큰은 사용자에 귀속된다. 차트 정보를 넣지 않는다 — 사용자 토큰 1개로 모든 차트 임베드.
+- 토큰은 사용자에 귀속된다. 차트 정보를 넣지 않는다 — 사용자 토큰 1개로 본인 소유 모든 차트 임베드.
 - `jti` = mc_user_token.id(PK). 회수 확인이 PK 단건 조회로 끝난다 — 토큰 문자열 대조 불필요.
 - 검증: 서명 + 만료 + mc_user_token(jti 조회).is_active + mc_user.is_active.
 - `exp`는 필수다. "무기한" 대신 긴 만료(기본 365일) + 회수로 관리한다(7.4).
