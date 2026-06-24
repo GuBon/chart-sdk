@@ -30,3 +30,31 @@ npm run build:sdk           # sdk.js 번들
 # server (별도 빌드)
 cd server && gradle bootRun   # 또는 IntelliJ 임포트
 ```
+
+## Docker PostgreSQL
+
+로컬 PostgreSQL이 5432를 쓰는 환경을 피하기 위해 Docker DB는 `localhost:5433`으로 노출한다.
+
+```bash
+docker compose up -d
+```
+
+초기 컨테이너 생성 시 다음이 자동 구성된다.
+
+| DB | 용도 |
+|---|---|
+| `chartsol` | `mc_` 메타 테이블, 차트/토큰/데이터소스 저장 |
+| `chartsol_user` | 노코드 빌더가 조회할 샘플 업무 데이터 |
+
+서버 로컬 실행 기본값은 Docker DB 기준이다.
+
+```bash
+DATABASE_URL=jdbc:postgresql://localhost:5433/chartsol
+DATABASE_USER=postgres
+DATABASE_PASSWORD=0218
+CHARTSDK_EMBED_JWT_SECRET=dev-chartsol-embed-secret-change-me
+NEXT_PUBLIC_API_BASE=http://localhost:8080
+NEXT_PUBLIC_ENABLE_MSW=false
+```
+
+임베드 SDK가 호출하는 차트 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체해야 한다.
