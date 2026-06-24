@@ -31,6 +31,11 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error }: Props)
             {active.rowCount}행 · {active.elapsedMs}ms
           </span>
         )}
+        {active?.approximate && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary">
+            근사치 · 표본 {active.sampleRate}%
+          </span>
+        )}
       </div>
 
       <div className="min-h-0 flex-1">

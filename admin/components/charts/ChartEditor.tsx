@@ -6,10 +6,11 @@ import { ChevronLeft } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable } from '@/lib/api';
-import { emptyBuilder } from '@/lib/builder';
+import { builderValidationIssue, emptyBuilder, normalizeBuilder, normalizeBuilderForChartType } from '@/lib/builder';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { ResizeHandle, useResizable } from '@/components/ui/Resizable';
 import { SchemaExplorer } from './SchemaExplorer';
 import { NocodeBuilder } from './NocodeBuilder';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
@@ -79,7 +80,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     void chartsApi.get(chartId).then((c) => {
       setName(c.name);
       setDatasourceId(c.datasourceId);
-      setBuilder(c.builderConfig);
+      setBuilder(normalizeBuilder(c.builderConfig));
       setChartType(c.chartType);
       setOptions({ ...defaultsFor(c.chartType), ...c.options });
       setPendingRun(true);
@@ -97,6 +98,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }, 200);
     return () => clearTimeout(t);
   }, [chartType, options, result]);
+
+  // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
+  const leftPanel = useResizable(280, 200, 480, 'left');
+  const rightPanel = useResizable(380, 280, 560, 'right');
+  const resultsPanel = useResizable(288, 120, 560, 'up');
 
   const resetResults = () => {
     setResult(null);
@@ -120,7 +126,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   };
 
   const selectTable = async (table: string) => {
-    setBuilder({ table, xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null });
+    setBuilder({ table, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
     resetResults();
     setDirty(true);
     if (datasourceId == null) return;
@@ -129,7 +135,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   };
 
   const runBuilder = async () => {
-    if (!builder.table || !builder.xAxis || builder.yAxis.length === 0 || datasourceId == null) return;
+    const issue = builderValidationIssue(builder, chartType, tables);
+    if (issue || datasourceId == null) {
+      if (issue) setRunError(issue);
+      return;
+    }
     setRunning(true);
     setRunError(null);
     try {
@@ -167,7 +177,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   // 저장 = 실행 + 캐시 시드(PRD 7.3). 현재 구성으로 실행 성공한 결과가 있어야 저장 가능
   // (빌더 변경 시 result/generatedSql 가 무효화되므로 stale SQL 저장이 방지된다).
-  const canSave = !!name.trim() && !!builder.table && !!builder.xAxis && builder.yAxis.length > 0 && !!result;
+  const canSave = !!name.trim() && !builderValidationIssue(builder, chartType, tables) && !!result;
 
   const save = async (): Promise<boolean> => {
     if (!canSave || datasourceId == null) return false;
@@ -246,7 +256,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
       {/* 3분할 Body */}
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-[280px] shrink-0 overflow-y-auto border-r border-border bg-bg-panel">
+        <aside style={{ width: leftPanel.size }} className="shrink-0 overflow-y-auto border-r border-border bg-bg-panel">
           <SchemaExplorer
             datasources={datasources}
             tables={tables}
@@ -256,15 +266,17 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             onSelectTable={selectTable}
           />
         </aside>
+        <ResizeHandle dir="left" onPointerDown={leftPanel.onPointerDown} />
 
         <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto">
             <NocodeBuilder
               config={builder}
+              chartType={chartType}
               tables={tables}
               onChange={(b) => {
                 // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
-                setBuilder(b);
+                setBuilder(normalizeBuilderForChartType(b, chartType));
                 setDirty(true);
                 setResult(null);
                 setGeneratedSql(null);
@@ -278,12 +290,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
               onToggleSql={() => setSqlOpen((v) => !v)}
             />
           </div>
-          <div className="h-72 shrink-0 border-t border-border">
+          <ResizeHandle dir="up" onPointerDown={resultsPanel.onPointerDown} />
+          <div style={{ height: resultsPanel.size }} className="shrink-0 border-t border-border">
             <ResultsPanel result={result} raw={raw} tab={resultTab} onTab={setResultTab} running={running} error={runError} />
           </div>
         </section>
 
-        <aside className="flex w-[380px] shrink-0 flex-col overflow-y-auto border-l border-border bg-bg-panel">
+        <ResizeHandle dir="right" onPointerDown={rightPanel.onPointerDown} />
+        <aside style={{ width: rightPanel.size }} className="flex shrink-0 flex-col overflow-y-auto border-l border-border bg-bg-panel">
           <div className="shrink-0 border-b border-border p-4">
             <p className="mb-3 text-sm font-medium text-text-primary">차트 미리보기</p>
             <div className="h-48">
@@ -302,8 +316,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             columns={result?.columns ?? []}
             hasResult={!!result}
             onChangeChartType={(to, next) => {
+              // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
+              // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
+              const normalized = normalizeBuilderForChartType(builder, to);
+              const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
               setChartType(to);
               setOptions(next);
+              setBuilder(normalized);
+              if (builderChanged) resetResults();
               setDirty(true);
             }}
             onChangeOptions={(next) => {
@@ -364,7 +384,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       {/* 임베드 코드 모달(S3) — 저장된 차트에서만 */}
       {embedOpen && savedId != null && (
         <EmbedModal
-          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, updatedAt: new Date().toISOString() }}
+          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, datasourceId: datasourceId ?? 0, updatedAt: new Date().toISOString() }}
           onClose={() => setEmbedOpen(false)}
         />
       )}
