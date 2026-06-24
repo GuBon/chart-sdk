@@ -33,3 +33,6 @@ admin/.playwright/
 *.log
 .DS_Store
 .tmp_*
+
+# playwright real-run screenshots (스크립트 .cjs/.ps1 는 보존)
+output/**/*.png
