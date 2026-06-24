@@ -90,6 +90,76 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('button', { name: '원형', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
+
+  test('표본 추출을 켜면 생성 SQL에 TABLESAMPLE이 주입되고 근사치 배지가 뜬다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+
+    // 표본 추출 토글 ON + 비율 25%
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('25');
+
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    // 실행 결과 메타에 근사치 배지
+    await expect(page.getByText(/근사치 · 표본 25%/)).toBeVisible();
+
+    // 생성된 SQL 에 TABLESAMPLE SYSTEM (25)
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/TABLESAMPLE SYSTEM \(25\)/)).toBeVisible();
+  });
+
+  test('표본 추출 컨트롤은 기존 S2 편집 화면에서도 동일하게 노출되고 테이블 변경 시 유지된다', async ({ page }) => {
+    await page.goto('/charts/12');
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toBeVisible();
+
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('30');
+
+    await page.getByRole('combobox', { name: '테이블' }).selectOption('users');
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('spinbutton', { name: '표본 비율' })).toHaveValue('30');
+  });
+
+  test('조인을 추가하면 표본 추출이 자동 해제되고 다시 켤 수 없다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('25');
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
+
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    const sampleSwitch = page.getByRole('switch', { name: '표본 추출' });
+    await expect(sampleSwitch).toHaveAttribute('aria-checked', 'false');
+    await expect(sampleSwitch).toBeDisabled();
+    await expect(page.getByText('조인 사용 중에는 표본 추출을 사용할 수 없습니다.')).toBeVisible();
+  });
+
+  test('테이블 조인을 구성하면 생성 SQL에 JOIN이 들어가고 컬럼이 qualified 된다 (11장)', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+
+    // 조인 추가 → orders, ON sales.id = orders.sale_id
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('orders');
+    await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('sales.id');
+    await page.getByRole('combobox', { name: '조인 대상 컬럼' }).selectOption('orders.sale_id');
+
+    // 조인 시 컬럼은 qualified("테이블.컬럼")
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('sales.category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    // 생성된 SQL 에 LEFT JOIN ... ON (qualified)
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/LEFT JOIN "orders" ON "sales"\."id" = "orders"\."sale_id"/)).toBeVisible();
+  });
 });
 
 test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {

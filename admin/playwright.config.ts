@@ -4,6 +4,8 @@ import { defineConfig, devices } from '@playwright/test';
 // MSW 가 /api/v1 을 가로채므로 server 없이 전 화면 동작 확인 가능.
 export default defineConfig({
   testDir: './e2e',
+  globalSetup: './e2e/global-setup.cjs',
+  globalTeardown: './e2e/global-teardown.cjs',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -14,10 +16,4 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: 'npx next dev -p 3100',
-    port: 3100,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
 });
