@@ -32,7 +32,7 @@ export default function DatasourcesPage() {
   const handleTest = async (ds: Datasource) => {
     setTestingId(ds.id);
     try {
-      const { ok } = await datasourcesApi.test({ host: ds.host, port: ds.port, databaseName: ds.databaseName, dbUser: ds.dbUser });
+      const { ok } = await datasourcesApi.test({ id: ds.id, host: ds.host, port: ds.port, databaseName: ds.databaseName, dbUser: ds.dbUser });
       setList((prev) => prev?.map((d) => (d.id === ds.id ? { ...d, lastTestOk: ok } : d)) ?? prev);
     } finally {
       setTestingId(null);

@@ -34,7 +34,7 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valid = name.trim() && host.trim() && databaseName.trim() && dbUser.trim();
+  const valid = name.trim() && host.trim() && databaseName.trim() && dbUser.trim() && (mode === 'edit' || dbPassword.trim());
 
   const buildInput = (): DatasourceInput => ({
     name: name.trim(),
