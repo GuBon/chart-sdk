@@ -22,6 +22,7 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
+    runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.0") // prod 프로파일 JSON 로그
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
