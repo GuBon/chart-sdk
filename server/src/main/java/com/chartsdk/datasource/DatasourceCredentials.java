@@ -5,7 +5,8 @@ public record DatasourceCredentials(
         int port,
         String databaseName,
         String dbUser,
-        String dbPassword
+        String dbPassword,
+        int maxPoolSize
 ) {
     public String jdbcUrl() {
         return "jdbc:postgresql://" + host + ":" + port + "/" + databaseName;

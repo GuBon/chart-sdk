@@ -27,10 +27,13 @@ import java.util.Map;
 public class DatasourceController {
     private final JdbcTemplate jdbc;
     private final DatasourcePasswordCodec passwordCodec;
+    private final com.chartsdk.datasource.DatasourcePoolRegistry pools;
 
-    public DatasourceController(JdbcTemplate jdbc, DatasourcePasswordCodec passwordCodec) {
+    public DatasourceController(JdbcTemplate jdbc, DatasourcePasswordCodec passwordCodec,
+                                com.chartsdk.datasource.DatasourcePoolRegistry pools) {
         this.jdbc = jdbc;
         this.passwordCodec = passwordCodec;
+        this.pools = pools;
     }
 
     @GetMapping
@@ -71,6 +74,7 @@ public class DatasourceController {
                      WHERE id=? AND is_active=true
                     """, input.name(), input.host(), port(input), input.databaseName(), input.dbUser(), password(input), pool(input), id);
         }
+        pools.evict(id); // 자격증명/설정 변경 → 기존 풀 폐기(다음 사용 시 새 설정으로 재생성)
         return getOne(id);
     }
 
@@ -83,6 +87,7 @@ public class DatasourceController {
             }
             int updated = jdbc.update("UPDATE mc_datasource SET is_active=false WHERE id=? AND is_active=true", id);
             if (updated == 0) throw new ApiException(HttpStatus.NOT_FOUND, "NOT_FOUND", "Datasource not found.");
+            pools.evict(id); // 삭제 → 풀 폐기
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT, "DATASOURCE_IN_USE", "Datasource is used by a chart.");
         }
@@ -95,7 +100,9 @@ public class DatasourceController {
         boolean ok = false;
         String message;
         long start = System.nanoTime();
-        try (var conn = DriverManager.getConnection(url(c.host(), c.port(), c.databaseName()), c.dbUser(), c.dbPassword());
+        // 도달 불가 호스트에서 무한 대기 금지 — connect/socket/login 타임아웃(초) 부여
+        String testUrl = url(c.host(), c.port(), c.databaseName()) + "?connectTimeout=5&socketTimeout=15&loginTimeout=5";
+        try (var conn = DriverManager.getConnection(testUrl, c.dbUser(), c.dbPassword());
              var stmt = conn.createStatement()) {
             stmt.execute("SELECT 1");
             long elapsedMs = Math.max(1, (System.nanoTime() - start) / 1_000_000);

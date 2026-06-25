@@ -1,13 +1,11 @@
 package com.chartsdk.query;
 
-import com.chartsdk.datasource.DatasourceCredentials;
-import com.chartsdk.datasource.DatasourceService;
+import com.chartsdk.datasource.DatasourcePoolRegistry;
 import com.chartsdk.web.ApiException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLTimeoutException;
@@ -25,10 +23,10 @@ public class QueryExecutor {
     private static final int QUERY_TIMEOUT_SECONDS = 10;
     public static final int MAX_ROWS = 1000;
 
-    private final DatasourceService datasources;
+    private final DatasourcePoolRegistry pools;
 
-    public QueryExecutor(DatasourceService datasources) {
-        this.datasources = datasources;
+    public QueryExecutor(DatasourcePoolRegistry pools) {
+        this.pools = pools;
     }
 
     public QueryRows execute(long datasourceId, String sql) {
@@ -37,9 +35,8 @@ public class QueryExecutor {
 
     /** PreparedStatement 바인딩 실행(노코드 빌더 경로). params 가 비면 정적 실행과 동일. */
     public QueryRows execute(long datasourceId, String sql, List<Object> params) {
-        DatasourceCredentials c = datasources.credentials(datasourceId);
         long start = System.nanoTime();
-        try (Connection conn = open(c);
+        try (Connection conn = pools.connection(datasourceId);
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
             ps.setMaxRows(MAX_ROWS);
@@ -58,9 +55,8 @@ public class QueryExecutor {
 
     /** 데이터소스 public 스키마 카탈로그 로딩(mc_ 테이블 제외) — 식별자 화이트리스트 검증용. */
     public SchemaCatalog catalog(long datasourceId) {
-        DatasourceCredentials c = datasources.credentials(datasourceId);
         Map<String, Map<String, String>> tables = new LinkedHashMap<>();
-        try (Connection conn = open(c);
+        try (Connection conn = pools.connection(datasourceId);
              PreparedStatement ps = conn.prepareStatement("""
                      SELECT table_name, column_name, data_type
                        FROM information_schema.columns
@@ -79,12 +75,6 @@ public class QueryExecutor {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
         }
         return new SchemaCatalog(tables);
-    }
-
-    private Connection open(DatasourceCredentials c) throws Exception {
-        Connection conn = DriverManager.getConnection(c.jdbcUrl(), c.dbUser(), c.dbPassword());
-        conn.setReadOnly(true);
-        return conn;
     }
 
     private QueryRows read(ResultSet rs, long start) throws Exception {

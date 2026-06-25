@@ -18,7 +18,7 @@ public class DatasourceService {
 
     public DatasourceCredentials credentials(long id) {
         return jdbc.query("""
-                SELECT host, port, database_name, db_user, db_password_enc
+                SELECT host, port, database_name, db_user, db_password_enc, max_pool_size
                   FROM mc_datasource
                  WHERE id=? AND is_active=true
                 """, rs -> {
@@ -28,7 +28,8 @@ public class DatasourceService {
                     rs.getInt("port"),
                     rs.getString("database_name"),
                     rs.getString("db_user"),
-                    passwordCodec.decrypt(rs.getString("db_password_enc"))
+                    passwordCodec.decrypt(rs.getString("db_password_enc")),
+                    rs.getInt("max_pool_size")
             );
         }, id);
     }
