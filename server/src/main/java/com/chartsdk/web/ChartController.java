@@ -97,24 +97,35 @@ public class ChartController {
 
     @PutMapping("/{id}")
     public Map<String, Object> update(@PathVariable long id, @RequestBody Map<String, Object> input) {
-        int updated = jdbc.update("""
+        // 낙관적 동시성 제어(G3): 클라이언트가 version 을 보내면 그 버전일 때만 갱신, 매 저장 시 version+1.
+        Integer expectedVersion = input.get("version") instanceof Number n ? n.intValue() : null;
+        StringBuilder sql = new StringBuilder("""
                 UPDATE mc_chart
                    SET name=?, description=?, datasource_id=?, define_mode=?, sql_query=?, builder_config=?::jsonb,
-                       chart_type=?, options=?::jsonb, refresh_mode=?, cache_ttl_seconds=?
+                       chart_type=?, options=?::jsonb, refresh_mode=?, cache_ttl_seconds=?, version=version+1
                  WHERE id=?
-                """,
-                input.get("name"),
-                input.get("description"),
-                number(input.get("datasourceId")),
-                input.getOrDefault("defineMode", "builder"),
-                input.getOrDefault("sqlQuery", "SELECT 1"),
-                json(input.get("builderConfig")),
-                input.getOrDefault("chartType", "bar"),
-                json(input.getOrDefault("options", Map.of())),
-                input.getOrDefault("refreshMode", "ttl"),
-                number(input.getOrDefault("cacheTtlSeconds", 3600)),
-                id);
-        if (updated == 0) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+                """);
+        java.util.ArrayList<Object> args = new java.util.ArrayList<>();
+        args.add(input.get("name"));
+        args.add(input.get("description"));
+        args.add(number(input.get("datasourceId")));
+        args.add(input.getOrDefault("defineMode", "builder"));
+        args.add(input.getOrDefault("sqlQuery", "SELECT 1"));
+        args.add(json(input.get("builderConfig")));
+        args.add(input.getOrDefault("chartType", "bar"));
+        args.add(json(input.getOrDefault("options", Map.of())));
+        args.add(input.getOrDefault("refreshMode", "ttl"));
+        args.add(number(input.getOrDefault("cacheTtlSeconds", 3600)));
+        args.add(id);
+        if (expectedVersion != null) { sql.append(" AND version=?"); args.add(expectedVersion); }
+        int updated = jdbc.update(sql.toString(), args.toArray());
+        if (updated == 0) {
+            Integer exists = jdbc.queryForObject("SELECT count(*) FROM mc_chart WHERE id=?", Integer.class, id);
+            if (exists != null && exists > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "Chart was modified elsewhere; reload and retry.");
+            }
+            throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+        }
         compute.seedQuietly(id); // 저장 성공 시 캐시 갱신 (PRD 7.7)
         return get(id);
     }
@@ -154,10 +165,10 @@ public class ChartController {
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
         }
-        // 원본 캐시가 있으면 재실행 없이 복사
+        // 원본 캐시가 있으면 재실행 없이 복사. 새 차트 version=0 에 맞춰 definition_version=0 으로 스탬프(G2).
         jdbc.update("""
-                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count)
-                SELECT ?, result, computed_at, elapsed_ms, row_count FROM mc_chart_cache WHERE chart_id=?
+                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)
+                SELECT ?, result, computed_at, elapsed_ms, row_count, 0 FROM mc_chart_cache WHERE chart_id=?
                 ON CONFLICT (chart_id) DO NOTHING
                 """, newId, id);
         return get(newId);
@@ -182,6 +193,7 @@ public class ChartController {
         m.put("options", readJson(rs.getString("options")));
         m.put("refreshMode", rs.getString("refresh_mode"));
         m.put("cacheTtlSeconds", rs.getInt("cache_ttl_seconds"));
+        m.put("version", rs.getInt("version")); // 낙관적 락 — 클라이언트가 PUT 시 되돌려보낸다(G3)
         m.put("createdAt", timestampString(rs.getTimestamp("created_at")));
         return m;
     }

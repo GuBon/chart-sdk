@@ -42,9 +42,9 @@ public class EmbedChartService {
         EmbedPrincipal principal = tokens.validateBearer(authorization);
         ChartDefinition chart = findChart(chartId, principal.userId());
         // 캐시가 신선하면 그대로, 아니면 단일 비행 재계산(경쟁 시 stale 즉시 반환 — G1/G4).
-        CachedChartRows rows = cache.findUsable(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds())
+        CachedChartRows rows = cache.findUsable(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(), chart.version())
                 .orElseGet(() -> compute.refreshSingleFlight(
-                        chart.id(), chart.datasourceId(), chart.sqlQuery(), !"live".equals(chart.refreshMode())));
+                        chart.id(), chart.datasourceId(), chart.sqlQuery(), chart.version(), !"live".equals(chart.refreshMode())));
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
@@ -54,7 +54,7 @@ public class EmbedChartService {
 
     private ChartDefinition findChart(long chartId, long userId) {
         return jdbc.query("""
-                SELECT id, datasource_id, sql_query, chart_type, options::text, refresh_mode, cache_ttl_seconds
+                SELECT id, datasource_id, sql_query, chart_type, options::text, refresh_mode, cache_ttl_seconds, version
                   FROM mc_chart
                  WHERE id=?
                    AND (owner_id=? OR owner_id IS NULL)
@@ -72,7 +72,8 @@ public class EmbedChartService {
                 rs.getString("chart_type"),
                 readJson(rs.getString("options")),
                 rs.getString("refresh_mode"),
-                rs.getInt("cache_ttl_seconds")
+                rs.getInt("cache_ttl_seconds"),
+                rs.getInt("version")
         );
     }
 
@@ -86,6 +87,6 @@ public class EmbedChartService {
     }
 
     private record ChartDefinition(long id, long datasourceId, String sqlQuery, String chartType,
-                                   Map<String, Object> options, String refreshMode, int cacheTtlSeconds) {
+                                   Map<String, Object> options, String refreshMode, int cacheTtlSeconds, int version) {
     }
 }

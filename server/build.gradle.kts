@@ -30,6 +30,7 @@ tasks.test { useJUnitPlatform() }
 //  2) 옵션 기본값: chart-options/defaults.json → classpath:chart-defaults.json
 //     (먼저 `npm run gen:defaults` 로 생성해야 한다)
 tasks.processResources {
-    from("../docs/V1__init.sql") { into("db/migration") }
+    // 모든 Flyway 마이그레이션(V1, V2, …)을 복사 — docs 가 마이그레이션의 단일 소스
+    from("../docs") { include("V*__*.sql"); into("db/migration") }
     from("../chart-options/defaults.json") { rename { "chart-defaults.json" } }
 }

@@ -27,12 +27,12 @@ public class ChartComputeService {
 
     /** 차트를 즉시 재계산해 캐시에 반영. 차트 없으면 404. */
     public CachedChartRows recompute(long chartId) {
-        Chart chart = jdbc.query("SELECT datasource_id, sql_query FROM mc_chart WHERE id=?", rs -> {
+        Chart chart = jdbc.query("SELECT datasource_id, sql_query, version FROM mc_chart WHERE id=?", rs -> {
             if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
-            return new Chart(rs.getLong("datasource_id"), rs.getString("sql_query"));
+            return new Chart(rs.getLong("datasource_id"), rs.getString("sql_query"), rs.getInt("version"));
         }, chartId);
         QueryRows rows = queries.execute(chart.datasourceId(), chart.sqlQuery());
-        return cache.upsert(chartId, rows);
+        return cache.upsert(chartId, rows, chart.version()); // 캐시에 정의 버전 스탬프(G2)
     }
 
     /**
@@ -42,10 +42,10 @@ public class ChartComputeService {
      * advisory_xact_lock 은 트랜잭션 종료 시 자동 해제되므로 @Transactional 필수.
      */
     @Transactional
-    public CachedChartRows refreshSingleFlight(long chartId, long datasourceId, String sql, boolean allowStale) {
+    public CachedChartRows refreshSingleFlight(long chartId, long datasourceId, String sql, int definitionVersion, boolean allowStale) {
         Boolean won = jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class, chartId);
         if (Boolean.TRUE.equals(won)) {
-            return cache.upsert(chartId, queries.execute(datasourceId, sql));
+            return cache.upsert(chartId, queries.execute(datasourceId, sql), definitionVersion);
         }
         // 경쟁에서 짐 — 다른 요청이 재계산 중.
         if (allowStale) {
@@ -54,7 +54,7 @@ public class ChartComputeService {
         }
         // stale 이 없거나 live 모드 → 승자가 끝날 때까지 대기 후 신선한 결과를 읽는다.
         jdbc.query("SELECT pg_advisory_xact_lock(?)", rs -> null, chartId);
-        return cache.find(chartId).orElseGet(() -> cache.upsert(chartId, queries.execute(datasourceId, sql)));
+        return cache.find(chartId).orElseGet(() -> cache.upsert(chartId, queries.execute(datasourceId, sql), definitionVersion));
     }
 
     /** 저장 직후 캐시 시드(베스트 에포트). 데이터소스 장애로 실패해도 저장은 유지한다. */
@@ -66,6 +66,6 @@ public class ChartComputeService {
         }
     }
 
-    private record Chart(long datasourceId, String sqlQuery) {
+    private record Chart(long datasourceId, String sqlQuery, int version) {
     }
 }

@@ -21,14 +21,17 @@ public class ChartCacheService {
         this.mapper = mapper;
     }
 
-    public Optional<CachedChartRows> findUsable(long chartId, String refreshMode, int ttlSeconds) {
+    public Optional<CachedChartRows> findUsable(long chartId, String refreshMode, int ttlSeconds, int currentVersion) {
         if ("live".equals(refreshMode)) return Optional.empty();
         return jdbc.query("""
-                SELECT result::text, computed_at
+                SELECT result::text, computed_at, definition_version
                   FROM mc_chart_cache
                  WHERE chart_id=?
                 """, rs -> {
             if (!rs.next()) return Optional.empty();
+            // 정의 버전 불일치(또는 미상) → stale (정의≠데이터 방지, G2)
+            int cachedVersion = rs.getInt("definition_version");
+            if (rs.wasNull() || cachedVersion != currentVersion) return Optional.empty();
             Instant computedAt = rs.getTimestamp("computed_at").toInstant();
             if ("ttl".equals(refreshMode) && computedAt.plusSeconds(ttlSeconds).isBefore(Instant.now())) {
                 return Optional.empty();
@@ -50,19 +53,20 @@ public class ChartCacheService {
         }, chartId);
     }
 
-    public CachedChartRows upsert(long chartId, QueryRows rows) {
+    public CachedChartRows upsert(long chartId, QueryRows rows, int definitionVersion) {
         Instant computedAt = Instant.now();
         jdbc.update("""
-                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, last_error, last_error_at)
-                VALUES (?, ?::jsonb, ?, ?, ?, NULL, NULL)
+                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version, last_error, last_error_at)
+                VALUES (?, ?::jsonb, ?, ?, ?, ?, NULL, NULL)
                 ON CONFLICT (chart_id) DO UPDATE
                     SET result=EXCLUDED.result,
                         computed_at=EXCLUDED.computed_at,
                         elapsed_ms=EXCLUDED.elapsed_ms,
                         row_count=EXCLUDED.row_count,
+                        definition_version=EXCLUDED.definition_version,
                         last_error=NULL,
                         last_error_at=NULL
-                """, chartId, writeRows(rows), Timestamp.from(computedAt), rows.elapsedMs(), rows.rowCount());
+                """, chartId, writeRows(rows), Timestamp.from(computedAt), rows.elapsedMs(), rows.rowCount(), definitionVersion);
         return new CachedChartRows(rows, computedAt);
     }
 
