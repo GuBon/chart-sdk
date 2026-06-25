@@ -37,6 +37,19 @@ public class ChartCacheService {
         }, chartId);
     }
 
+    /** ttl·refresh_mode 무시하고 마지막 성공 결과(stale 포함)를 그대로 반환 — SWR 의 stale 반환용. */
+    public Optional<CachedChartRows> find(long chartId) {
+        return jdbc.query("""
+                SELECT result::text, computed_at
+                  FROM mc_chart_cache
+                 WHERE chart_id=?
+                """, rs -> {
+            if (!rs.next()) return Optional.empty();
+            Instant computedAt = rs.getTimestamp("computed_at").toInstant();
+            return Optional.of(new CachedChartRows(readRows(rs.getString("result")), computedAt));
+        }, chartId);
+    }
+
     public CachedChartRows upsert(long chartId, QueryRows rows) {
         Instant computedAt = Instant.now();
         jdbc.update("""

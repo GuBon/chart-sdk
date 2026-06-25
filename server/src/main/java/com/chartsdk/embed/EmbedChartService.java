@@ -2,8 +2,8 @@ package com.chartsdk.embed;
 
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartCacheService;
+import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.converter.ChartOptionConverter;
-import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.token.EmbedPrincipal;
 import com.chartsdk.token.TokenService;
 import com.chartsdk.web.ApiException;
@@ -25,24 +25,26 @@ public class EmbedChartService {
     private final ObjectMapper mapper;
     private final TokenService tokens;
     private final ChartCacheService cache;
-    private final QueryExecutor queries;
+    private final ChartComputeService compute;
     private final ChartOptionConverter converter;
 
     public EmbedChartService(JdbcTemplate jdbc, ObjectMapper mapper, TokenService tokens, ChartCacheService cache,
-                             QueryExecutor queries, ChartOptionConverter converter) {
+                             ChartComputeService compute, ChartOptionConverter converter) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.tokens = tokens;
         this.cache = cache;
-        this.queries = queries;
+        this.compute = compute;
         this.converter = converter;
     }
 
     public Map<String, Object> data(long chartId, String authorization) {
         EmbedPrincipal principal = tokens.validateBearer(authorization);
         ChartDefinition chart = findChart(chartId, principal.userId());
+        // 캐시가 신선하면 그대로, 아니면 단일 비행 재계산(경쟁 시 stale 즉시 반환 — G1/G4).
         CachedChartRows rows = cache.findUsable(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds())
-                .orElseGet(() -> cache.upsert(chart.id(), queries.execute(chart.datasourceId(), chart.sqlQuery())));
+                .orElseGet(() -> compute.refreshSingleFlight(
+                        chart.id(), chart.datasourceId(), chart.sqlQuery(), !"live".equals(chart.refreshMode())));
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
