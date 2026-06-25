@@ -23,6 +23,9 @@ public class DatasourcePasswordCodec {
     private static final String TRANSFORM = "AES/GCM/NoPadding";
     private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;
+    // 키 버전 마커. 마커가 있으면 우리 암호문 → 복호화 실패는 명시적 오류(평문 폴백 금지).
+    // 마커가 없으면 레거시 평문으로 취급. 키 회전 시 v2: 등으로 확장(읽기는 마커로 키 선택).
+    private static final String PREFIX = "v1:";
 
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
@@ -36,7 +39,7 @@ public class DatasourcePasswordCodec {
         }
     }
 
-    /** 평문 → base64(IV || ciphertext+tag). */
+    /** 평문 → "v1:" + base64(IV || ciphertext+tag). */
     public String encrypt(String plaintext) {
         try {
             byte[] iv = new byte[IV_BYTES];
@@ -47,25 +50,30 @@ public class DatasourcePasswordCodec {
             byte[] out = new byte[iv.length + ct.length];
             System.arraycopy(iv, 0, out, 0, iv.length);
             System.arraycopy(ct, 0, out, iv.length, ct.length);
-            return Base64.getEncoder().encodeToString(out);
+            return PREFIX + Base64.getEncoder().encodeToString(out);
         } catch (Exception e) {
             throw new IllegalStateException("Datasource password encryption failed", e);
         }
     }
 
-    /** base64(IV || ciphertext+tag) → 평문. 복호화 불가(레거시 평문)면 입력을 그대로 반환. */
+    /**
+     * 저장값 → 평문.
+     * - 마커("v1:") 있음 = 우리 암호문 → 복호화. 실패(키 불일치·손상)는 평문 폴백 금지하고 명시적 오류(G6).
+     * - 마커 없음 = 레거시 평문 → 그대로 반환(마이그레이션 없이 호환).
+     */
     public String decrypt(String stored) {
         if (stored == null || stored.isEmpty()) return stored;
+        if (!stored.startsWith(PREFIX)) return stored; // 레거시 평문(마커 없음)
         try {
-            byte[] all = Base64.getDecoder().decode(stored);
-            if (all.length <= IV_BYTES) return stored;
+            byte[] all = Base64.getDecoder().decode(stored.substring(PREFIX.length()));
             byte[] iv = Arrays.copyOfRange(all, 0, IV_BYTES);
             byte[] ct = Arrays.copyOfRange(all, IV_BYTES, all.length);
             Cipher cipher = Cipher.getInstance(TRANSFORM);
             cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
             return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
         } catch (Exception e) {
-            return stored; // 레거시 평문/비암호화 값과의 호환
+            // 마커가 있는데 복호화 실패 = 키 회전 누락/손상 → 쓰레기 비밀번호로 조용히 접속 시도 금지
+            throw new IllegalStateException("Datasource password decryption failed (key mismatch or corrupted ciphertext)", e);
         }
     }
 }
