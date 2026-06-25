@@ -48,6 +48,8 @@ public class EmbedChartService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
+        response.put("rowCount", rows.rows().rowCount());
+        response.put("truncated", rows.rows().truncated()); // 1000행 절단 노출(G5) — 임베드도 "상위 N개" 안내 가능
         response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
         return response;
     }

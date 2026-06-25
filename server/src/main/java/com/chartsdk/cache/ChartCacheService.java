@@ -36,7 +36,8 @@ public class ChartCacheService {
             if ("ttl".equals(refreshMode) && computedAt.plusSeconds(ttlSeconds).isBefore(Instant.now())) {
                 return Optional.empty();
             }
-            return Optional.of(new CachedChartRows(readRows(rs.getString("result")), computedAt));
+            QueryRows rows = readRows(rs.getString("result"));
+            return rows == null ? Optional.empty() : Optional.of(new CachedChartRows(rows, computedAt)); // 깨진 캐시 = 미스(G7)
         }, chartId);
     }
 
@@ -49,7 +50,8 @@ public class ChartCacheService {
                 """, rs -> {
             if (!rs.next()) return Optional.empty();
             Instant computedAt = rs.getTimestamp("computed_at").toInstant();
-            return Optional.of(new CachedChartRows(readRows(rs.getString("result")), computedAt));
+            QueryRows rows = readRows(rs.getString("result"));
+            return rows == null ? Optional.empty() : Optional.of(new CachedChartRows(rows, computedAt)); // 깨진 캐시 = 미스(G7)
         }, chartId);
     }
 
@@ -84,13 +86,17 @@ public class ChartCacheService {
         }
     }
 
+    /** 캐시 JSONB → QueryRows. 구조가 깨졌으면 null 반환 → 호출부가 미스로 처리(self-heal, G7). */
     private QueryRows readRows(String json) {
         try {
             Map<String, Object> result = mapper.readValue(json, new TypeReference<>() {
             });
+            if (!(result.get("columns") instanceof java.util.List) || !(result.get("rows") instanceof java.util.List)) {
+                return null; // {columns, rows} 형태가 아니면 손상으로 간주
+            }
             return mapper.convertValue(result, QueryRows.class);
         } catch (Exception e) {
-            throw new IllegalStateException(e);
+            return null; // 역직렬화 실패 = 손상 캐시 → 미스 처리(예외로 임베드를 깨뜨리지 않음)
         }
     }
 }
