@@ -6,6 +6,11 @@ spring:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5433/chartsol}
     username: ${DATABASE_USER:postgres}
     password: ${DATABASE_PASSWORD:0218}
+    hikari:
+      pool-name: chartsdk-meta
+      maximum-pool-size: ${META_DB_POOL_MAX:10}
+      minimum-idle: 2
+      connection-timeout: 10000   # ms — 풀 고갈 시 빠르게 실패
   jpa:
     hibernate:
       ddl-auto: none # 스키마는 Flyway 가 소유 (mc_ 테이블만). JPA 는 생성/변경하지 않는다.
@@ -14,9 +19,27 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+  lifecycle:
+    timeout-per-shutdown-phase: 20s   # graceful shutdown 시 진행 중 요청 드레인 대기
 
 server:
   port: ${PORT:8080}
+  shutdown: graceful   # SIGTERM 시 진행 중 요청을 마치고 종료(무중단 배포 대비)
+
+# 관측성 — Actuator (헬스·메트릭·프로메테우스). ※ 인증 도입 전까지 health show-details 는 내부망 전제.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true   # /actuator/health/liveness · /readiness (컨테이너 프로브용)
+  metrics:
+    tags:
+      application: chartsdk-server
 
 chartsdk:
   embed:
