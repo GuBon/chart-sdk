@@ -370,3 +370,35 @@ GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}
 - 1번(임베드 데이터)과 2번(SQL 실행)은 같은 "SQL 실행 엔진"(읽기 전용, 타임아웃, 행 제한, SELECT 검증)을 공유한다. 한 곳에 구현한다.
 - ECharts option 조립(방식 A)은 서버의 단일 변환기에 둔다: (rows, chartType, options) → option JSON. 차트 종류 추가 시 이 변환기만 확장.
 - CORS: sdk.js가 외부 사내 페이지에서 호출하므로, 임베드 데이터 엔드포인트(1번)는 사내 도메인 범위에서 CORS 허용이 필요하다.
+ 
+---
+
+## 부록. 현재 구현 반영 - 차트 목록/미리보기
+
+Admin S1 차트 목록은 서버 페이지네이션을 기준으로 동작한다.
+
+```
+GET /api/v1/charts?q={검색어}&type={bar|line|pie|scatter}&datasourceId={id}&sort={sort}&page={page}&pageSize={pageSize}
+```
+
+지원 정렬값은 `updated_desc`, `updated_asc`, `name_asc`, `name_desc`이다. 정렬은 클라이언트가 아니라 백엔드 SQL에서 whitelist 기반으로 수행한다. 목록 수가 많아져도 현재 페이지에 필요한 행만 내려받기 위함이다.
+
+응답은 다음 형태다.
+
+```json
+{
+  "charts": [],
+  "page": 1,
+  "pageSize": 12,
+  "total": 0,
+  "totalPages": 1
+}
+```
+
+목록 카드 미리보기는 카드별 단건 호출 대신 현재 페이지의 차트 id를 batch로 요청한다.
+
+```
+GET /api/v1/charts/previews?ids=1,2,3
+```
+
+응답은 `{ "previews": {}, "errors": {} }` 형태이며, 각 preview의 `option`은 서버 변환기가 조립한 ECharts option이다. Admin 카드와 편집 미리보기는 이 option을 그대로 `setOption()` 하고, 클라이언트는 목록 카드용 더미 데이터를 만들지 않는다.

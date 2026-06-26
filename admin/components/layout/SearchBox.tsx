@@ -13,6 +13,8 @@ export function SearchBox() {
 
   return (
     <Input
+      id="chart-search"
+      name="chartSearch"
       icon={<Search className="size-3.5" aria-hidden />}
       wrapperClassName="h-[34px] w-60"
       placeholder="차트 검색 (이름·설명)"
@@ -21,7 +23,12 @@ export function SearchBox() {
       onChange={(e) => {
         const v = e.target.value;
         setQ(v);
-        router.replace(v ? `/?q=${encodeURIComponent(v)}` : '/');
+        const next = new URLSearchParams(sp.toString());
+        if (v) next.set('q', v);
+        else next.delete('q');
+        next.delete('page');
+        const query = next.toString();
+        router.replace(query ? `/?${query}` : '/');
       }}
     />
   );

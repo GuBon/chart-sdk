@@ -1,7 +1,7 @@
 // 공통 fetch 래퍼. 모든 엔드포인트가 이 한 곳을 거친다(에러 형식·기본 헤더 단일화).
 // 개발 환경에서는 MSW 가 동일 경로를 가로챈다.
 
-const BASE = `${process.env.NEXT_PUBLIC_API_BASE ?? ''}/api/v1`;
+const BASE = `${process.env.NEXT_PUBLIC_E2E_MSW === 'true' ? '' : (process.env.NEXT_PUBLIC_API_BASE ?? '')}/api/v1`;
 
 /** 서버 공통 에러 형식 {error:{code,message,detail?}} 을 표현 */
 export class ApiError extends Error {

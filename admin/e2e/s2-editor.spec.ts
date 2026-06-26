@@ -91,6 +91,25 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
+  test('팔레트 swatch 선택 후 RGB 사용자지정 값이 미리보기에 반영된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await page.getByTestId('palette-swatch-1').click();
+    await page.locator('#option-palette-r').fill('255');
+    await page.locator('#option-palette-g').fill('0');
+    await page.locator('#option-palette-b').fill('0');
+
+    await expect(page.locator('#option-palette-color')).toHaveValue('#ff0000');
+    await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(255, 0, 0)');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
   test('표본 추출을 켜면 생성 SQL에 TABLESAMPLE이 주입되고 근사치 배지가 뜬다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });

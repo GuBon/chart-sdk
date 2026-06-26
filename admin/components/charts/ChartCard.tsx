@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { BarChart3, LineChart, PieChart, ScatterChart, Trash2 } from 'lucide-react';
-import type { ChartSummary, ChartType } from '@/lib/api';
+import type { ChartOptions, ChartSummary, ChartType } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 
 // S1 차트 카드(183:29) — 썸네일 + 제목·배지·설명·#id·수정일 + 편집/임베드.
@@ -19,13 +19,23 @@ function formatDate(iso: string) {
   return iso.slice(0, 10);
 }
 
-export function ChartCard({ chart, onEmbed, onDelete }: { chart: ChartSummary; onEmbed: (c: ChartSummary) => void; onDelete: (c: ChartSummary) => void }) {
+export function ChartCard({
+  chart,
+  previewOption,
+  onEmbed,
+  onDelete,
+}: {
+  chart: ChartSummary;
+  previewOption?: ChartOptions | null;
+  onEmbed: (c: ChartSummary) => void;
+  onDelete: (c: ChartSummary) => void;
+}) {
   const { label, Icon } = TYPE_META[chart.chartType];
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-[10px] border border-border bg-bg-panel">
       <div className="flex h-[120px] items-center justify-center bg-muted py-4">
         <div className="h-20 w-60">
-          <MiniChart chartType={chart.chartType} />
+          <MiniChart option={previewOption} />
         </div>
       </div>
       <button

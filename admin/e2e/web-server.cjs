@@ -6,6 +6,10 @@ const nextBin = path.resolve(adminDir, '..', 'node_modules', 'next', 'dist', 'bi
 
 const child = spawn(process.execPath, [nextBin, 'dev', '-p', '3100'], {
   cwd: adminDir,
+  env: {
+    ...process.env,
+    NEXT_PUBLIC_E2E_MSW: 'true',
+  },
   stdio: 'inherit',
   windowsHide: true,
 });

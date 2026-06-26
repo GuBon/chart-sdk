@@ -108,7 +108,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
           <span className="text-xs text-amber-600">{warning}</span>
         ) : null}
         <span className="text-xs text-text-tertiary">Ctrl + Enter</span>
-        <Button size="sm" icon={<Play className="size-3.5" />} disabled={!canRun || running} onClick={onRun}>
+        <Button id="builder-run" size="sm" icon={<Play className="size-3.5" />} disabled={!canRun || running} onClick={onRun}>
           {running ? '실행 중…' : '실행'}
         </Button>
       </div>
@@ -118,6 +118,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
         <Row label="테이블">
           <div className="w-60">
             <Select
+              id="builder-table"
               aria-label="테이블"
               value={config.table ?? ''}
               onChange={(e) => changeTable(e.target.value)}
@@ -168,7 +169,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
 
         <Row label="X축">
           <div className="w-60">
-            <Select aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder="컬럼 선택" />
+            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder="컬럼 선택" />
           </div>
           {isDateType(xType) && !isScatter && (
             <div className="flex items-center gap-2">
@@ -189,10 +190,10 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
                 <div className="w-44">
-                  <Select value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
+                  <Select id={`builder-y-column-${i}`} name={`builderYColumn${i}`} value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
                 </div>
                 <div className="w-36">
-                  <Select value={y.agg} onChange={(e) => setY(i, { agg: e.target.value as YAxisField['agg'] })} options={yAggChoices} />
+                  <Select id={`builder-y-agg-${i}`} name={`builderYAgg${i}`} value={y.agg} onChange={(e) => setY(i, { agg: e.target.value as YAxisField['agg'] })} options={yAggChoices} />
                 </div>
                 <span className="text-[13px] text-text-secondary">별칭</span>
                 <div className="w-28">
@@ -204,7 +205,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
               </div>
             ))}
             <div className="flex items-center gap-3">
-              <Button variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || (isPie && config.yAxis.length >= 1)}>
+              <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || (isPie && config.yAxis.length >= 1)}>
                 + 시리즈 추가
               </Button>
               <span className="flex items-center gap-1.5 text-[13px] text-text-tertiary">

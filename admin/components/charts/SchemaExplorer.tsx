@@ -46,6 +46,8 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
       <div className="border-b border-border p-4">
         <Field label="데이터소스">
           <Select
+            id="schema-datasource"
+            name="schemaDatasource"
             aria-label="데이터소스"
             value={datasourceId ?? ''}
             onChange={(e) => onChangeDatasource(Number(e.target.value))}
@@ -62,6 +64,8 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
 
       <div className="px-3 pb-2">
         <Input
+          id="schema-search"
+          name="schemaSearch"
           icon={<Search className="size-3.5" />}
           value={query}
           onChange={(e) => setQuery(e.target.value)}

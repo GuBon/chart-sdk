@@ -2,9 +2,11 @@
 import { request } from './client';
 import type {
   Chart,
+  ChartDataResponse,
   ChartInput,
   ChartListParams,
-  ChartSummary,
+  ChartListResponse,
+  ChartPreviewBatchResponse,
   ConnectionTestResult,
   Datasource,
   DatasourceInput,
@@ -25,19 +27,38 @@ const qs = (params: Record<string, string | number | undefined>) => {
 
 export const chartsApi = {
   list: (params: ChartListParams = {}) =>
-    request<{ charts: ChartSummary[] }>(
+    request<ChartListResponse | ChartListResponse['charts']>(
       `/charts${qs({
         q: params.q,
         type: params.type && params.type !== 'all' ? params.type : undefined,
         datasourceId: params.datasourceId && params.datasourceId !== 'all' ? params.datasourceId : undefined,
         sort: params.sort && params.sort !== 'updated_desc' ? params.sort : undefined,
+        page: params.page && params.page > 1 ? params.page : undefined,
+        pageSize: params.pageSize,
       })}`,
-    ).then((r) => r.charts),
+    ).then((res) => normalizeChartList(res, params)),
   get: (id: number) => request<Chart>(`/charts/${id}`),
+  preview: (id: number) => request<ChartDataResponse>(`/charts/${id}/preview`),
+  previews: (ids: number[]) =>
+    ids.length
+      ? request<ChartPreviewBatchResponse>(`/charts/previews${qs({ ids: ids.join(',') })}`)
+      : Promise.resolve<ChartPreviewBatchResponse>({ previews: {}, errors: {} }),
   create: (input: ChartInput) => request<Chart>('/charts', { method: 'POST', body: input }),
   update: (id: number, input: ChartInput) => request<Chart>(`/charts/${id}`, { method: 'PUT', body: input }),
   remove: (id: number) => request<void>(`/charts/${id}`, { method: 'DELETE' }),
 };
+
+function normalizeChartList(res: ChartListResponse | ChartListResponse['charts'], params: ChartListParams): ChartListResponse {
+  if (!Array.isArray(res)) return res;
+  const pageSize = params.pageSize ?? res.length;
+  return {
+    charts: res,
+    page: params.page ?? 1,
+    pageSize,
+    total: res.length,
+    totalPages: 1,
+  };
+}
 
 export const queryApi = {
   /** 노코드 미리보기 — rows + option 동봉 */

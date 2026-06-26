@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react';
 // 막기 위해, 준비될 때까지 children 렌더를 보류한다(프로덕션은 곧바로 통과).
 const MOCKING =
   process.env.NODE_ENV === 'development' &&
-  process.env.NEXT_PUBLIC_ENABLE_MSW !== 'false' &&
-  !process.env.NEXT_PUBLIC_API_BASE;
+  (process.env.NEXT_PUBLIC_E2E_MSW === 'true' ||
+    (process.env.NEXT_PUBLIC_ENABLE_MSW !== 'false' && !process.env.NEXT_PUBLIC_API_BASE));
 
 export function MockProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(!MOCKING);

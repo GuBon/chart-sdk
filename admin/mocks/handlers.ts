@@ -30,6 +30,8 @@ export const handlers = [
     const type = p.get('type');
     const dsId = p.get('datasourceId');
     const sort = p.get('sort') ?? 'updated_desc';
+    const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '12') || 12));
+    const requestedPage = Math.max(1, Number(p.get('page') ?? '1') || 1);
     let list = chartList;
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
     if (type) list = list.filter((c) => c.chartType === type);
@@ -42,7 +44,56 @@ export const handlers = [
         default: return b.updatedAt.localeCompare(a.updatedAt); // updated_desc
       }
     });
-    return HttpResponse.json({ charts: list });
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({ charts: list.slice(start, start + pageSize), page, pageSize, total, totalPages });
+  }),
+  http.get('/api/v1/charts/previews', ({ request }) => {
+    const ids = (new URL(request.url).searchParams.get('ids') ?? '')
+      .split(',')
+      .map((id) => Number(id.trim()))
+      .filter((id) => Number.isFinite(id));
+    const previews: Record<string, unknown> = {};
+    const errors: Record<string, string> = {};
+    for (const id of ids) {
+      const saved = savedCharts[id] as
+        | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+        | undefined;
+      const summary = chartList.find((c) => c.id === id);
+      const chart = saved ?? (summary ? chartDetail(summary) : null);
+      if (!chart?.builderConfig || !chart.chartType) {
+        errors[String(id)] = 'Preview unavailable.';
+        continue;
+      }
+      const result = buildAggregateRows(chart.builderConfig);
+      previews[String(id)] = {
+        chartId: id,
+        rowCount: result.rowCount,
+        truncated: result.truncated,
+        computedAt: new Date().toISOString(),
+        option: assembleOption(result, chart.chartType, chart.options ?? {}),
+      };
+    }
+    return HttpResponse.json({ previews, errors });
+  }),
+  http.get('/api/v1/charts/:id/preview', ({ params }) => {
+    const id = Number(params.id);
+    const saved = savedCharts[id] as
+      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+      | undefined;
+    const summary = chartList.find((c) => c.id === id);
+    const chart = saved ?? (summary ? chartDetail(summary) : null);
+    if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+    const result = buildAggregateRows(chart.builderConfig);
+    return HttpResponse.json({
+      chartId: id,
+      rowCount: result.rowCount,
+      truncated: result.truncated,
+      computedAt: new Date().toISOString(),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}),
+    });
   }),
   http.get('/api/v1/charts/:id', ({ params }) => {
     const id = Number(params.id);

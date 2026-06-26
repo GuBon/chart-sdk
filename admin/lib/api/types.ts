@@ -73,6 +73,16 @@ export interface ChartListParams {
   type?: ChartType | 'all';
   datasourceId?: number | 'all';
   sort?: ChartSort;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ChartListResponse {
+  charts: ChartSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 /** S2 진입 시 복원용 단건 */
@@ -165,5 +175,12 @@ export interface QueryResult {
 export interface ChartDataResponse {
   chartId: number;
   computedAt: string;
+  rowCount?: number;
+  truncated?: boolean;
   option: ChartOptions;
+}
+
+export interface ChartPreviewBatchResponse {
+  previews: Record<string, ChartDataResponse>;
+  errors: Record<string, string>;
 }

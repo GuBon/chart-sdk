@@ -15,15 +15,17 @@ interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'chi
 }
 
 export function Select({ options, placeholder, className, ...props }: SelectProps) {
+  const fallbackName = props.name ?? fieldNameFrom(props['aria-label'] ?? placeholder);
   return (
     <div className="relative">
       <select
+        {...props}
+        name={fallbackName}
         className={cn(
           'h-8 w-full appearance-none rounded-md border border-border bg-bg-panel pl-3 pr-8 text-[13px] text-text-primary outline-none',
           'focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-50',
           className,
         )}
-        {...props}
       >
         {placeholder != null && <option value="">{placeholder}</option>}
         {options.map((o, i) => (
@@ -35,4 +37,9 @@ export function Select({ options, placeholder, className, ...props }: SelectProp
       <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-secondary" />
     </div>
   );
+}
+
+function fieldNameFrom(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value.trim().replace(/[^a-zA-Z0-9가-힣]+/g, '_');
 }

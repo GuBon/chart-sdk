@@ -35,6 +35,7 @@ const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 
 const ZONE_ORDER = ['common', 'axis', 'type'];
 const TYPE_ICONS: Record<string, typeof BarChart3> = { bar: BarChart3, line: LineChart, pie: PieChart, scatter: ScatterChart };
 const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포' };
+const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
 export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions }: Props) {
   const [query, setQuery] = useState('');
@@ -90,7 +91,7 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
         <h2 className="text-sm font-semibold text-text-primary">시각화 옵션</h2>
       </div>
       <div className="px-4 pb-2">
-        <Input icon={<Search className="size-3.5" />} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="옵션 검색" size="sm" disabled={disabled} />
+        <Input id="option-search" name="optionSearch" icon={<Search className="size-3.5" />} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="옵션 검색" size="sm" disabled={disabled} />
         {disabled && <p className="mt-2 text-xs text-text-tertiary">실행하면 옵션을 변경할 수 있습니다.</p>}
         {resetNotice && (
           <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-muted px-2.5 py-2 text-xs text-text-secondary">
@@ -159,6 +160,9 @@ function Control({
   onChange: (v: unknown) => void;
   onChangeType: (to: MajorType) => void;
 }) {
+  const fieldName = fieldNameFor(def.key);
+  const fieldId = `option-${fieldName}`;
+
   // 전체폭 컨트롤
   if (def.control === 'iconGrid') {
     return (
@@ -191,6 +195,8 @@ function Control({
     return (
       <Labeled label={def.label} stack>
         <textarea
+          id={fieldId}
+          name={fieldName}
           value={String(value ?? '')}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
@@ -210,18 +216,18 @@ function Control({
       break;
     }
     case 'select':
-      control = <div className="w-36"><Select disabled={disabled} value={String(value ?? '')} options={(def.choices ?? []).map((c) => ({ value: String(c.value), label: c.label }))} onChange={(e) => onChange(coerce(def, e.target.value))} /></div>;
+      control = <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={(def.choices ?? []).map((c) => ({ value: String(c.value), label: c.label }))} onChange={(e) => onChange(coerce(def, e.target.value))} /></div>;
       break;
     case 'text':
-      control = <div className="w-36"><Input disabled={disabled} size="sm" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} /></div>;
+      control = <div className="w-36"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} /></div>;
       break;
     case 'number':
-      control = <div className="w-24"><Input disabled={disabled} size="sm" type="number" value={value == null ? '' : String(value)} min={def.min} max={def.max} onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} /></div>;
+      control = <div className="w-24"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" type="number" value={value == null ? '' : String(value)} min={def.min} max={def.max} onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} /></div>;
       break;
     case 'slider':
       control = (
         <div className="flex items-center gap-2">
-          <input type="range" min={def.min} max={def.max} step={def.step} value={Number(value ?? def.min ?? 0)} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} className="w-28 accent-primary disabled:opacity-50" />
+          <input id={fieldId} name={fieldName} aria-label={def.label} type="range" min={def.min} max={def.max} step={def.step} value={Number(value ?? def.min ?? 0)} onChange={(e) => onChange(Number(e.target.value))} disabled={disabled} className="w-28 accent-primary disabled:opacity-50" />
           <span className="w-10 text-right text-xs text-text-tertiary">{value == null ? '자동' : `${value}${def.unit ?? ''}`}</span>
         </div>
       );
@@ -230,18 +236,14 @@ function Control({
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Switch checked={value === true} onChange={onChange} aria-label={def.label} /></div>;
       break;
     case 'color':
-      control = <input type="color" value={String(value ?? '#5470C6')} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="h-7 w-10 rounded border border-border disabled:opacity-50" />;
+      control = <input id={fieldId} name={fieldName} aria-label={def.label} type="color" value={String(value ?? '#5470C6')} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="h-7 w-10 rounded border border-border disabled:opacity-50" />;
       break;
     case 'palette':
-      control = (
-        <div className="flex gap-1">
-          {(value as string[] | undefined)?.slice(0, 6).map((c, i) => <span key={i} className="size-4 rounded-sm" style={{ background: c }} />)}
-        </div>
-      );
+      control = <PaletteControl value={value} disabled={disabled} label={def.label} onChange={onChange} />;
       break;
     case 'columnRef':
       control = hasResult ? (
-        <div className="w-36"><Select disabled={disabled} value={String(value ?? '')} options={columns.map((c) => ({ value: c.name, label: c.name }))} onChange={(e) => onChange(e.target.value)} placeholder="컬럼" /></div>
+        <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={columns.map((c) => ({ value: c.name, label: c.name }))} onChange={(e) => onChange(e.target.value)} placeholder="컬럼" /></div>
       ) : (
         <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>
       );
@@ -261,6 +263,128 @@ function Control({
 function coerce(def: OptionDef, raw: string): unknown {
   if (def.choices?.some((c) => typeof c.value === 'number')) return Number(raw);
   return raw;
+}
+
+function PaletteControl({
+  value,
+  disabled,
+  label,
+  onChange,
+}: {
+  value: unknown;
+  disabled: boolean;
+  label: string;
+  onChange: (v: unknown) => void;
+}) {
+  const palette = normalizePalette(value);
+  const [selected, setSelected] = useState(0);
+  const safeSelected = Math.min(selected, palette.length - 1);
+  const color = normalizeHex(palette[safeSelected] ?? DEFAULT_PALETTE[0]);
+  const rgb = hexToRgb(color);
+
+  const update = (nextColor: string) => {
+    const next = [...palette];
+    next[safeSelected] = normalizeHex(nextColor);
+    onChange(next);
+  };
+
+  const updateRgb = (channel: 'r' | 'g' | 'b', raw: string) => {
+    const nextRgb = { ...rgb, [channel]: clampRgb(Number(raw)) };
+    update(rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b));
+  };
+
+  return (
+    <div className={cn('flex w-full flex-col gap-2', disabled && 'pointer-events-none opacity-50')}>
+      <div className="flex flex-wrap gap-1.5">
+        {palette.map((c, i) => {
+          const swatch = normalizeHex(c);
+          const active = i === safeSelected;
+          return (
+            <button
+              key={`${swatch}-${i}`}
+              type="button"
+              aria-label={`${label} ${i + 1}번 색상 선택`}
+              data-testid={`palette-swatch-${i}`}
+              disabled={disabled}
+              onClick={() => setSelected(i)}
+              className={cn(
+                'size-6 rounded border transition-transform disabled:cursor-not-allowed',
+                active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105',
+              )}
+              style={{ backgroundColor: swatch }}
+            />
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-[44px_1fr] items-center gap-x-2 gap-y-1.5">
+        <span className="text-xs text-text-tertiary">색상</span>
+        <input
+          id="option-palette-color"
+          name="paletteColor"
+          aria-label="선택한 팔레트 색상"
+          type="color"
+          value={color}
+          disabled={disabled}
+          onChange={(e) => update(e.target.value)}
+          className="h-8 w-full rounded border border-border bg-bg-panel disabled:opacity-50"
+        />
+        {(['r', 'g', 'b'] as const).map((channel) => (
+          <label key={channel} className="contents">
+            <span className="text-xs uppercase text-text-tertiary">{channel}</span>
+            <Input
+              id={`option-palette-${channel}`}
+              name={`palette${channel.toUpperCase()}`}
+              aria-label={`선택한 팔레트 ${channel.toUpperCase()} 값`}
+              size="sm"
+              type="number"
+              min={0}
+              max={255}
+              value={String(rgb[channel])}
+              disabled={disabled}
+              onChange={(e) => updateRgb(channel, e.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function normalizePalette(value: unknown): string[] {
+  const source = Array.isArray(value) && value.length > 0 ? value : DEFAULT_PALETTE;
+  return source.map((c) => normalizeHex(String(c))).slice(0, 8);
+}
+
+function normalizeHex(value: string): string {
+  const trimmed = value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed.toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
+    const [, r, g, b] = trimmed;
+    return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+  }
+  return DEFAULT_PALETTE[0];
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const normalized = normalizeHex(hex).slice(1);
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return `#${[r, g, b].map((n) => clampRgb(n).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+}
+
+function clampRgb(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(255, Math.max(0, Math.round(value)));
+}
+
+function fieldNameFor(key: string): string {
+  return key.replace(/[^a-zA-Z0-9]+/g, '_');
 }
 
 function Labeled({ label, children, stack }: { label: string; children: React.ReactNode; stack?: boolean }) {
