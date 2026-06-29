@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v1.4 — 테이블 조인(JOIN, 11장) MVP 편입(inner/left·N테이블·qualified). 원형·분포 SQL 검증·표본 추출 유지, 시리즈 분할(breakout) 확장 예약
-**관련 문서:** PRD v1.7 (7.3·7.7), API 계약서 v1.5 (builderConfig), 화면설계서 v2.4 (S2 노코드 탭)
+**문서 버전:** v1.5 — `agg:"none"` 원본값 튜플 모드를 모든 차트 타입으로 확장. 원본값 모드는 GROUP BY 없이 조회하고 표본 추출과 동시 사용 불가
+**관련 문서:** PRD v1.8 (7.3·7.7), API 계약서 v1.6 (builderConfig), 화면설계서 v2.5 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -42,12 +42,12 @@
 | joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"테이블.컬럼"` |
 | xAxis | ✓ | X축 컬럼 1개 (조인 시 qualified) |
 | xAxisBucket | — | `"day"` \| `"week"` \| `"month"` \| null. X축이 날짜 타입일 때만 허용. 지정 시 DATE_TRUNC로 묶어 집계 (3A장) |
-| yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. 복수면 다중 시리즈 |
+| yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. `agg:"none"`이면 원본값 튜플 모드. 복수면 다중 시리즈 |
 | yAxis[].alias | — | 시리즈 표시명. 미지정 시 자동 생성 ("sum_amount") |
 | where | — | 조건 배열. 전부 AND 결합 (MVP: OR 미지원) |
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
-| sample | — | `{ rate }` 표본 비율(%, 1~100). 지정 시 FROM에 TABLESAMPLE SYSTEM 주입 (3C장). **집계 모드 전용** — rows 모드는 무시. **JOIN 과 동시 사용 불가** (11.4) |
+| sample | — | `{ rate }` 표본 비율(%, 1~100). 지정 시 FROM에 TABLESAMPLE SYSTEM 주입 (3C장). **집계 모드 전용** — rows 모드는 무시. **JOIN·원본값 튜플(`agg:"none"`)과 동시 사용 불가** (11.4) |
 
 ## 3. 집계(agg) 템플릿
 
@@ -60,9 +60,12 @@
 | count_distinct | COUNT(DISTINCT "col") | 모든 타입 |
 | min | MIN("col") | 숫자·날짜·문자 |
 | max | MAX("col") | 숫자·날짜·문자 |
-| none | "col" | 분포(scatter) 전용. GROUP BY 없는 원본 행 조회 |
+| none | "col" | 모든 차트 타입의 원본값 튜플 모드. GROUP BY 없는 원본 행 조회 |
 
-- `none`은 scatter 전용이다. bar/line/pie에서는 사용할 수 없고, scatter에서는 모든 yAxis가 `none`이어야 한다.
+- `none`은 모든 차트 타입에서 사용할 수 있다. 막대/선은 X/Y 원본 튜플, 원형은 name/value 원본 튜플, 분포는 `[x,y]` 원본 점으로 해석한다.
+- 한 builderConfig 안에서 `none`과 집계(`sum`/`avg`/`count` 등)는 섞을 수 없다. 모든 yAxis가 `none`이거나 모두 집계여야 한다.
+- `none` 원본값 모드는 `GROUP BY`를 만들지 않고, `sample`과 함께 사용할 수 없다.
+- scatter는 여전히 모든 yAxis가 `none`이어야 하며 X축은 숫자 타입이어야 한다.
 
 - 컬럼 타입은 information_schema.columns의 data_type으로 판정한다. 타입 불일치(문자 컬럼에 sum 등)는 생성 단계에서 400 거부 — 실행까지 가지 않는다.
 - alias는 AS "별칭"으로 감싼다. 별칭도 식별자이므로 큰따옴표 escape(내부 큰따옴표는 "" 로 치환) 적용.
@@ -110,11 +113,11 @@ LIMIT 1000
 
 - **방식은 SYSTEM 고정** — 디스크 블록 단위로 랜덤 선택해 **선택된 블록만 읽는다**(전체 스캔 회피 = 기능 목적). 행 단위 균일 표본(BERNOULLI)은 전체를 읽어야 해 목적과 충돌하므로 제공하지 않는다.
 - **크기 = 비율(%)만.** TABLESAMPLE이 퍼센트를 인자로 받기 때문. 절대 행 수 지정은 확장(tsm_system_rows) 의존이거나 `ORDER BY random()` 풀스캔이라 비채택.
-- **집계 모드 전용.** rows(3B)·schema preview에는 적용하지 않는다.
+- **집계 모드 전용.** rows(3B)·schema preview·원본값 튜플 모드(`agg:"none"`)에는 적용하지 않는다.
 - **JOIN과 동시 사용 금지.** 조인 결과 표본이 필요한 경우에도 앱은 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다. 고객이 직접 관리하는 읽기 전용 VIEW/테이블을 별도 데이터소스로 등록해야 한다.
 - **집계별 정확도(서버 변환기 책임):** avg·stddev는 표본값 그대로, sum·count는 비율로 **외삽(`÷ rate%`)**. min·max·count_distinct는 표본에서 부정확하며 단순 외삽이 무의미하므로 근사 결과임을 명시(UI "근사치" 배지). 응답 `approximate: true`, `sampleRate` 동봉.
 - **랜덤성:** REPEATABLE 미지정 시 실행마다 다른 표본 → 값이 흔들린다. 결과 캐싱(PRD 7.7)과 결합하면 캐시 수명 동안 고정된다. (씨드 고정은 후속.)
-- 검증: rate가 1~100 범위 밖이면 400 INVALID_REQUEST (9장). `joins[]` 와 `sample` 이 함께 들어오면 SQL 생성 전에 400 INVALID_REQUEST 로 차단하며, 생성기가 `TABLESAMPLE`을 조용히 생략해서는 안 된다.
+- 검증: rate가 1~100 범위 밖이면 400 INVALID_REQUEST (9장). `joins[]` 또는 `agg:"none"` 과 `sample` 이 함께 들어오면 SQL 생성 전에 400 INVALID_REQUEST 로 차단하며, 생성기가 `TABLESAMPLE`을 조용히 생략해서는 안 된다.
 
 ## 4. WHERE 연산자(op) 목록
 
@@ -156,6 +159,11 @@ generate(config, datasourceId):
   assertBucketCompatible(config.xAxis, config.xAxisBucket)  # 날짜 타입만 (3A장)
   for y in config.yAxis: assertExists + assertTypeCompatible(y)
   for w in config.where: assertExists + assertOpCompatible(w)
+  allNone = every y.agg == "none"
+  anyNone = any y.agg == "none"
+  if anyNone and !allNone: reject AGG_TYPE_MISMATCH
+  if allNone and config.sample: reject INVALID_REQUEST
+  if chartType == "scatter": assert allNone + numeric xAxis
 
   xCol = config.xAxisBucket
        ? "DATE_TRUNC('" + config.xAxisBucket + "', " + quote(xAxis) + ") AS " + quote(xAxis)
@@ -167,9 +175,9 @@ generate(config, datasourceId):
 
   sql = "SELECT " + join(select)
       + " FROM " + quote(table)
-      + (config.sample ? " TABLESAMPLE SYSTEM (" + clamp(config.sample.rate, 1, 100) + ")" : "")  # 표본 추출(3C)
+      + (!allNone && config.sample ? " TABLESAMPLE SYSTEM (" + clamp(config.sample.rate, 1, 100) + ")" : "")  # 표본 추출(3C)
       + (whereSql ? " WHERE " + whereSql : "")
-      + " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis))
+      + (!allNone ? " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis)) : "")
       + (orderSql ? " ORDER BY " + orderSql : "")
       + " LIMIT " + min(config.limit ?? 1000, 1000)
   return (sql, binds)
@@ -236,6 +244,23 @@ LIMIT 1000
 ```
 변환기 라벨: 2026-01, 2026-02, … (month → YYYY-MM)
 
+### 예시 5 — 원본값 튜플(모든 차트 타입)
+
+```json
+{ "table": "sales", "xAxis": "year",
+  "yAxis": [{ "column": "print", "agg": "none", "alias": "print" }],
+  "orderBy": { "target": "x", "direction": "asc" } }
+```
+
+```sql
+SELECT "year", "print" AS "print"
+FROM "sales"
+ORDER BY 1 ASC
+LIMIT 1000
+```
+
+막대/선은 각 `year` 행의 `print` 값을 그대로 그린다. 원형은 첫 컬럼을 name, 두 번째 컬럼을 value로 사용한다. 분포는 `[year, print]` 점으로 사용하되 X축이 숫자 타입이어야 한다. `GROUP BY`와 합계/평균 계산은 없다.
+
 ## 8. SQL 탭 전환 규칙 (2차 — SQL 탭 구현 시 활성)
 
 - 노코드 → SQL 전환 시: 생성 SQL을 에디터에 로드하되, 바인딩 자리는 사용자가 읽을 수 있게 리터럴로 표시한 사본을 보여준다(예: WHERE "dept" = '영업'). 단 이 사본은 표시용이며, 노코드 모드로 저장된 차트의 실행은 항상 (sql, binds) 경로다.
@@ -256,6 +281,8 @@ LIMIT 1000
 | pie yAxis 1개 아님 | 400 INVALID_REQUEST |
 | scatter xAxis 숫자 타입 아님 | 400 AGG_TYPE_MISMATCH |
 | scatter에서 agg가 none 아님 | 400 AGG_TYPE_MISMATCH |
+| none과 집계가 한 builderConfig 안에 섞임 | 400 AGG_TYPE_MISMATCH |
+| none 원본값 튜플 모드에서 sample 지정 | 400 INVALID_REQUEST |
 | 표본 비율 범위(sample.rate 1~100 밖) | 400 INVALID_REQUEST (생성기는 클램프도 적용) |
 
 모두 SQL 생성 전에 차단한다. 노코드 사용자는 DB 에러를 보지 않는 것이 목표다(SQL 모드는 반대로 DB 에러를 그대로 노출 — 사용자층이 다르다).

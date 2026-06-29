@@ -1,21 +1,29 @@
 # chartsdk-server (Spring Boot)
 
 메타 DB 소유 · SQL 실행 엔진 · ECharts option **단일 변환기(Java)** · 토큰 검증.
-Admin/SDK 는 이 서버의 API 만 호출한다. (API 계약서 v1.4)
+Admin/SDK 는 이 서버의 API 만 호출한다. (API 계약서 v1.6)
 
 ## 패키지 계획 (구현 진행에 따라 채움)
 
 ```
 com.chartsdk
-├─ config/      설정·빈 (OptionDefaultsConfig: defaults.json SSOT 로드)
-├─ web/         REST 컨트롤러 (charts · datasources · tokens · query · schema · embed)
-├─ chart/       차트 CRUD·도메인 (mc_chart)
+├─ config/      설정·빈 (OptionDefaultsConfig: defaults.json SSOT 로드, WebMvcConfig)
+├─ web/         얇은 REST 컨트롤러 · DTO · 공통 예외 처리 · EmbedTokenInterceptor
+├─ auth/        현재 사용자 공급자(CurrentUserProvider)와 개발용 구현
+├─ chart/       차트 CRUD·저장 검증·캐시 시드 오케스트레이션 (ChartService/Repository)
 ├─ datasource/  데이터소스·동적 커넥션 풀 (mc_datasource, HikariCP)
 ├─ token/       사용자 임베드 토큰·JWT 검증 (mc_user_token, 1인 1활성)
-├─ query/       SQL 실행 엔진(검증·읽기전용·타임아웃·행제한) + 노코드 SQL 생성기
+├─ query/       SQL 실행 엔진(검증·읽기전용·타임아웃·행제한) + 노코드 SQL 생성기 + 식별자/리터럴 유틸
 ├─ converter/   (rows, chartType, options) → ECharts option 단일 변환기 (방식 A)
 └─ cache/       결과 캐시 (mc_chart_cache, 갱신 모드 live/ttl/manual)
 ```
+
+## 현재 구현 메모
+
+- builder 저장은 클라이언트 `sqlQuery`를 신뢰하지 않고 서버가 `builderConfig`에서 SQL을 재생성·검증·리터럴화해 저장한다.
+- 노코드 `agg:"none"` 원본값 튜플 모드는 bar/line/pie/scatter 모두에서 동작한다. 이 모드는 GROUP BY와 sample을 사용하지 않는다.
+- 임베드 토큰 검증은 `EmbedTokenInterceptor`에서 끝내고, `EmbedController`는 검증된 principal만 사용한다.
+- 요청 바디는 핵심 API별 record DTO + Bean Validation으로 받으며, `ApiExceptionHandler`가 공통 에러 envelope을 만든다.
 
 ## 빌드 입력 (단일 소스 — 중복 정의 금지)
 

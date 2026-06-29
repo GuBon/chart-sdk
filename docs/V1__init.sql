@@ -7,14 +7,16 @@
 --   (옵션 추가 시 마이그레이션 불필요 — Metabase·Grafana 동일 전략). 전 UI 요소 매핑은 docs/DB스키마_UI매핑.md 참조.
 -- v4 변경: chart_type 4종(원형·분포 활성), datasource 연결테스트 상태 영속화, 캐시 썸네일, 목록 정렬·검색 인덱스
 -- v4.1 변경(2026-06-19): 1인 1활성 토큰 모델 확정 — mc_user_token.label 제거(다중 토큰 식별 불필요), 활성 토큰 부분 유니크 인덱스 추가
+-- v5.1 문서 갱신(2026-06-29): PRD v1.8 / API v1.6 / DB스키마_UI매핑 v1.3.
+--   DDL 변경은 없고, builder_config JSONB의 `agg:"none"` 원본값 튜플 모드를 모든 차트 타입에서 사용한다.
 -- v5.0 변경(2026-06-23): 개인 사용자 스코프 확정 (PRD v1.7 / API v1.5 / DB스키마_UI매핑 v1.2)
 --   ① mc_datasource.owner_id 도입 — 데이터소스명은 사용자별 유니크(owner_id, name)
 --   ② mc_chart 가 다른 사용자의 데이터소스를 참조하지 못하도록 (datasource_id, owner_id) 복합 FK 추가
 --   ③ updated_at 은 애플리케이션이 아니라 DB 트리거(mc_touch_updated_at)로 강제 — 갱신 누락 방지
 --   ④ pg_trgm GIN 검색 인덱스 활성화 — S1 이름·설명 ILIKE 검색 최적화
---   ※ owner_id 는 로그인 구현 전까지 NULL 허용(인증 컨텍스트에서 자동 주입). 노코드 신기능(표본추출 sample·stddev·none 집계)은
+--   ※ owner_id 는 로그인 구현 전까지 NULL 허용(인증 컨텍스트에서 자동 주입). 노코드 신기능(표본추출 sample·stddev·none 원본값 모드)은
 --     builder_config JSONB 가 그대로 수용하므로 스키마 변경 없음. chart_type 4종(bar/line/pie/scatter)이 원형·분포 대분류를 커버.
---     joins[] + sample 동시 사용 금지는 앱/서버 검증 책임이다. 앱은 조인 표본 처리를 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
+--     joins[] + sample, none + sample, none + 집계 혼합 금지는 앱/서버 검증 책임이다. 앱은 조인 표본 처리를 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 -- ============================================
 
 -- 표본·검색 최적화용 표준 contrib. Type B(기존 운영 DB)에서는 설치 전 CREATE EXTENSION 권한을 확인한다(PRD 7장).
@@ -126,7 +128,7 @@ CREATE TABLE mc_chart (
     datasource_id   BIGINT       NOT NULL,           -- 어느 DB에서 뽑는가 (차트 1개 = 소스 1개)
     define_mode     VARCHAR(10)  NOT NULL DEFAULT 'builder',  -- 새 차트는 항상 노코드 시작 (v2.2)
     sql_query       TEXT         NOT NULL,           -- 실행 SQL. builder 모드면 저장 시 서버가 builder_config에서 재생성(일관성 보장)
-    builder_config  JSONB,                           -- 노코드 상태 (builder 모드만, 복원용). joins·sample·stddev·none 등 신규 키는 마이그레이션 0. joins+sample 금지는 앱 검증.
+    builder_config  JSONB,                           -- 노코드 상태 (builder 모드만, 복원용). joins·sample·stddev·none(모든 차트 원본값 튜플) 등 신규 키는 마이그레이션 0. joins+sample, none+sample, none+집계 혼합 금지는 앱 검증.
     chart_type      VARCHAR(20)  NOT NULL,           -- 대분류만 (4종 활성: bar/line/pie/scatter). 소분류·외형은 options.variant + options JSONB
 
     options         JSONB        NOT NULL DEFAULT '{}',

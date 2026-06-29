@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v1.5 — v1.4 + 개인 사용자 스코프, updated_at DB 강제, pg_trgm 검색 인덱스 전제
-**관련 문서:** PRD v1.7, 화면설계서 v2.4, 노코드 SQL 생성규칙 v1.4
+**문서 버전:** v1.6 — v1.5 + 모든 차트 타입의 `agg:"none"` 원본값 튜플 모드, DTO 검증, 저장 시 서버 SQL 재생성 명시
+**관련 문서:** PRD v1.8, 화면설계서 v2.5, 노코드 SQL 생성규칙 v1.5
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -11,7 +11,7 @@
 
 - 요청/응답 본문은 JSON, UTF-8.
 - 시간은 ISO 8601 (`2026-06-10T12:00:00Z`).
-- 에러 응답은 모든 엔드포인트에서 동일한 형태를 쓴다.
+- 에러 응답은 모든 엔드포인트에서 동일한 형태를 쓴다. 서버는 DTO + Bean Validation으로 요청 본문을 검증하고, `ApiExceptionHandler`가 검증 실패·JSON 파싱 실패·DB 무결성 오류·예상 밖 오류를 아래 공통 envelope으로 변환한다.
 - 모든 Admin API는 인증 컨텍스트의 `userId`로 자동 스코프한다. 클라이언트는 `ownerId`를 보내지 않는다. 응답에도 기본적으로 `ownerId`를 노출하지 않는다.
 - 임베드 API는 토큰의 `userId`를 기준으로 차트를 조회한다. 유효 토큰이어도 다른 사용자의 `chartId`는 404처럼 취급한다.
 
@@ -137,7 +137,9 @@ POST /api/v1/query/run-builder
 ```
 서버가 builderConfig를 검증(노코드 SQL 생성규칙 9·11장) → SQL+바인딩 생성 → 실행. 응답은 2번과 동일 형태 + "generatedSql" 필드(표시용 리터럴 사본) 포함.
 
-`builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample` 과는 동시 사용 불가(11.4)이며, aggregate/rows 모드 모두 실행 전에 400 `INVALID_BUILDER_CONFIG` 로 거부한다. 앱은 조인 표본을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
+`builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample` 과는 동시 사용 불가(11.4)이며, aggregate/rows 모드 모두 실행 전에 400 `INVALID_REQUEST` 로 거부한다. 앱은 조인 표본을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
+
+`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 분포는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
 
 `mode` (선택, 기본 `"aggregate"`):
 - `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. `builderConfig.sample`(표본 추출, 3C) 지정 시 FROM에 TABLESAMPLE 주입 + 응답에 `approximate: true`·`sampleRate` 동봉(합계·개수는 외삽 보정). 표본은 **aggregate에서만** 적용.
@@ -255,6 +257,10 @@ PUT  /api/v1/charts/{id}     (수정)
 ```
 
 응답 201(생성)/200(수정): 3.2와 동일 형태. 저장 성공 시 서버는 쿼리를 1회 실행해 mc_chart_cache에 시드한다(PRD 7.7).
+
+저장 시 서버가 최종 실행 SQL을 확정한다.
+- `defineMode:"builder"`: 클라이언트가 보낸 `sqlQuery`는 신뢰하지 않는다. 서버가 `builderConfig`로 SQL을 다시 생성·검증·1회 실행한 뒤, 표시용 리터럴 SQL을 `mc_chart.sql_query`에 저장한다.
+- `defineMode:"sql"`: `sqlQuery`는 SELECT/WITH 계열만 허용하고, 저장 전 1회 실행 검증을 통과해야 한다.
 
 ### 3.5 결과 캐시 수동 갱신 — S2 [지금 갱신] (2차)
 

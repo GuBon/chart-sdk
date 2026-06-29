@@ -17,6 +17,14 @@
 - **변환기는 서버(Java) 단일.** 프론트(admin·sdk)는 받은 option을 `setOption()` 할 뿐 조립하지 않는다.
 - **옵션 SSOT는 `chart-options`.** admin은 직접 import, server는 빌드 시 산출된 `defaults.json`을 로드한다.
 - server는 `mc_` 접두사 테이블만 소유한다(Type B 안전 요건).
+- 노코드 빌더의 `agg:"none"`은 모든 그래프에서 원본값 튜플을 그리는 모드다. 서버는 GROUP BY 없는 SQL을 만들고, 프론트는 no-code UI에서 이를 선택할 수 있어야 한다.
+- builder 저장 시 최종 SQL은 서버가 `builderConfig`에서 재생성한다. 클라이언트가 보낸 `sqlQuery`는 표시/상태 값일 뿐 신뢰 경계가 아니다.
+
+## 현재 구현 상태
+
+- 백엔드는 `web` 컨트롤러, `chart` 서비스/저장소, `query` SQL 생성/실행, `converter` 옵션 변환으로 분리되어 있다.
+- 공통 에러 envelope은 `ApiExceptionHandler`, 임베드 JWT 검증은 `EmbedTokenInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
+- 검증 기준 문서는 PRD v1.8, API 계약서 v1.6, 노코드 SQL 생성규칙 v1.5, 화면설계서 v2.5를 따른다.
 
 ## 개발
 

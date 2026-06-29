@@ -1,6 +1,6 @@
 # Embed Chart Data API Specification
 
-**Version:** v1.0  
+**Version:** v1.1
 **Endpoint:** `GET /api/v1/charts/data`  
 **Caller:** `sdk.js` running in a customer-owned web page  
 **Purpose:** Return a server-built Apache ECharts option JSON for one saved chart.
@@ -77,6 +77,8 @@ Accept: application/json
 6. Require `mc_user_token.is_active=true`, `mc_user_token.expires_at > now()`, and `mc_user.is_active=true`.
 7. Use `userId` as the chart owner scope.
 
+Implementation note: validation is centralized in `EmbedTokenInterceptor`. The controller receives a validated `EmbedPrincipal` request attribute and does not parse JWTs itself.
+
 ## 4. Chart Resolution
 
 The server resolves the chart using the authenticated user scope:
@@ -135,6 +137,8 @@ Execution guardrails:
 |---|---:|---|
 | `chartId` | integer | Echoes the resolved chart id. |
 | `computedAt` | ISO-8601 UTC | Time of the row result used to build `option`. |
+| `rowCount` | integer | Number of rows used to build the option. |
+| `truncated` | boolean | `true` when the row cap was reached and the result may be partial. |
 | `option` | object | Complete Apache ECharts option. SDK must pass it to `chart.setOption(option)` without rebuilding. |
 
 ## 7. Error Responses

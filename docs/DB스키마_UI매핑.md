@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v1.2 (2026-06-23 갱신: 개인 사용자 스코프 · updated_at DB 트리거 · pg_trgm 검색 인덱스 반영)
-**관련:** Flyway `V1__init.sql` v5.0 · PRD v1.7(9장) · API v1.5 · 화면설계서 v2.4 · `chart-options/optionRegistry.ts`
+**문서 버전:** v1.3 (2026-06-29 갱신: 모든 차트 타입의 원본값 튜플 모드 · 저장 시 서버 SQL 재생성 반영)
+**관련:** Flyway `V1__init.sql` v5.0 · PRD v1.8(9장) · API v1.6 · 화면설계서 v2.5 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -46,6 +46,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 **v4 신규(굵게)**: `mc_datasource.last_tested_at/last_test_ok`(S5 상태 점 영속), `mc_chart_cache.thumbnail`(S1 썸네일), `chart_type` CHECK 4종(bar/line/pie/scatter), 목록 정렬·검색 인덱스.
 **v4.1(2026-06-19)**: 1인 1활성 토큰 모델 확정 — `mc_user_token.label` 제거(다중 토큰 식별 불필요), 활성 토큰 부분 유니크 인덱스(`user_id WHERE is_active`).
 **v5.0(2026-06-23)**: 개인 사용자 스코프 확정. `mc_datasource.owner_id`, `mc_chart.owner_id`로 소유 범위를 두고, 차트가 다른 사용자의 데이터소스를 참조하지 못하도록 `(datasource_id, owner_id)` 복합 FK를 둔다. 사용자별 unique(`mc_datasource(owner_id, name)`), `updated_at` DB 트리거, `pg_trgm` GIN 검색 인덱스 활성화.
+**v5.1(2026-06-29, 스키마 변경 없음)**: 원본값 튜플 모드는 `builder_config.yAxis[].agg = "none"`으로 JSONB에 저장한다. `mc_chart.sql_query`는 저장 시 서버가 재생성한 GROUP BY 없는 SQL을 보관하므로 별도 컬럼·마이그레이션이 필요 없다.
 
 ---
 
@@ -102,13 +103,13 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 테이블 조인(복수) | 🧩 | `builder_config.joins[]` (table, type=inner/left, on) — 생성규칙 11장. 조인 시 컬럼은 qualified |
 | X축 컬럼 | 🧩 | `builder_config.xAxis` (조인 시 `"테이블.컬럼"`) |
 | 묶기(일/주/월) | 🧩 | `builder_config.xAxisBucket` |
-| Y축 컬럼+집계(복수) | 🧩 | `builder_config.yAxis[]` (column, agg, alias) |
+| Y축 컬럼+집계(복수) | 🧩 | `builder_config.yAxis[]` (column, agg, alias). `agg="none"`이면 모든 차트 타입의 원본값 튜플 모드 |
 | 시리즈 나누기(후속) | 🧩 | `builder_config.seriesBy` |
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
-| 표본 추출(토글+비율%) | 🧩 | `builder_config.sample` (rate) — 집계 모드 TABLESAMPLE (생성규칙 3C). `builder_config.joins[]` 와 동시 저장/실행 금지. JSONB라 마이그레이션 0 |
-| 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성, 빈 문자열 DB CHECK 차단) |
+| 표본 추출(토글+비율%) | 🧩 | `builder_config.sample` (rate) — 집계 모드 TABLESAMPLE (생성규칙 3C). `builder_config.joins[]`·`agg="none"` 과 동시 저장/실행 금지. JSONB라 마이그레이션 0 |
+| 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
 | [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result` |
 | [원본 데이터] 탭(raw) | ⏳ | run-builder `mode:rows` / schema preview — 저장 안 함 |
 | 실행 메타 "N행·Nms" | 🔁 | `mc_chart_cache.row_count`·`elapsed_ms` (또는 ⏳ 미리보기) |
@@ -206,7 +207,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 JSONB라도 키는 코드 레지스트리로 고정된다 — 임의 키가 아니다.
 - `mc_chart.options` ↔ `chart-options/optionRegistry.ts` (`OptionDef.key`) ↔ PRD 9.2. 변환 규칙은 `docs/변환기_매핑스펙_차트옵션.md`.
 - `mc_chart.builder_config` ↔ `docs/노코드_SQL생성규칙.md` 2장 스키마. 검증은 생성규칙 9장.
-- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `joins[] + sample` 금지도 DB CHECK가 아니라 애플리케이션 계층 책임(JSONB라 DB CHECK 부적합).
+- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `joins[] + sample`, `agg="none" + sample`, `agg="none" + 집계 혼합` 금지도 DB CHECK가 아니라 애플리케이션 계층 책임(JSONB라 DB CHECK 부적합).
 
 ## 5. 인덱스 (실제 쿼리 패턴 기준)
 
