@@ -168,7 +168,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const o = options ?? {};
   const cats = result.rows.map((r) => r[0]);
   const seriesCols = result.columns.slice(1);
-  const palette: string[] = o.palette ?? DEFAULT_PALETTE;
+  const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex);
   const variant: string = o.variant ?? (chartType === 'pie' ? 'pie' : chartType === 'scatter' ? 'scatter' : chartType === 'line' ? 'basic' : 'basic');
 
   const opt: Record<string, any> = { color: palette };
@@ -193,7 +193,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
         radius,
         roseType: variant === 'rose' ? 'radius' : undefined,
         label: { show: o.dataLabel === true, position: o.pie?.labelPosition ?? 'outside' },
-        data: cats.map((name, i) => ({ name, value: result.rows[i][1] })),
+        data: cats.map((name, i) => ({ name, value: result.rows[i][1], itemStyle: { color: paletteColor(palette, i) } })),
       },
     ];
     return opt;
@@ -209,6 +209,8 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       symbol: o.scatter?.symbol ?? 'circle',
       data: result.rows.map((r) => [Number(r[0]) || 0, Number(r[1 + s]) || 0]),
       label,
+      color: paletteColor(palette, s),
+      itemStyle: { color: paletteColor(palette, s) },
     }));
     return opt;
   }
@@ -228,19 +230,32 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       data: result.rows.map((r) => Number(r[1 + s]) || 0),
       label,
       stack,
+      color: paletteColor(palette, s),
+      itemStyle: { color: paletteColor(palette, s) },
     };
     if (chartType === 'bar') {
-      if (o.bar?.borderRadius) base.itemStyle = { borderRadius: o.bar.borderRadius };
+      if (o.bar?.borderRadius) base.itemStyle = { ...base.itemStyle, borderRadius: o.bar.borderRadius };
       if (o.bar?.showBackground) base.showBackground = true;
     }
     if (chartType === 'line') {
       base.smooth = variant === 'smooth';
       base.step = variant === 'step' ? 'end' : undefined;
       if (variant === 'area' || variant === 'stackedArea') base.areaStyle = { opacity: o.line?.areaOpacity ?? 0.3 };
-      base.lineStyle = { width: o.line?.width ?? 2, type: o.line?.lineType ?? 'solid' };
+      base.lineStyle = { width: o.line?.width ?? 2, type: o.line?.lineType ?? 'solid', color: paletteColor(palette, s) };
       base.showSymbol = o.line?.showSymbol !== false;
     }
     return base;
   });
   return opt;
+}
+
+function orderedPalette(palette: string[], activeIndex: unknown): string[] {
+  if (palette.length === 0) return DEFAULT_PALETTE;
+  const start = typeof activeIndex === 'number' && Number.isFinite(activeIndex) ? Math.max(0, Math.round(activeIndex)) % palette.length : 0;
+  if (start <= 0) return palette;
+  return [...palette.slice(start), ...palette.slice(0, start)];
+}
+
+function paletteColor(palette: string[], index: number): string {
+  return palette[index % palette.length] ?? DEFAULT_PALETTE[0];
 }

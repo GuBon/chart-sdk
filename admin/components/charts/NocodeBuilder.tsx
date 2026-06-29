@@ -76,7 +76,9 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
 
   // ── 조인 (생성규칙 11장) ──
   const joins = config.joins ?? [];
+  const rawValueMode = config.yAxis.some((y) => y.agg === 'none');
   const sampleDisabledByJoin = joins.length > 0;
+  const sampleDisabled = sampleDisabledByJoin || rawValueMode;
   const colsOf = (t: string) => tables.find((x) => x.name === t)?.columns ?? [];
   const qualOpts = (tableNames: string[]) =>
     tableNames.flatMap((t) => colsOf(t).map((c) => ({ value: `${t}.${c.name}`, label: `${t}.${c.name}` })));
@@ -262,13 +264,15 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
         <Row label="표본 추출">
           <Switch
             aria-label="표본 추출"
-            checked={!!config.sample && !sampleDisabledByJoin}
-            disabled={sampleDisabledByJoin}
+            checked={!!config.sample && !sampleDisabled}
+            disabled={sampleDisabled}
             onChange={(on) => {
-              if (!sampleDisabledByJoin) patch({ sample: on ? { rate: config.sample?.rate ?? DEFAULT_SAMPLE_RATE } : null });
+              if (!sampleDisabled) patch({ sample: on ? { rate: config.sample?.rate ?? DEFAULT_SAMPLE_RATE } : null });
             }}
           />
-          {sampleDisabledByJoin ? (
+          {rawValueMode ? (
+            <span className="text-[13px] text-text-tertiary">원본값 모드에서는 표본 추출을 사용할 수 없습니다.</span>
+          ) : sampleDisabledByJoin ? (
             <span className="text-[13px] text-text-tertiary">조인 사용 중에는 표본 추출을 사용할 수 없습니다.</span>
           ) : config.sample ? (
             <>

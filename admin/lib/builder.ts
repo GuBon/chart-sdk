@@ -50,7 +50,8 @@ export function isNumericType(type: string | undefined): boolean {
 }
 
 export function aggChoicesForChart(chartType: ChartType): { value: AggType; label: string }[] {
-  return chartType === 'scatter' ? AGG_CHOICES.filter((a) => a.value === 'none') : AGG_CHOICES.filter((a) => a.value !== 'none');
+  if (chartType === 'scatter') return AGG_CHOICES.filter((a) => a.value === 'none');
+  return AGG_CHOICES;
 }
 
 // ── 테이블 조인 (생성규칙 11장) ──────────────────────────────────
@@ -136,10 +137,10 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
       yAxis: cfg.yAxis.map((y) => ({ ...y, agg: 'none' })),
     };
   }
-  const yAxis = cfg.yAxis.map((y) => (y.agg === 'none' ? { ...y, agg: 'sum' as AggType } : y));
   return {
     ...cfg,
-    yAxis: chartType === 'pie' ? yAxis.slice(0, 1) : yAxis,
+    yAxis: chartType === 'pie' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
   };
 }
 
@@ -163,9 +164,13 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
+  const rawSeriesCount = cfg.yAxis.filter((y) => y.agg === 'none').length;
   if (chartType === 'scatter' && !isNumericType(xType)) return '분포 차트는 숫자 X축 컬럼이 필요합니다.';
   if (chartType === 'scatter' && cfg.yAxis.some((y) => y.agg !== 'none')) return '분포 차트는 집계 없이 원본값만 사용할 수 있습니다.';
-  if (chartType !== 'scatter' && cfg.yAxis.some((y) => y.agg === 'none')) return '원본값 집계 없음은 분포 차트에서만 사용할 수 있습니다.';
+  if (rawSeriesCount > 0 && rawSeriesCount !== cfg.yAxis.length) {
+    return '원본값은 집계값과 섞을 수 없습니다. 모든 Y축을 원본값으로 선택하세요.';
+  }
+  if (rawSeriesCount > 0 && cfg.sample) return '원본값 모드에서는 표본 추출을 사용할 수 없습니다.';
   return null;
 }
 

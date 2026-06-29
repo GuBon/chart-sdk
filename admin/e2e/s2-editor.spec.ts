@@ -106,6 +106,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.locator('#option-palette-b').fill('0');
 
     await expect(page.locator('#option-palette-color')).toHaveValue('#ff0000');
+    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(84, 112, 198)');
     await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(255, 0, 0)');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });

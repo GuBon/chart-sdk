@@ -33,8 +33,8 @@ export function ChartCard({
   const { label, Icon } = TYPE_META[chart.chartType];
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-[10px] border border-border bg-bg-panel">
-      <div className="flex h-[120px] items-center justify-center bg-muted py-4">
-        <div className="h-20 w-60">
+      <div className="h-[120px] bg-muted p-2">
+        <div className="h-full w-full">
           <MiniChart option={previewOption} />
         </div>
       </div>

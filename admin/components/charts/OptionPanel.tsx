@@ -60,6 +60,11 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
     setPath(next, def.key, value);
     onChangeOptions(next);
   };
+  const setPaletteActiveIndex = (index: number) => {
+    const next = structuredClone(options);
+    setPath(next, 'paletteActiveIndex', index);
+    onChangeOptions(next);
+  };
   const changeType = (to: MajorType) => {
     if (to === chartType) return;
     const prevType = chartType;
@@ -130,7 +135,25 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
                     {open ? <ChevronDown className="size-3.5 text-text-secondary" /> : <ChevronRight className="size-3.5 text-text-secondary" />}
                     <span className="text-[13px] font-semibold text-text-primary">{section}</span>
                   </button>
-                  {open && <div className="mt-2.5 flex flex-col gap-2.5">{sectionDefs.map((def) => <Control key={def.key} def={def} value={getValue(def)} chartType={chartType} columns={columns} hasResult={hasResult} disabled={disabled} onChange={(v) => setValue(def, v)} onChangeType={changeType} />)}</div>}
+                  {open && (
+                    <div className="mt-2.5 flex flex-col gap-2.5">
+                      {sectionDefs.map((def) => (
+                        <Control
+                          key={def.key}
+                          def={def}
+                          value={getValue(def)}
+                          chartType={chartType}
+                          columns={columns}
+                          hasResult={hasResult}
+                          disabled={disabled}
+                          paletteActiveIndex={coercePaletteIndex(options.paletteActiveIndex)}
+                          onChange={(v) => setValue(def, v)}
+                          onChangeType={changeType}
+                          onSelectPaletteIndex={setPaletteActiveIndex}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </section>
               );
             })}
@@ -148,8 +171,10 @@ function Control({
   columns,
   hasResult,
   disabled,
+  paletteActiveIndex,
   onChange,
   onChangeType,
+  onSelectPaletteIndex,
 }: {
   def: OptionDef;
   value: unknown;
@@ -157,8 +182,10 @@ function Control({
   columns: { name: string; type: string }[];
   hasResult: boolean;
   disabled: boolean;
+  paletteActiveIndex: number;
   onChange: (v: unknown) => void;
   onChangeType: (to: MajorType) => void;
+  onSelectPaletteIndex: (index: number) => void;
 }) {
   const fieldName = fieldNameFor(def.key);
   const fieldId = `option-${fieldName}`;
@@ -239,7 +266,7 @@ function Control({
       control = <input id={fieldId} name={fieldName} aria-label={def.label} type="color" value={String(value ?? '#5470C6')} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="h-7 w-10 rounded border border-border disabled:opacity-50" />;
       break;
     case 'palette':
-      control = <PaletteControl value={value} disabled={disabled} label={def.label} onChange={onChange} />;
+      control = <PaletteControl value={value} selectedIndex={paletteActiveIndex} disabled={disabled} label={def.label} onChange={onChange} onSelect={onSelectPaletteIndex} />;
       break;
     case 'columnRef':
       control = hasResult ? (
@@ -265,20 +292,27 @@ function coerce(def: OptionDef, raw: string): unknown {
   return raw;
 }
 
+function coercePaletteIndex(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
 function PaletteControl({
   value,
+  selectedIndex,
   disabled,
   label,
   onChange,
+  onSelect,
 }: {
   value: unknown;
+  selectedIndex: number;
   disabled: boolean;
   label: string;
   onChange: (v: unknown) => void;
+  onSelect: (index: number) => void;
 }) {
   const palette = normalizePalette(value);
-  const [selected, setSelected] = useState(0);
-  const safeSelected = Math.min(selected, palette.length - 1);
+  const safeSelected = Math.min(Math.max(0, selectedIndex), palette.length - 1);
   const color = normalizeHex(palette[safeSelected] ?? DEFAULT_PALETTE[0]);
   const rgb = hexToRgb(color);
 
@@ -306,7 +340,7 @@ function PaletteControl({
               aria-label={`${label} ${i + 1}번 색상 선택`}
               data-testid={`palette-swatch-${i}`}
               disabled={disabled}
-              onClick={() => setSelected(i)}
+              onClick={() => onSelect(i)}
               className={cn(
                 'size-6 rounded border transition-transform disabled:cursor-not-allowed',
                 active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105',
