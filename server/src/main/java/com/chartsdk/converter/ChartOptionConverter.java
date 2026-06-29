@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -77,7 +76,8 @@ public class ChartOptionConverter {
     }
 
     private void applyColor(Map<String, Object> o, Map<String, Object> opt) {
-        if (opt.get("palette") instanceof List<?> palette && !palette.isEmpty()) {
+        List<Object> palette = ColorResolver.orderedPalette(opt);
+        if (!palette.isEmpty()) {
             o.put("color", palette);
         }
     }
@@ -231,8 +231,10 @@ public class ChartOptionConverter {
             if (scatter && bubbleIdx < 0 && scatterCfg.get("symbolSize") != null) s.put("symbolSize", scatterCfg.get("symbolSize"));
             if (scatter && scatterCfg.get("symbol") != null) s.put("symbol", scatterCfg.get("symbol"));
             if (individual) {
-                Object color = pickColor(opt, string(columns.get(c).get("name"), ""), c - 1);
-                if (color != null) s.put("color", color);
+                Object color = ColorResolver.pickColor(opt, string(columns.get(c).get("name"), ""), c - 1);
+                ColorResolver.applySeriesColor(s, chartType, color);
+            } else {
+                ColorResolver.applySeriesColor(s, chartType, ColorResolver.paletteColor(opt, c - 1));
             }
             if (secondAxis && c >= 2) s.put("yAxisIndex", 1);
             series.add(s);
@@ -293,7 +295,10 @@ public class ChartOptionConverter {
             point.put("name", r.isEmpty() ? "" : r.get(0));
             point.put("value", r.size() > 1 ? r.get(1) : 0);
             if (individual) {
-                Object color = pickColor(opt, String.valueOf(r.isEmpty() ? "" : r.get(0)), i);
+                Object color = ColorResolver.pickColor(opt, String.valueOf(r.isEmpty() ? "" : r.get(0)), i);
+                if (color != null) point.put("itemStyle", Map.of("color", color));
+            } else {
+                Object color = ColorResolver.paletteColor(opt, i);
                 if (color != null) point.put("itemStyle", Map.of("color", color));
             }
             data.add(point);
@@ -317,15 +322,6 @@ public class ChartOptionConverter {
     }
 
     // ── 색 매핑 ──────────────────────────────────────────
-    private Object pickColor(Map<String, Object> opt, String name, int index) {
-        Map<String, Object> colorMap = map(opt.get("colorMap"));
-        if (colorMap.get(name) != null) return colorMap.get(name);
-        if (opt.get("palette") instanceof List<?> palette && !palette.isEmpty()) {
-            return palette.get(index % palette.size());
-        }
-        return null;
-    }
-
     private double[] columnTotals(List<Map<String, Object>> columns, List<List<Object>> rows) {
         double[] totals = new double[columns.size()];
         for (List<Object> r : rows) {

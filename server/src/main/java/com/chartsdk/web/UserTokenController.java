@@ -1,6 +1,9 @@
 package com.chartsdk.web;
 
 import com.chartsdk.token.TokenService;
+import com.chartsdk.web.dto.IssueTokenRequest;
+import com.chartsdk.web.dto.UserCreateRequest;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -45,12 +48,12 @@ public class UserTokenController {
     }
 
     @PostMapping("/users")
-    public Map<String, Object> createUser(@RequestBody Map<String, Object> input) {
+    public Map<String, Object> createUser(@Valid @RequestBody UserCreateRequest input) {
         Long id = jdbc.queryForObject("""
                 INSERT INTO mc_user(username, display_name, role)
                 VALUES (?, ?, 'member')
                 RETURNING id
-                """, Long.class, input.get("username"), input.get("displayName"));
+                """, Long.class, input.username(), input.displayName());
         return jdbc.query("SELECT id, username, display_name FROM mc_user WHERE id=?", rs -> {
             if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "User not found.");
             Map<String, Object> row = new LinkedHashMap<>();
@@ -67,8 +70,8 @@ public class UserTokenController {
     }
 
     @PostMapping("/users/{userId}/tokens")
-    public Map<String, Object> issue(@PathVariable long userId, @RequestBody(required = false) Map<String, Object> body) {
-        int days = body != null && body.get("expiresInDays") instanceof Number n ? n.intValue() : 365;
+    public Map<String, Object> issue(@PathVariable long userId, @RequestBody(required = false) IssueTokenRequest body) {
+        int days = body != null && body.expiresInDays() != null ? body.expiresInDays() : 365;
         return tokens.issue(userId, days);
     }
 

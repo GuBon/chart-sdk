@@ -3,6 +3,7 @@ package com.chartsdk.web;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.SchemaCatalog;
+import com.chartsdk.query.SqlIdentifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -53,6 +54,6 @@ public class SchemaController {
     }
 
     public static String qident(String ident) {
-        return "\"" + ident.replace("\"", "\"\"") + "\"";
+        return SqlIdentifier.quote(ident);
     }
 }

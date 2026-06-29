@@ -1,7 +1,6 @@
 package com.chartsdk.query;
 
 import com.chartsdk.web.ApiException;
-import com.chartsdk.web.SchemaController;
 import org.springframework.http.HttpStatus;
 
 import java.sql.Timestamp;
@@ -58,7 +57,7 @@ public final class BuilderSqlBuilder {
 
         String joins = buildJoins(); // 조인 검증 + 절 생성 (knownTables 확장 — select/where 해석 전에 선행)
         String sample = rawMode ? "" : sampleSql(); // 표본은 집계 경로 전용 (rows 모드는 무시 — §3B/§3C)
-        String from = " FROM " + SchemaController.qident(baseTable) + sample + joins;
+        String from = " FROM " + SqlIdentifier.quote(baseTable) + sample + joins;
 
         String xAxis = str(cfg.get("xAxis"));
         List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
@@ -88,7 +87,7 @@ public final class BuilderSqlBuilder {
             if (!isDate(typeOf(x))) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Bucket requires a date/timestamp column.");
             }
-            xSql = "DATE_TRUNC('" + bucket + "', " + x.quoted() + ") AS " + SchemaController.qident(x.column);
+            xSql = "DATE_TRUNC('" + bucket + "', " + x.quoted() + ") AS " + SqlIdentifier.quote(x.column);
         }
 
         List<String> selects = new ArrayList<>();
@@ -98,8 +97,8 @@ public final class BuilderSqlBuilder {
             String agg = str(y.get("agg"));
             assertAggCompatible(agg, col);
             String alias = str(y.get("alias"));
-            if (alias == null) alias = (agg == null ? "val" : agg) + "_" + col.column;
-            selects.add(aggSql(agg, col) + " AS " + SchemaController.qident(alias));
+            if (alias == null) alias = "none".equals(agg) ? col.column : (agg == null ? "val" : agg) + "_" + col.column;
+            selects.add(aggSql(agg, col) + " AS " + SqlIdentifier.quote(alias));
         }
 
         List<Object> params = new ArrayList<>();
@@ -144,7 +143,7 @@ public final class BuilderSqlBuilder {
             }
             String type = "inner".equals(join.get("type")) ? "INNER" : "LEFT";
             knownTables.add(jt);
-            sb.append(" ").append(type).append(" JOIN ").append(SchemaController.qident(jt))
+            sb.append(" ").append(type).append(" JOIN ").append(SqlIdentifier.quote(jt))
                     .append(" ON ").append(left.quoted()).append(" = ").append(right.quoted());
         }
         return sb.toString();
@@ -230,11 +229,16 @@ public final class BuilderSqlBuilder {
     // ── 검증 헬퍼 ────────────────────────────────────────
     private void validateChartShape(Ref x, List<Map<String, Object>> yAxis, boolean allNone) {
         boolean anyNone = yAxis.stream().anyMatch(y -> "none".equals(str(y.get("agg"))));
+        if (allNone && cfg.get("sample") != null) {
+            throw invalidReq("Sample cannot be used with raw values.");
+        }
         if ("scatter".equals(chartType)) {
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter requires agg 'none' on all yAxis.");
             if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter xAxis must be numeric.");
         } else {
-            if (anyNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "agg 'none' is only allowed for scatter.");
+            if (anyNone && !allNone) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "raw values cannot be mixed with aggregate yAxis fields.");
+            }
             if ("pie".equals(chartType) && yAxis.size() != 1) throw invalidReq("pie requires exactly one yAxis.");
         }
     }
@@ -299,7 +303,7 @@ public final class BuilderSqlBuilder {
     // ── 식별자 해석 ───────────────────────────────────────
     private record Ref(String table, String column) {
         String quoted() {
-            return SchemaController.qident(table) + "." + SchemaController.qident(column);
+            return SqlIdentifier.quote(table) + "." + SqlIdentifier.quote(column);
         }
     }
 

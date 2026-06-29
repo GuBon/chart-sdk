@@ -1,0 +1,270 @@
+package com.chartsdk.chart;
+
+import com.chartsdk.web.ApiException;
+import com.chartsdk.web.dto.ChartSaveRequest;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+@Repository
+public class ChartRepository {
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+
+    public ChartRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
+        this.jdbc = jdbc;
+        this.mapper = mapper;
+    }
+
+    public Map<String, Object> list(Long ownerId, String q, String type, Long datasourceId, String sort, Integer page, Integer pageSize) {
+        StringBuilder where = new StringBuilder(" FROM mc_chart WHERE 1=1");
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+        appendOwnerScope(where, params, ownerId);
+        if (q != null && !q.isBlank()) {
+            where.append(" AND (name ILIKE ? OR description ILIKE ?)");
+            params.add("%" + q + "%");
+            params.add("%" + q + "%");
+        }
+        if (type != null && !type.isBlank()) {
+            where.append(" AND chart_type=?");
+            params.add(type);
+        }
+        if (datasourceId != null) {
+            where.append(" AND datasource_id=?");
+            params.add(datasourceId);
+        }
+
+        int safePageSize = clamp(pageSize == null ? 12 : pageSize, 1, 60);
+        int total = count(where, params);
+        int totalPages = total == 0 ? 1 : (int) Math.ceil((double) total / safePageSize);
+        int safePage = clamp(page == null ? 1 : page, 1, totalPages);
+
+        StringBuilder sql = new StringBuilder("""
+                SELECT id, name, description, chart_type, datasource_id, updated_at
+                """);
+        sql.append(where);
+        sql.append(" ORDER BY ").append(orderBy(sort));
+        sql.append(" LIMIT ? OFFSET ?");
+
+        java.util.ArrayList<Object> queryParams = new java.util.ArrayList<>(params);
+        queryParams.add(safePageSize);
+        queryParams.add((safePage - 1) * safePageSize);
+
+        List<Map<String, Object>> charts = jdbc.query(sql.toString(), (rs, rowNum) -> summary(rs), queryParams.toArray());
+        return Map.of(
+                "charts", charts,
+                "page", safePage,
+                "pageSize", safePageSize,
+                "total", total,
+                "totalPages", totalPages
+        );
+    }
+
+    public Map<String, Object> get(Long ownerId, long id) {
+        StringBuilder sql = new StringBuilder("SELECT * FROM mc_chart WHERE id=?");
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+        params.add(id);
+        appendOwnerScope(sql, params, ownerId);
+        return jdbc.query(sql.toString(), rs -> {
+            if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+            return detail(rs);
+        }, params.toArray());
+    }
+
+    public Long create(Long ownerId, ChartSaveRequest input) {
+        return jdbc.queryForObject("""
+                INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config, chart_type, options, refresh_mode, cache_ttl_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?, ?)
+                RETURNING id
+                """, Long.class,
+                ownerId,
+                input.name(),
+                input.description(),
+                input.datasourceId(),
+                valueOrDefault(input.defineMode(), "builder"),
+                valueOrDefault(input.sqlQuery(), "SELECT 1"),
+                json(input.builderConfig()),
+                valueOrDefault(input.chartType(), "bar"),
+                json(valueOrDefault(input.options(), Map.of())),
+                valueOrDefault(input.refreshMode(), "ttl"),
+                valueOrDefault(input.cacheTtlSeconds(), 3600));
+    }
+
+    public int update(Long ownerId, long id, ChartSaveRequest input) {
+        Integer expectedVersion = input.version();
+        StringBuilder sql = new StringBuilder("""
+                UPDATE mc_chart
+                   SET name=?, description=?, datasource_id=?, define_mode=?, sql_query=?, builder_config=?::jsonb,
+                       chart_type=?, options=?::jsonb, refresh_mode=?, cache_ttl_seconds=?, version=version+1
+                 WHERE id=?
+                """);
+        java.util.ArrayList<Object> args = new java.util.ArrayList<>();
+        args.add(input.name());
+        args.add(input.description());
+        args.add(input.datasourceId());
+        args.add(valueOrDefault(input.defineMode(), "builder"));
+        args.add(valueOrDefault(input.sqlQuery(), "SELECT 1"));
+        args.add(json(input.builderConfig()));
+        args.add(valueOrDefault(input.chartType(), "bar"));
+        args.add(json(valueOrDefault(input.options(), Map.of())));
+        args.add(valueOrDefault(input.refreshMode(), "ttl"));
+        args.add(valueOrDefault(input.cacheTtlSeconds(), 3600));
+        args.add(id);
+        appendOwnerScope(sql, args, ownerId);
+        if (expectedVersion != null) {
+            sql.append(" AND version=?");
+            args.add(expectedVersion);
+        }
+        return jdbc.update(sql.toString(), args.toArray());
+    }
+
+    public boolean exists(Long ownerId, long id) {
+        StringBuilder sql = new StringBuilder("SELECT count(*) FROM mc_chart WHERE id=?");
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+        params.add(id);
+        appendOwnerScope(sql, params, ownerId);
+        Integer exists = jdbc.queryForObject(sql.toString(), Integer.class, params.toArray());
+        return exists != null && exists > 0;
+    }
+
+    public void delete(Long ownerId, long id) {
+        StringBuilder sql = new StringBuilder("DELETE FROM mc_chart WHERE id=?");
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+        params.add(id);
+        appendOwnerScope(sql, params, ownerId);
+        jdbc.update(sql.toString(), params.toArray());
+    }
+
+    public Long duplicate(Long ownerId, long id) {
+        try {
+            StringBuilder sql = new StringBuilder("""
+                    INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config,
+                                         chart_type, options, refresh_mode, cache_ttl_seconds)
+                    SELECT owner_id, name || ' (?щ낯)', description, datasource_id, define_mode, sql_query, builder_config,
+                           chart_type, options, refresh_mode, cache_ttl_seconds
+                      FROM mc_chart WHERE id=?
+                    """);
+            java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+            params.add(id);
+            appendOwnerScope(sql, params, ownerId);
+            sql.append(" RETURNING id");
+            return jdbc.queryForObject(sql.toString(), Long.class, params.toArray());
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+        }
+    }
+
+    public void copyCache(long newId, long originalId) {
+        jdbc.update("""
+                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)
+                SELECT ?, result, computed_at, elapsed_ms, row_count, 0 FROM mc_chart_cache WHERE chart_id=?
+                ON CONFLICT (chart_id) DO NOTHING
+                """, newId, originalId);
+    }
+
+    public ChartDefinition previewDefinition(Long ownerId, long id) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT id, datasource_id, sql_query, chart_type, options::text, refresh_mode, cache_ttl_seconds, version
+                  FROM mc_chart
+                 WHERE id=?
+                """);
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+        params.add(id);
+        appendOwnerScope(sql, params, ownerId);
+        return jdbc.query(sql.toString(), rs -> {
+            if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+            return new ChartDefinition(
+                    rs.getLong("id"),
+                    rs.getLong("datasource_id"),
+                    rs.getString("sql_query"),
+                    rs.getString("chart_type"),
+                    readJson(rs.getString("options")),
+                    rs.getString("refresh_mode"),
+                    rs.getInt("cache_ttl_seconds"),
+                    rs.getInt("version")
+            );
+        }, params.toArray());
+    }
+
+    private static void appendOwnerScope(StringBuilder sql, List<Object> params, Long ownerId) {
+        if (ownerId == null) return;
+        sql.append(" AND (owner_id=? OR owner_id IS NULL)");
+        params.add(ownerId);
+    }
+
+    private Map<String, Object> summary(ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", rs.getLong("id"));
+        m.put("name", rs.getString("name"));
+        m.put("description", rs.getString("description"));
+        m.put("chartType", rs.getString("chart_type"));
+        m.put("datasourceId", rs.getLong("datasource_id"));
+        m.put("updatedAt", timestampString(rs.getTimestamp("updated_at")));
+        return m;
+    }
+
+    private Map<String, Object> detail(ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> m = summary(rs);
+        m.put("defineMode", rs.getString("define_mode"));
+        m.put("sqlQuery", rs.getString("sql_query"));
+        m.put("builderConfig", readJson(rs.getString("builder_config")));
+        m.put("options", readJson(rs.getString("options")));
+        m.put("refreshMode", rs.getString("refresh_mode"));
+        m.put("cacheTtlSeconds", rs.getInt("cache_ttl_seconds"));
+        m.put("version", rs.getInt("version"));
+        m.put("createdAt", timestampString(rs.getTimestamp("created_at")));
+        return m;
+    }
+
+    private String json(Object value) {
+        try {
+            return mapper.writeValueAsString(value == null ? Map.of() : value);
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JSON", e.getMessage());
+        }
+    }
+
+    private Map<String, Object> readJson(String value) {
+        try {
+            return mapper.readValue(value, new TypeReference<>() {
+            });
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private static <T> T valueOrDefault(T value, T fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static String timestampString(Timestamp ts) {
+        return Instant.ofEpochMilli(ts.getTime()).toString();
+    }
+
+    private int count(StringBuilder where, List<Object> params) {
+        Integer total = jdbc.queryForObject("SELECT count(*)" + where, Integer.class, params.toArray());
+        return total == null ? 0 : total;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static String orderBy(String sort) {
+        return switch (sort == null ? "updated_desc" : sort) {
+            case "updated_asc" -> "updated_at ASC, id ASC";
+            case "name_asc" -> "lower(name) ASC, id ASC";
+            case "name_desc" -> "lower(name) DESC, id DESC";
+            default -> "updated_at DESC, id DESC";
+        };
+    }
+}

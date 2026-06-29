@@ -5,7 +5,6 @@ import com.chartsdk.cache.ChartCacheService;
 import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.token.EmbedPrincipal;
-import com.chartsdk.token.TokenService;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,23 +22,20 @@ import java.util.Map;
 public class EmbedChartService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
-    private final TokenService tokens;
     private final ChartCacheService cache;
     private final ChartComputeService compute;
     private final ChartOptionConverter converter;
 
-    public EmbedChartService(JdbcTemplate jdbc, ObjectMapper mapper, TokenService tokens, ChartCacheService cache,
+    public EmbedChartService(JdbcTemplate jdbc, ObjectMapper mapper, ChartCacheService cache,
                              ChartComputeService compute, ChartOptionConverter converter) {
         this.jdbc = jdbc;
         this.mapper = mapper;
-        this.tokens = tokens;
         this.cache = cache;
         this.compute = compute;
         this.converter = converter;
     }
 
-    public Map<String, Object> data(long chartId, String authorization) {
-        EmbedPrincipal principal = tokens.validateBearer(authorization);
+    public Map<String, Object> data(long chartId, EmbedPrincipal principal) {
         ChartDefinition chart = findChart(chartId, principal.userId());
         // 캐시가 신선하면 그대로, 아니면 단일 비행 재계산(경쟁 시 stale 즉시 반환 — G1/G4).
         CachedChartRows rows = cache.findUsable(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(), chart.version())
