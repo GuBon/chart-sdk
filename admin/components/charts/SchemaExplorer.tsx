@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Search, Table2 } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
+import { tableKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -25,7 +26,12 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
 
   const q = query.toLowerCase().trim();
   const filtered = q
-    ? tables.filter((t) => t.name.toLowerCase().includes(q) || t.columns.some((c) => c.name.toLowerCase().includes(q)))
+    ? tables.filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) ||
+          t.schema.toLowerCase().includes(q) ||
+          t.columns.some((c) => c.name.toLowerCase().includes(q)),
+      )
     : tables;
 
   const toggle = (name: string) =>
@@ -79,13 +85,14 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
           <p className="px-2 py-3 text-xs text-text-tertiary">데이터소스를 먼저 선택하세요.</p>
         ) : (
           filtered.map((t) => {
-            const open = expanded.has(t.name);
-            const active = selectedTable === t.name;
+            const key = tableKey(t);
+            const open = expanded.has(key);
+            const active = selectedTable === key;
             return (
-              <div key={t.name}>
+              <div key={key}>
                 <button
                   type="button"
-                  onClick={() => selectTable(t.name)}
+                  onClick={() => selectTable(key)}
                   className={cn(
                     'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted',
                     active ? 'bg-muted font-medium text-text-primary' : 'text-text-primary',
@@ -94,14 +101,17 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
-                      toggle(t.name);
+                      toggle(key);
                     }}
                     className="text-text-secondary"
                   >
                     {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   </span>
                   <Table2 className="size-3.5 text-text-secondary" />
-                  {t.name}
+                  <span className="truncate">{t.name}</span>
+                  {t.schema !== 'public' && (
+                    <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-text-tertiary">{t.schema}</span>
+                  )}
                 </button>
                 {open &&
                   t.columns.map((c) => (

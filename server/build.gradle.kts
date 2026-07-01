@@ -21,6 +21,8 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
+    implementation("org.duckdb:duckdb_jdbc:1.5.4.0") // 다중 소스 페더레이션 엔진(설계 §3). 네이티브 lib 번들
+
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.0") // prod 프로파일 JSON 로그
     testImplementation("org.springframework.boot:spring-boot-starter-test")

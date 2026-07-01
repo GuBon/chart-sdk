@@ -53,20 +53,27 @@ public class QueryExecutor {
         }
     }
 
-    /** 데이터소스 public 스키마 카탈로그 로딩(mc_ 테이블 제외) — 식별자 화이트리스트 검증용. */
+    /**
+     * 데이터소스 카탈로그 로딩 — 식별자 화이트리스트 검증용. 시스템 스키마와 mc_ 내부 테이블은 제외한다
+     * (노코드 SQL생성규칙 §9). 고객 DB가 public 외 사용자 스키마(예: tandanji)에 업무 테이블을 두어도
+     * 모두 노출한다 — search_path 가정 없이 스키마를 식별자로 한정한다(§1.2).
+     */
     public SchemaCatalog catalog(long datasourceId) {
-        Map<String, Map<String, String>> tables = new LinkedHashMap<>();
+        Map<SchemaCatalog.Key, Map<String, String>> tables = new LinkedHashMap<>();
         try (Connection conn = pools.connection(datasourceId);
              PreparedStatement ps = conn.prepareStatement("""
-                     SELECT table_name, column_name, data_type
+                     SELECT table_schema, table_name, column_name, data_type
                        FROM information_schema.columns
-                      WHERE table_schema = 'public'
+                      WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                        AND table_schema NOT LIKE 'pg_temp%'
+                        AND table_schema NOT LIKE 'pg_toast_temp%'
                         AND table_name NOT LIKE 'mc\\_%' ESCAPE '\\'
-                      ORDER BY table_name, ordinal_position
+                      ORDER BY table_schema, table_name, ordinal_position
                      """);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
-                tables.computeIfAbsent(rs.getString("table_name"), k -> new LinkedHashMap<>())
+                SchemaCatalog.Key key = new SchemaCatalog.Key(rs.getString("table_schema"), rs.getString("table_name"));
+                tables.computeIfAbsent(key, k -> new LinkedHashMap<>())
                         .put(rs.getString("column_name"), rs.getString("data_type"));
             }
         } catch (ApiException e) {

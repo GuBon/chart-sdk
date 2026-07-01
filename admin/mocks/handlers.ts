@@ -169,8 +169,9 @@ export const handlers = [
   // ── 스키마 탐색(S2) ───────────────────────────────
   http.get('/api/v1/schema/tables', () => HttpResponse.json({ tables: schemaTables })),
 
-  http.get('/api/v1/schema/tables/:name/preview', ({ params }) => {
-    const table = schemaTables.find((t) => t.name === params.name);
+  http.get('/api/v1/schema/tables/:name/preview', ({ params, request }) => {
+    const schema = new URL(request.url).searchParams.get('schema') ?? 'public';
+    const table = schemaTables.find((t) => t.name === params.name && t.schema === schema);
     return table ? HttpResponse.json(buildTablePreview(table)) : err(404, 'NOT_FOUND', '테이블을 찾을 수 없습니다.');
   }),
 

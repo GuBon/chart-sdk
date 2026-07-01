@@ -71,6 +71,26 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByText(/SELECT/)).toBeVisible();
   });
 
+  test('비-public 스키마 테이블을 선택해 스키마 한정 SQL을 생성한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+
+    // 탐색기에서 analytics.events 선택 (스키마 배지 표시)
+    await page.locator('aside').first().getByRole('button', { name: /events/ }).click();
+    await expect(page.locator('aside').first().getByText('analytics', { exact: true })).toBeVisible();
+
+    // 노코드 테이블 셀렉트 값은 스키마 한정 키
+    await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('analytics.events');
+
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('kind');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    // 생성된 SQL 이 "analytics"."events" 로 스키마 한정
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/FROM "analytics"\."events"/)).toBeVisible();
+  });
+
   test('실행 후 ECharts 미리보기와 옵션 패널(대분류 전환)이 동작한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });

@@ -29,21 +29,25 @@ public class SchemaController {
     public Map<String, Object> tables(@RequestParam long datasourceId) {
         SchemaCatalog catalog = queries.catalog(datasourceId);
         List<Map<String, Object>> tables = new ArrayList<>();
-        catalog.tables().forEach((table, cols) -> {
+        catalog.byTable().forEach((key, cols) -> {
             List<Map<String, Object>> columns = new ArrayList<>();
             cols.forEach((name, type) -> columns.add(Map.of("name", name, "type", type)));
-            tables.add(Map.of("name", table, "columns", columns));
+            tables.add(Map.of("schema", key.schema(), "name", key.table(), "columns", columns));
         });
         return Map.of("tables", tables);
     }
 
     @GetMapping("/tables/{tableName}/preview")
-    public Map<String, Object> preview(@PathVariable String tableName, @RequestParam long datasourceId) {
+    public Map<String, Object> preview(@PathVariable String tableName,
+                                       @RequestParam(required = false) String schema,
+                                       @RequestParam long datasourceId) {
         SchemaCatalog catalog = queries.catalog(datasourceId);
-        if (!catalog.hasTable(tableName)) {
+        String resolvedSchema = (schema == null || schema.isBlank()) ? SchemaCatalog.DEFAULT_SCHEMA : schema;
+        if (!catalog.hasTable(resolvedSchema, tableName)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown table: " + tableName);
         }
-        QueryRows rows = queries.execute(datasourceId, "SELECT * FROM " + qident(tableName) + " LIMIT " + QueryExecutor.MAX_ROWS);
+        QueryRows rows = queries.execute(datasourceId,
+                "SELECT * FROM " + SqlIdentifier.qualify(resolvedSchema, tableName) + " LIMIT " + QueryExecutor.MAX_ROWS);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("columns", rows.columns());
         result.put("rows", rows.rows());
@@ -51,9 +55,5 @@ public class SchemaController {
         result.put("truncated", rows.truncated());
         result.put("elapsedMs", rows.elapsedMs());
         return result;
-    }
-
-    public static String qident(String ident) {
-        return SqlIdentifier.quote(ident);
     }
 }

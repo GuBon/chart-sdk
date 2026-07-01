@@ -12,12 +12,14 @@ import {
   VALUELESS_OPS,
   activeTables,
   aggChoicesForChart,
+  bareTableName,
   builderValidationIssue,
   builderWarning,
   columnsForBuilder,
   emptyJoin,
   isDateType,
   orderTargets,
+  tableKey,
 } from '@/lib/builder';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -79,19 +81,22 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
   const rawValueMode = config.yAxis.some((y) => y.agg === 'none');
   const sampleDisabledByJoin = joins.length > 0;
   const sampleDisabled = sampleDisabledByJoin || rawValueMode;
-  const colsOf = (t: string) => tables.find((x) => x.name === t)?.columns ?? [];
-  const qualOpts = (tableNames: string[]) =>
-    tableNames.flatMap((t) => colsOf(t).map((c) => ({ value: `${t}.${c.name}`, label: `${t}.${c.name}` })));
+  const colsOf = (key: string) => (tables.find((x) => tableKey(x) === key) ?? tables.find((x) => x.name === key))?.columns ?? [];
+  const qualOpts = (tableKeys: string[]) =>
+    tableKeys.flatMap((t) => {
+      const bare = bareTableName(t);
+      return colsOf(t).map((c) => ({ value: `${bare}.${c.name}`, label: `${bare}.${c.name}` }));
+    });
   const setJoin = (i: number, p: Partial<JoinSpec>) => patch({ joins: joins.map((j, idx) => (idx === i ? { ...j, ...p } : j)) });
   const setJoinOn = (i: number, side: 'leftColumn' | 'rightColumn', col: string) => setJoin(i, { on: { ...joins[i].on, [side]: col } });
   const changeJoinTable = (i: number, table: string) => setJoin(i, { table, on: { leftColumn: '', rightColumn: '' } });
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
   const addJoin = () => {
     const used = activeTables(config);
-    const next = tables.find((t) => !used.includes(t.name));
-    if (next) patch({ joins: [...joins, emptyJoin(next.name)], sample: null });
+    const next = tables.find((t) => !used.includes(tableKey(t)));
+    if (next) patch({ joins: [...joins, emptyJoin(tableKey(next))], sample: null });
   };
-  const unusedTable = !!config.table && tables.some((t) => !activeTables(config).includes(t.name));
+  const unusedTable = !!config.table && tables.some((t) => !activeTables(config).includes(tableKey(t)));
 
   return (
     <div
@@ -124,7 +129,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
               aria-label="테이블"
               value={config.table ?? ''}
               onChange={(e) => changeTable(e.target.value)}
-              options={tables.map((t) => ({ value: t.name, label: t.name }))}
+              options={tables.map((t) => ({ value: tableKey(t), label: tableKey(t) }))}
               placeholder="테이블 선택"
             />
           </div>
@@ -137,7 +142,7 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
               {joins.map((j, i) => {
                 const priorTables = [config.table!, ...joins.slice(0, i).map((x) => x.table)].filter(Boolean);
                 const usedExceptSelf = activeTables(config).filter((t) => t !== j.table);
-                const tableOpts = tables.filter((t) => !usedExceptSelf.includes(t.name)).map((t) => ({ value: t.name, label: t.name }));
+                const tableOpts = tables.filter((t) => !usedExceptSelf.includes(tableKey(t))).map((t) => ({ value: tableKey(t), label: tableKey(t) }));
                 return (
                   <div key={i} className="flex items-center gap-2">
                     <div className="w-36">

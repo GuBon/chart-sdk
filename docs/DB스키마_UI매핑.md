@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v1.3 (2026-06-29 갱신: 모든 차트 타입의 원본값 튜플 모드 · 저장 시 서버 SQL 재생성 반영)
-**관련:** Flyway `V1__init.sql` v5.0 · PRD v1.8(9장) · API v1.6 · 화면설계서 v2.5 · `chart-options/optionRegistry.ts`
+**문서 버전:** v1.4 (2026-06-30 갱신: 고객 DB 다중 스키마 조회 — 스키마 탐색기가 public 외 사용자 스키마 테이블도 노출)
+**관련:** Flyway `V1__init.sql` v5.0 · PRD v1.9(9장) · API v1.7 · 화면설계서 v2.5 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -92,7 +92,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
 | 데이터소스 셀렉트 | 📦 | `mc_chart.datasource_id` (목록=🔁 현재 사용자 소유 `mc_datasource`) |
-| 스키마 트리(테이블·컬럼·타입) | ⏳ | `information_schema` 라이브 조회 — **저장 안 함** |
+| 스키마 트리(테이블·컬럼·타입) | ⏳ | `information_schema` 라이브 조회 — **저장 안 함**. 시스템 스키마·`mc_` 제외, `public` 외 사용자 스키마는 배지로 구분(식별자 `"schema.table"` 한정) |
 | 테이블/컬럼 검색 | ⏳ | 클라 필터 |
 | 소스변경확인 모달 | ⏳ | 클라 상태 |
 

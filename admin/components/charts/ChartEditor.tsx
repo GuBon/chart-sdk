@@ -6,7 +6,7 @@ import { ChevronLeft } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable } from '@/lib/api';
-import { builderValidationIssue, emptyBuilder, normalizeBuilder, normalizeBuilderForChartType } from '@/lib/builder';
+import { builderValidationIssue, emptyBuilder, normalizeBuilder, normalizeBuilderForChartType, splitTableKey } from '@/lib/builder';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -130,7 +130,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     resetResults();
     setDirty(true);
     if (datasourceId == null) return;
-    setRaw(await schemaApi.preview(table, datasourceId));
+    const { schema, name } = splitTableKey(table);
+    setRaw(await schemaApi.preview(schema, name, datasourceId));
     setResultTab('raw');
   };
 

@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v1.6 — v1.5 + 모든 차트 타입의 `agg:"none"` 원본값 튜플 모드, DTO 검증, 저장 시 서버 SQL 재생성 명시
-**관련 문서:** PRD v1.8, 화면설계서 v2.5, 노코드 SQL 생성규칙 v1.5
+**문서 버전:** v1.7 — v1.6 + 다중 스키마 지원. `/schema/tables` 응답에 `schema` 필드, preview 에 `schema` 파라미터. 식별자는 비-public 일 때 `"schema.table"` 로 한정
+**관련 문서:** PRD v1.9, 화면설계서 v2.5, 노코드 SQL 생성규칙 v1.6
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -343,6 +343,7 @@ GET /api/v1/schema/tables?datasourceId={id}
 {
   "tables": [
     {
+      "schema": "public",
       "name": "sales",
       "columns": [
         { "name": "id", "type": "bigint" },
@@ -351,22 +352,24 @@ GET /api/v1/schema/tables?datasourceId={id}
         { "name": "date", "type": "date" }
       ]
     },
-    { "name": "users", "columns": [ { "name": "id", "type": "bigint" }, { "name": "name", "type": "varchar" } ] }
+    { "schema": "public", "name": "users", "columns": [ { "name": "id", "type": "bigint" }, { "name": "name", "type": "varchar" } ] },
+    { "schema": "tandanji", "name": "events", "columns": [ { "name": "id", "type": "bigint" }, { "name": "kind", "type": "varchar" } ] }
   ]
 }
 ```
 
-- 서버는 현재 사용자 소유 데이터소스에 연결해 `information_schema`를 조회한다. `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
+- 서버는 현재 사용자 소유 데이터소스에 연결해 `information_schema`를 조회한다. 시스템 스키마(`pg_catalog`·`information_schema`·`pg_toast` 등)와 `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
+- `schema` 는 테이블의 소속 스키마다. `public` 외 사용자 스키마(예: `tandanji`)의 업무 테이블도 노출된다. 클라이언트는 식별자를 비-public 일 때만 `"schema.table"` 로 한정해 `builderConfig.table`/`joins[].table` 에 담는다(미지정 → public).
 
 ### 5.2 테이블 원본 데이터 조회 (최대 1,000행)
 
 ```
-GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}
+GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}
 ```
 
 응답 200: 2번(query/run)과 동일 형태 (`columns` + `rows`, 최대 1,000행 + `truncated`).
 
-- 서버 내부적으로 `SELECT * FROM {tableName} LIMIT 1000`을 읽기 전용으로 실행(시스템 행 제한과 동일). 테이블명은 `information_schema` 존재 여부로 검증(임의 문자열 주입 차단).
+- 서버 내부적으로 `SELECT * FROM "{schema}"."{tableName}" LIMIT 1000`을 읽기 전용으로 실행(시스템 행 제한과 동일). `schema` 미지정 시 `public`. 테이블명·스키마는 `information_schema` 존재 여부로 검증(임의 문자열 주입 차단).
 - S2 좌측 패널에서 테이블 클릭 시 [원본 데이터] 탭에 표시 — UI는 세로 스크롤, 초과 시 "1,000행까지 표시" 안내. 조건이 구성된 뒤에는 2A의 `mode:"rows"`가 이 역할을 대신한다(조건 적용 원본).
 
 ---

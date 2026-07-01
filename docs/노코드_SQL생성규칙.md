@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v1.5 — `agg:"none"` 원본값 튜플 모드를 모든 차트 타입으로 확장. 원본값 모드는 GROUP BY 없이 조회하고 표본 추출과 동시 사용 불가
-**관련 문서:** PRD v1.8 (7.3·7.7), API 계약서 v1.6 (builderConfig), 화면설계서 v2.5 (S2 노코드 탭)
+**문서 버전:** v1.6 — 다중 스키마 지원. 테이블 식별자를 스키마 한정(`"schema"."table"`)으로 생성하고, 빌더가 스키마를 명시하지 않으면 public 으로 간주(하위호환). 고객 DB 의 public 외 사용자 스키마(예: tandanji) 업무 테이블도 조회 가능
+**관련 문서:** PRD v1.9 (7.3·7.7), API 계약서 v1.7 (builderConfig·schema), 화면설계서 v2.5 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -9,7 +9,7 @@
 ## 1. 원칙
 
 1. 노코드는 SQL 생성기다. 생성된 SQL은 기존 실행 파이프라인(SELECT 검증 → 읽기 전용 실행 → 변환기)을 그대로 통과한다. 별도 실행 경로를 만들지 않는다.
-2. 식별자(테이블·컬럼)는 바인딩이 불가능하므로 화이트리스트 검증으로 통제한다: information_schema에 실재하는 이름만 허용하고, 통과한 식별자는 큰따옴표로 감싼다.
+2. 식별자(테이블·컬럼)는 바인딩이 불가능하므로 화이트리스트 검증으로 통제한다: information_schema에 실재하는 이름만 허용하고, 통과한 식별자는 큰따옴표로 감싼다. 테이블은 스키마 한정 `"schema"."table"` 로 감싸며, 빌더가 스키마를 명시하지 않으면 `public` 으로 간주한다(스키마 없는 기존 차트의 하위호환). 생성 SQL은 `public` 도 명시해 `search_path` 의존(동명 테이블 오선택)을 제거한다. **단 본 문서의 예시는 가독성을 위해 `public` 스키마 접두를 생략해 표기한다** — 실제 생성 SQL은 `"public"."sales"` 처럼 스키마를 명시한다.
 3. 값(WHERE 비교값)은 SQL 문자열에 절대 삽입하지 않는다. 전부 PreparedStatement `?` 바인딩.
 4. 생성 SQL의 첫 SELECT 컬럼은 항상 X축이다 — ECharts 변환기 컨벤션("첫 컬럼 = X축, 나머지 = 시리즈")과 구조적으로 일치시킨다.
 5. 생성 SQL은 사용자가 항상 확인할 수 있게 한다(S2 "생성된 SQL 보기" — 기본 접힘, 헤더 클릭 시 펼침). 블랙박스를 만들지 않는다.
@@ -38,8 +38,8 @@
 
 | 필드 | 필수 | 설명 |
 |---|---|---|
-| table | ✓ | base 테이블. 추가 테이블은 `joins[]` 로 조인 (11장) |
-| joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"테이블.컬럼"` |
+| table | ✓ | base 테이블. 스키마 한정 시 `"schema.table"`(미지정 → public). 추가 테이블은 `joins[]` 로 조인 (11장) |
+| joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"테이블.컬럼"`(테이블 부분은 bare 이름 — 스키마는 테이블 선언에서 해석) |
 | xAxis | ✓ | X축 컬럼 1개 (조인 시 qualified) |
 | xAxisBucket | — | `"day"` \| `"week"` \| `"month"` \| null. X축이 날짜 타입일 때만 허용. 지정 시 DATE_TRUNC로 묶어 집계 (3A장) |
 | yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. `agg:"none"`이면 원본값 튜플 모드. 복수면 다중 시리즈 |
@@ -174,7 +174,7 @@ generate(config, datasourceId):
   orderSql = buildOrder(config.orderBy)                  # x → 1번 컬럼, y{i} → (i+2)번 별칭
 
   sql = "SELECT " + join(select)
-      + " FROM " + quote(table)
+      + " FROM " + qualify(table)   # "schema"."table" (스키마 미지정 → public). 예시는 public 생략 표기
       + (!allNone && config.sample ? " TABLESAMPLE SYSTEM (" + clamp(config.sample.rate, 1, 100) + ")" : "")  # 표본 추출(3C)
       + (whereSql ? " WHERE " + whereSql : "")
       + (!allNone ? " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis)) : "")
@@ -184,6 +184,7 @@ generate(config, datasourceId):
 ```
 
 - quote(name): 큰따옴표로 감싸고 내부 " 는 "" 로 escape. 단 화이트리스트를 통과한 이름만 여기까지 온다(이중 방어).
+- qualify(table): 테이블을 `"schema"."table"` 로 한정한다(스키마 미지정 → public). 컬럼 참조는 `"schema"."table"."column"` 으로 한정된다. 조인 시 컬럼 참조의 테이블 부분은 bare 이름으로 표기하되, 같은 이름 테이블이 서로 다른 스키마로 한 쿼리에 동시에 등장하면 모호하므로 거부한다(조용한 오선택 방지).
 - 생성 결과 (sql, binds)는 기존 SQL 실행 엔진에 그대로 전달. 실행 엔진은 노코드/수기 SQL을 구분하지 않는다(수기 SQL은 binds가 빈 목록일 뿐).
 
 ## 7. 생성 예시
@@ -335,6 +336,7 @@ LIMIT 1000
 ```
 - `FROM "base"` 뒤에 `joins` **순서대로** `[INNER|LEFT] JOIN "table" ON "a"."x" = "b"."y"`.
 - SELECT·GROUP BY·ORDER BY·WHERE 의 식별자는 전부 `"테이블"."컬럼"` qualified quote. 별칭은 두지 않는다(테이블명 그대로 — 단순·명확).
+- 비-public 스키마 테이블은 FROM·JOIN·컬럼 모두 스키마 한정된다 — 예: `FROM "tandanji"."events" INNER JOIN "tandanji"."users" ON "tandanji"."events"."user_id" = "tandanji"."users"."id"`. 위 예시는 public 스키마라 접두를 생략했다(실제로는 `"public"."sales"` 처럼 명시).
 - `xAxisBucket` 지정 시 첫 컬럼은 `DATE_TRUNC('month', "t"."col") AS "col"`, GROUP BY 는 위치 참조(`1`) 유지.
 
 ### 11.4 검증 (9장 확장)
@@ -344,6 +346,7 @@ LIMIT 1000
 | ON 좌·우 컬럼 타입 호환(조인 키 타입 일치) | 400 JOIN_KEY_TYPE_MISMATCH |
 | 체인 규칙 위반(leftColumn 테이블이 base·앞선 조인에 없음) | 400 INVALID_JOIN_CHAIN |
 | 조인 시 unqualified 컬럼(모호) | 400 INVALID_IDENTIFIER |
+| 동명 테이블이 서로 다른 스키마로 한 쿼리에 동시 등장(예: base `tandanji.events` + join `public.events`) | 400 INVALID_IDENTIFIER (조용한 오선택 방지) |
 | `sample`(TABLESAMPLE) + JOIN 동시 사용 | 400 INVALID_REQUEST (표본은 base 블록만 → 조인 결과 왜곡) |
 
 ### 11.5 fan-out 주의

@@ -7,6 +7,7 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -14,42 +15,67 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 노코드 builderConfig → (검증된 SQL + 바인딩). 모든 식별자는 SchemaCatalog 화이트리스트로 검증한 뒤에만
+ * 노코드 builderConfig → (검증된 SQL + 바인딩). 모든 식별자는 {@link Catalog} 화이트리스트로 검증한 뒤에만
  * 큰따옴표로 감싼다(노코드 SQL생성규칙 §1.2·§9·§11). 값은 전부 PreparedStatement 바인딩.
  * 검증 실패는 SQL 생성 전에 400 으로 차단한다 — 노코드 사용자에게 DB 에러를 노출하지 않는다(§9).
+ *
+ * <p>단일 소스는 {@link RefRenderer#SINGLE}(PG, {@code "schema"."table"}), 다중 소스는
+ * {@link RefRenderer#FEDERATED}(DuckDB, {@code "ds{id}"."schema"."table"})로 참조를 렌더링한다(설계 §6).
+ * WHERE·집계·조인 로직은 렌더러와 무관하게 한 벌 공유한다.
  */
 public final class BuilderSqlBuilder {
 
     public record Sql(String text, List<Object> params) {
     }
 
-    private final SchemaCatalog catalog;
+    private final Catalog catalog;
+    private final RefRenderer renderer;
     private final Map<String, Object> cfg;
     private final String chartType;
     private final boolean rawMode;
-    private final String baseTable;
+    private final TableRef baseRef;
     private final List<Map<String, Object>> joins;
     private final boolean hasJoins;
-    private final Set<String> knownTables = new LinkedHashSet<>();
+    /** 이 쿼리에 등장한 테이블(이름 → 한정 참조). 컬럼 참조의 소스·스키마 해석에 쓴다. */
+    private final Map<String, TableRef> knownTables = new LinkedHashMap<>();
 
-    private BuilderSqlBuilder(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode) {
+    private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
         this.catalog = catalog;
+        this.renderer = renderer;
         this.cfg = cfg;
         this.chartType = chartType;
         this.rawMode = rawMode;
-        this.baseTable = str(cfg.get("table"));
+        this.baseRef = parseTableRef(cfg.get("table"));
         this.joins = asMapList(cfg.get("joins"));
         this.hasJoins = !joins.isEmpty();
     }
 
+    /** 단일 소스 경로(PG 직접 실행). 기존 시그니처 — 출력·동작 불변. */
     public static Sql generate(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        return new BuilderSqlBuilder(catalog, cfg, chartType, rawMode).build();
+        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode).build();
+    }
+
+    /** 일반 경로 — 카탈로그·렌더러 주입(다중 소스 페더레이션 등). */
+    public static Sql generate(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode).build();
+    }
+
+    /** builderConfig 가 참조하는 datasourceId 집합(명시된 것만). 실행 라우팅(단일 vs 페더레이션) 판정에 쓴다. */
+    public static Set<Long> referencedDatasources(Map<String, Object> cfg) {
+        Set<Long> ids = new LinkedHashSet<>();
+        TableRef base = parseTableRef(cfg.get("table"));
+        if (base != null && base.datasourceId() != null) ids.add(base.datasourceId());
+        for (Map<String, Object> j : asMapList(cfg.get("joins"))) {
+            TableRef t = parseTableRef(j.get("table"));
+            if (t != null && t.datasourceId() != null) ids.add(t.datasourceId());
+        }
+        return ids;
     }
 
     private Sql build() {
-        if (baseTable == null) throw invalidReq("table is required.");
-        assertTable(baseTable);
-        knownTables.add(baseTable);
+        if (baseRef == null) throw invalidReq("table is required.");
+        assertTable(baseRef);
+        registerTable(baseRef);
 
         if (hasJoins && cfg.get("sample") != null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_BUILDER_CONFIG", "Sample cannot be used with joins.");
@@ -57,7 +83,7 @@ public final class BuilderSqlBuilder {
 
         String joins = buildJoins(); // 조인 검증 + 절 생성 (knownTables 확장 — select/where 해석 전에 선행)
         String sample = rawMode ? "" : sampleSql(); // 표본은 집계 경로 전용 (rows 모드는 무시 — §3B/§3C)
-        String from = " FROM " + SqlIdentifier.quote(baseTable) + sample + joins;
+        String from = " FROM " + render(baseRef) + sample + joins;
 
         String xAxis = str(cfg.get("xAxis"));
         List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
@@ -79,7 +105,7 @@ public final class BuilderSqlBuilder {
         String bucket = str(cfg.get("xAxisBucket"));
         String xSql;
         if (bucket == null) {
-            xSql = x.quoted();
+            xSql = render(x);
         } else {
             if (!Set.of("day", "week", "month").contains(bucket)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Unsupported bucket: " + bucket);
@@ -87,7 +113,7 @@ public final class BuilderSqlBuilder {
             if (!isDate(typeOf(x))) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Bucket requires a date/timestamp column.");
             }
-            xSql = "DATE_TRUNC('" + bucket + "', " + x.quoted() + ") AS " + SqlIdentifier.quote(x.column);
+            xSql = "DATE_TRUNC('" + bucket + "', " + render(x) + ") AS " + SqlIdentifier.quote(x.column());
         }
 
         List<String> selects = new ArrayList<>();
@@ -97,7 +123,7 @@ public final class BuilderSqlBuilder {
             String agg = str(y.get("agg"));
             assertAggCompatible(agg, col);
             String alias = str(y.get("alias"));
-            if (alias == null) alias = "none".equals(agg) ? col.column : (agg == null ? "val" : agg) + "_" + col.column;
+            if (alias == null) alias = "none".equals(agg) ? col.column() : (agg == null ? "val" : agg) + "_" + col.column();
             selects.add(aggSql(agg, col) + " AS " + SqlIdentifier.quote(alias));
         }
 
@@ -109,7 +135,7 @@ public final class BuilderSqlBuilder {
         if (allNone) {
             groupBy = ""; // 분포(scatter)·원본 행: 집계 없음 → GROUP BY 없음 (기존 모순 버그 수정)
         } else {
-            groupBy = " GROUP BY " + (bucket == null ? x.quoted() : "1");
+            groupBy = " GROUP BY " + (bucket == null ? render(x) : "1");
         }
 
         String sql = "SELECT " + String.join(", ", selects) + from + where + groupBy + order
@@ -117,34 +143,47 @@ public final class BuilderSqlBuilder {
         return new Sql(sql, params);
     }
 
+    // ── 참조 렌더링(전략 위임) ─────────────────────────────
+    private String render(TableRef t) {
+        return renderer.table(t.datasourceId(), t.schema(), t.table());
+    }
+
+    private String render(Ref r) {
+        TableRef t = r.table();
+        return renderer.column(t.datasourceId(), t.schema(), t.table(), r.column());
+    }
+
     // ── 조인 ─────────────────────────────────────────────
     private String buildJoins() {
         if (!hasJoins) return "";
         StringBuilder sb = new StringBuilder();
         for (Map<String, Object> join : joins) {
-            String jt = str(join.get("table"));
+            TableRef jt = parseTableRef(join.get("table"));
+            if (jt == null) throw invalidReq("join.table is required.");
             assertTable(jt);
             Map<String, Object> on = asMap(join.get("on"));
             if (on == null) throw invalidReq("join.on is required.");
+            // 체인 규칙: leftColumn 은 base·앞선 조인 테이블만 / rightColumn 은 이 조인 테이블 자신 (§11.2).
+            // 새 테이블을 먼저 등록해야 rightColumn(자기 자신)의 스키마를 해석할 수 있어, 등록 전 스냅샷으로 체인을 검사한다.
+            Set<String> preceding = new LinkedHashSet<>(knownTables.keySet());
+            registerTable(jt);
             Ref left = resolveRef(str(on.get("leftColumn")));
             Ref right = resolveRef(str(on.get("rightColumn")));
-            // 체인 규칙: leftColumn 은 base·앞선 조인 테이블만 / rightColumn 은 이 조인 테이블 자신 (§11.2)
-            if (!knownTables.contains(left.table)) {
+            if (!preceding.contains(left.table().table())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JOIN_CHAIN",
-                        "Join left column must reference a preceding table: " + left.table);
+                        "Join left column must reference a preceding table: " + left.table().table());
             }
-            if (!jt.equals(right.table)) {
+            if (!jt.table().equals(right.table().table())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JOIN_CHAIN",
-                        "Join right column must belong to the joined table: " + jt);
+                        "Join right column must belong to the joined table: " + jt.table());
             }
             if (!joinKeyCompatible(typeOf(left), typeOf(right))) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "JOIN_KEY_TYPE_MISMATCH",
                         "Join key types are incompatible.");
             }
             String type = "inner".equals(join.get("type")) ? "INNER" : "LEFT";
-            knownTables.add(jt);
-            sb.append(" ").append(type).append(" JOIN ").append(SqlIdentifier.quote(jt))
-                    .append(" ON ").append(left.quoted()).append(" = ").append(right.quoted());
+            sb.append(" ").append(type).append(" JOIN ").append(render(jt))
+                    .append(" ON ").append(render(left)).append(" = ").append(render(right));
         }
         return sb.toString();
     }
@@ -156,40 +195,41 @@ public final class BuilderSqlBuilder {
         List<String> parts = new ArrayList<>();
         for (Map<String, Object> w : where) {
             Ref col = resolveRef(str(w.get("column")));
+            String colSql = render(col);
             String op = str(w.get("op"));
             String type = typeOf(col);
             Object value = w.get("value");
             switch (op == null ? "eq" : op) {
-                case "is_null" -> parts.add(col.quoted() + " IS NULL");
-                case "is_not_null" -> parts.add(col.quoted() + " IS NOT NULL");
+                case "is_null" -> parts.add(colSql + " IS NULL");
+                case "is_not_null" -> parts.add(colSql + " IS NOT NULL");
                 case "contains", "starts_with" -> {
                     assertOpCompatible(op, type);
                     String s = value == null ? "" : String.valueOf(value);
                     String escaped = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
                     String pattern = "contains".equals(op) ? "%" + escaped + "%" : escaped + "%";
-                    parts.add(col.quoted() + " ILIKE ?");
+                    parts.add(colSql + " ILIKE ?");
                     params.add(pattern);
                 }
                 case "in" -> {
                     List<Object> values = asList(value);
                     if (values.isEmpty()) throw invalidReq("IN requires at least one value.");
-                    parts.add(col.quoted() + " IN (" + String.join(", ", values.stream().map(v -> "?").toList()) + ")");
+                    parts.add(colSql + " IN (" + String.join(", ", values.stream().map(v -> "?").toList()) + ")");
                     for (Object v : values) params.add(bindValue(type, v));
                 }
                 case "between" -> {
                     List<Object> values = asList(value);
                     if (values.size() != 2) throw invalidReq("BETWEEN requires exactly two values.");
                     assertOpCompatible(op, type);
-                    parts.add(col.quoted() + " BETWEEN ? AND ?");
+                    parts.add(colSql + " BETWEEN ? AND ?");
                     params.add(bindValue(type, values.get(0)));
                     params.add(bindValue(type, values.get(1)));
                 }
-                case "neq" -> { parts.add(col.quoted() + " <> ?"); params.add(bindValue(type, value)); }
-                case "gt" -> { assertOpCompatible(op, type); parts.add(col.quoted() + " > ?"); params.add(bindValue(type, value)); }
-                case "gte" -> { assertOpCompatible(op, type); parts.add(col.quoted() + " >= ?"); params.add(bindValue(type, value)); }
-                case "lt" -> { assertOpCompatible(op, type); parts.add(col.quoted() + " < ?"); params.add(bindValue(type, value)); }
-                case "lte" -> { assertOpCompatible(op, type); parts.add(col.quoted() + " <= ?"); params.add(bindValue(type, value)); }
-                default -> { parts.add(col.quoted() + " = ?"); params.add(bindValue(type, value)); }
+                case "neq" -> { parts.add(colSql + " <> ?"); params.add(bindValue(type, value)); }
+                case "gt" -> { assertOpCompatible(op, type); parts.add(colSql + " > ?"); params.add(bindValue(type, value)); }
+                case "gte" -> { assertOpCompatible(op, type); parts.add(colSql + " >= ?"); params.add(bindValue(type, value)); }
+                case "lt" -> { assertOpCompatible(op, type); parts.add(colSql + " < ?"); params.add(bindValue(type, value)); }
+                case "lte" -> { assertOpCompatible(op, type); parts.add(colSql + " <= ?"); params.add(bindValue(type, value)); }
+                default -> { parts.add(colSql + " = ?"); params.add(bindValue(type, value)); }
             }
         }
         return " WHERE " + String.join(" AND ", parts);
@@ -243,10 +283,20 @@ public final class BuilderSqlBuilder {
         }
     }
 
-    private void assertTable(String table) {
-        if (!catalog.hasTable(table)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown table: " + table);
+    private void assertTable(TableRef table) {
+        if (!catalog.hasTable(table.datasourceId(), table.schema(), table.table())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown table: " + display(table));
         }
+    }
+
+    /** 같은 이름 테이블이 한 쿼리에서 서로 다른 소스/스키마로 등장하면 모호하므로 거부한다(조용한 오선택 방지). */
+    private void registerTable(TableRef ref) {
+        TableRef existing = knownTables.get(ref.table());
+        if (existing != null && !existing.sameOrigin(ref)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER",
+                    "Ambiguous table name across sources/schemas: " + ref.table());
+        }
+        knownTables.put(ref.table(), ref);
     }
 
     private void assertAggCompatible(String agg, Ref col) {
@@ -301,41 +351,73 @@ public final class BuilderSqlBuilder {
     }
 
     // ── 식별자 해석 ───────────────────────────────────────
-    private record Ref(String table, String column) {
-        String quoted() {
-            return SqlIdentifier.quote(table) + "." + SqlIdentifier.quote(column);
+    /** 소스·스키마 한정 테이블 참조. datasourceId 는 다중 소스에서만 non-null. */
+    private record TableRef(Long datasourceId, String schema, String table) {
+        boolean sameOrigin(TableRef o) {
+            return java.util.Objects.equals(datasourceId, o.datasourceId) && schema.equals(o.schema);
         }
     }
 
-    /** "테이블.컬럼" 또는 "컬럼"(조인 없을 때 base 암묵)을 카탈로그로 검증해 해석. */
+    private record Ref(TableRef table, String column) {
+    }
+
+    /**
+     * 테이블 참조 파싱 — 구조화 객체 {@code {datasourceId, schema, name}}(다중 소스) 또는
+     * 문자열 {@code "schema.table"}/{@code "table"}(단일 소스 하위호환, datasourceId=null). null/공백 → null.
+     */
+    private static TableRef parseTableRef(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof Map<?, ?> m) {
+            Object dsRaw = m.get("datasourceId");
+            Long ds = dsRaw instanceof Number n ? n.longValue() : null;
+            String schema = str(m.get("schema"));
+            String name = str(m.get("name"));
+            if (name == null) return null;
+            return new TableRef(ds, schema == null ? SchemaCatalog.DEFAULT_SCHEMA : schema, name);
+        }
+        String s = str(raw);
+        if (s == null) return null;
+        int dot = s.indexOf('.');
+        if (dot < 0) return new TableRef(null, SchemaCatalog.DEFAULT_SCHEMA, s);
+        return new TableRef(null, s.substring(0, dot), s.substring(dot + 1));
+    }
+
+    /** 오류 메시지용 표기 — public 은 생략, 그 외는 schema.table (소스는 표기 생략, 검증 무관). */
+    private static String display(TableRef t) {
+        return SchemaCatalog.DEFAULT_SCHEMA.equals(t.schema()) ? t.table() : t.schema() + "." + t.table();
+    }
+
+    /** "테이블.컬럼" 또는 "컬럼"(조인 없을 때 base 암묵)을 카탈로그로 검증해 해석. 테이블 소스·스키마는 knownTables 로 해석. */
     private Ref resolveRef(String ref) {
         if (ref == null) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Missing column reference.");
         int dot = ref.indexOf('.');
-        String table;
+        String tableName;
         String column;
         if (dot >= 0) {
-            table = ref.substring(0, dot);
+            tableName = ref.substring(0, dot);
             column = ref.substring(dot + 1);
         } else {
             if (hasJoins) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER",
                         "Ambiguous column (qualify as table.column when joins are present): " + ref);
             }
-            table = baseTable;
+            tableName = baseRef.table();
             column = ref;
         }
-        if (!catalog.hasColumn(table, column)) {
+        TableRef table = knownTables.get(tableName);
+        if (table == null || !catalog.hasColumn(table.datasourceId(), table.schema(), table.table(), column)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown column: " + ref);
         }
         return new Ref(table, column);
     }
 
     private String typeOf(Ref ref) {
-        return catalog.columnType(ref.table, ref.column);
+        TableRef t = ref.table();
+        return catalog.columnType(t.datasourceId(), t.schema(), t.table(), ref.column());
     }
 
-    private static String aggSql(String agg, Ref col) {
-        String q = col.quoted();
+    private String aggSql(String agg, Ref col) {
+        String q = render(col);
         return switch (agg == null ? "sum" : agg) {
             case "avg" -> "AVG(" + q + ")";
             case "stddev" -> "STDDEV(" + q + ")";

@@ -21,6 +21,7 @@ export const datasourceUsage: Record<number, number> = { 1: 3, 2: 2, 3: 0 };
 /** S2 스키마 탐색기용 테이블/컬럼 (figma 258:184 트리와 일치) */
 export const schemaTables: SchemaTable[] = [
   {
+    schema: 'public',
     name: 'sales',
     columns: [
       { name: 'id', type: 'int' },
@@ -31,6 +32,7 @@ export const schemaTables: SchemaTable[] = [
     ],
   },
   {
+    schema: 'public',
     name: 'users',
     columns: [
       { name: 'id', type: 'int' },
@@ -39,6 +41,7 @@ export const schemaTables: SchemaTable[] = [
     ],
   },
   {
+    schema: 'public',
     name: 'visits',
     columns: [
       { name: 'id', type: 'int' },
@@ -48,6 +51,7 @@ export const schemaTables: SchemaTable[] = [
   },
   // 조인 데모(생성규칙 11장): sales.id ↔ orders.sale_id, orders.prod_id ↔ products.id
   {
+    schema: 'public',
     name: 'orders',
     columns: [
       { name: 'id', type: 'int' },
@@ -58,12 +62,24 @@ export const schemaTables: SchemaTable[] = [
     ],
   },
   {
+    schema: 'public',
     name: 'products',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'name', type: 'text' },
       { name: 'category', type: 'text' },
       { name: 'price', type: 'numeric' },
+    ],
+  },
+  // 비-public 스키마 데모(§1.2): 식별자는 "analytics.events" 로 한정된다.
+  {
+    schema: 'analytics',
+    name: 'events',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'kind', type: 'text' },
+      { name: 'value', type: 'numeric' },
+      { name: 'occurred_at', type: 'timestamp' },
     ],
   },
 ];

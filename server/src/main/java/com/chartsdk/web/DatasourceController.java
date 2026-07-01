@@ -81,7 +81,9 @@ public class DatasourceController {
     @DeleteMapping("/{id}")
     public void delete(@PathVariable long id) {
         try {
-            Integer inUse = jdbc.queryForObject("SELECT count(*) FROM mc_chart WHERE datasource_id=?", Integer.class, id);
+            // 사용 중 판정은 junction 기준 — 다중 소스 차트의 비-primary 참조까지 잡는다(설계 §12.1).
+            Integer inUse = jdbc.queryForObject(
+                    "SELECT count(DISTINCT chart_id) FROM mc_chart_datasource WHERE datasource_id=?", Integer.class, id);
             if (inUse != null && inUse > 0) {
                 throw new ApiException(HttpStatus.CONFLICT, "DATASOURCE_IN_USE", "Datasource is used by " + inUse + " chart(s).");
             }

@@ -152,8 +152,9 @@ export interface User {
   displayName: string;
 }
 
-/** 스키마 탐색(S2 좌측) */
+/** 스키마 탐색(S2 좌측). schema 는 소속 스키마(예: public, tandanji) — 비-public 일 때만 식별자를 "schema.table" 로 한정한다. */
 export interface SchemaTable {
+  schema: string;
   name: string;
   columns: { name: string; type: string }[];
 }

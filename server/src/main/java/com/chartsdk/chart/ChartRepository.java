@@ -163,6 +163,21 @@ public class ChartRepository {
         }
     }
 
+    /** 차트가 참조하는 데이터소스 집합을 junction 에 반영(교체). 저장 시 호출(설계 §12.1). */
+    public void setChartDatasources(long chartId, java.util.Set<Long> datasourceIds) {
+        jdbc.update("DELETE FROM mc_chart_datasource WHERE chart_id=?", chartId);
+        for (Long ds : datasourceIds) {
+            jdbc.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    chartId, ds);
+        }
+    }
+
+    /** 차트가 참조하는 데이터소스 집합. stored SQL 실행 라우팅(단일 vs 페더레이션)에 쓴다. */
+    public java.util.Set<Long> chartDatasources(long chartId) {
+        return new java.util.LinkedHashSet<>(
+                jdbc.queryForList("SELECT datasource_id FROM mc_chart_datasource WHERE chart_id=?", Long.class, chartId));
+    }
+
     public void copyCache(long newId, long originalId) {
         jdbc.update("""
                 INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)

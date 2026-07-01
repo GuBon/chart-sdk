@@ -1,10 +1,9 @@
 package com.chartsdk.web;
 
 import com.chartsdk.converter.ChartOptionConverter;
-import com.chartsdk.query.BuilderSqlBuilder;
+import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
-import com.chartsdk.query.SchemaCatalog;
 import com.chartsdk.query.SqlLiterals;
 import com.chartsdk.web.dto.BuilderQueryRequest;
 import com.chartsdk.web.dto.ChartPreviewRequest;
@@ -26,10 +25,12 @@ import java.util.Map;
 public class QueryController {
     private final QueryExecutor queries;
     private final ChartOptionConverter converter;
+    private final FederatedQueryRunner runner;
 
-    public QueryController(QueryExecutor queries, ChartOptionConverter converter) {
+    public QueryController(QueryExecutor queries, ChartOptionConverter converter, FederatedQueryRunner runner) {
         this.queries = queries;
         this.converter = converter;
+        this.runner = runner;
     }
 
     @PostMapping("/query/run")
@@ -51,13 +52,12 @@ public class QueryController {
         String mode = body.mode() == null ? "aggregate" : body.mode();
         boolean rawMode = "rows".equals(mode);
         Map<String, Object> cfg = body.builderConfig();
-        SchemaCatalog catalog = queries.catalog(body.datasourceId());
-        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode);
-        QueryRows rows = queries.execute(body.datasourceId(), sql.text(), sql.params());
+        FederatedQueryRunner.BuiltResult built = runner.runBuilder(body.datasourceId(), cfg, chartType, rawMode);
+        QueryRows rows = built.rows();
 
         Map<String, Object> result = rowsResult(rows);
         if (!rawMode) {
-            result.put("generatedSql", SqlLiterals.inline(sql.text(), sql.params()));
+            result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
             result.put("option", converter.convert(rows, chartType, options(body)));
             if (cfg.get("sample") instanceof Map<?, ?> sample) {
                 result.put("approximate", true);

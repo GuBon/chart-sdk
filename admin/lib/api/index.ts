@@ -79,8 +79,8 @@ export const datasourcesApi = {
 
 export const schemaApi = {
   tables: (datasourceId: number) => request<{ tables: SchemaTable[] }>(`/schema/tables${qs({ datasourceId })}`).then((r) => r.tables),
-  preview: (tableName: string, datasourceId: number) =>
-    request<QueryResult>(`/schema/tables/${encodeURIComponent(tableName)}/preview${qs({ datasourceId })}`),
+  preview: (schema: string, tableName: string, datasourceId: number) =>
+    request<QueryResult>(`/schema/tables/${encodeURIComponent(tableName)}/preview${qs({ schema, datasourceId })}`),
 };
 
 export const tokensApi = {
