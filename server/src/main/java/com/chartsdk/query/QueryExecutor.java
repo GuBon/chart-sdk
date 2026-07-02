@@ -9,7 +9,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLTimeoutException;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +41,7 @@ public class QueryExecutor {
             ps.setMaxRows(MAX_ROWS);
             for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
             try (ResultSet rs = ps.executeQuery()) {
-                return read(rs, start);
+                return QueryRows.from(rs, start);
             }
         } catch (SQLTimeoutException e) {
             throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Query timed out.");
@@ -82,26 +81,5 @@ public class QueryExecutor {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
         }
         return new SchemaCatalog(tables);
-    }
-
-    private QueryRows read(ResultSet rs, long start) throws Exception {
-        List<Map<String, Object>> columns = new ArrayList<>();
-        int colCount = rs.getMetaData().getColumnCount();
-        for (int i = 1; i <= colCount; i++) {
-            columns.add(Map.of(
-                    "name", rs.getMetaData().getColumnLabel(i),
-                    "type", rs.getMetaData().getColumnTypeName(i)
-            ));
-        }
-        List<List<Object>> rows = new ArrayList<>();
-        while (rs.next()) {
-            List<Object> row = new ArrayList<>();
-            for (int i = 1; i <= colCount; i++) row.add(rs.getObject(i));
-            rows.add(row);
-        }
-        // setMaxRows(MAX_ROWS)로 잘리면 정확히 MAX_ROWS 행 → 절단 가능성으로 표기.
-        boolean truncated = rows.size() >= MAX_ROWS;
-        long elapsedMs = Math.max(1, (System.nanoTime() - start) / 1_000_000);
-        return new QueryRows(columns, rows, rows.size(), truncated, elapsedMs);
     }
 }

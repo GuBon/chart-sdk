@@ -61,6 +61,27 @@ public class ChartComputeService {
         return cache.find(chartId).orElseGet(() -> cache.upsert(chartId, runner.runStored(dsSet, datasourceId, sql), definitionVersion));
     }
 
+    /**
+     * 서빙 경로 불변식(설계 §8)의 단일 진입점 — 임베드 hot-path·목록/미리보기가 공유한다.
+     * 다중 소스 차트는 페더레이션을 절대 호출하지 않고 캐시 스냅샷만 반환하고(부재 시 명시적 오류,
+     * 고트래픽에서 N개 고객 DB 두들김 방지), 단일 소스는 기존대로 캐시 미스/만료 시 단일 비행 재계산(G1/G4).
+     */
+    public CachedChartRows serve(long chartId, long datasourceId, String sql, String refreshMode, int cacheTtlSeconds, int definitionVersion) {
+        if (isMultiSource(chartId)) {
+            return cache.find(chartId).orElseThrow(() -> new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "SNAPSHOT_NOT_READY",
+                    "Multi-source chart snapshot is not ready; refresh the chart to compute it."));
+        }
+        return cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion)
+                .orElseGet(() -> refreshSingleFlight(chartId, datasourceId, sql, definitionVersion, !"live".equals(refreshMode)));
+    }
+
+    /** 차트가 2개 이상 데이터소스를 참조하는가 — 서빙 캐시-온리 판정(설계 §8)의 단일 진실원. */
+    public boolean isMultiSource(long chartId) {
+        Integer n = jdbc.queryForObject("SELECT count(*) FROM mc_chart_datasource WHERE chart_id=?", Integer.class, chartId);
+        return n != null && n >= 2;
+    }
+
     /** 저장 직후 캐시 시드(베스트 에포트). 데이터소스 장애로 실패해도 저장은 유지한다. */
     public void seedQuietly(long chartId) {
         try {

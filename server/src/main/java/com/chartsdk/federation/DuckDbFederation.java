@@ -9,6 +9,8 @@ import com.chartsdk.query.RefRenderer;
 import com.chartsdk.query.SchemaCatalog;
 import com.chartsdk.query.SqlIdentifier;
 import com.chartsdk.web.ApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -19,7 +21,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.sql.Statement;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +35,8 @@ import java.util.Map;
  */
 @Component
 public class DuckDbFederation {
+
+    private static final Logger log = LoggerFactory.getLogger(DuckDbFederation.class);
 
     static final int QUERY_TIMEOUT_SECONDS = 30; // 저빈도 계산 — 단일 소스(10s)보다 여유
     static final String MEMORY_LIMIT = "1GB";
@@ -70,7 +73,9 @@ public class DuckDbFederation {
                 st.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
                 st.execute("LOAD postgres");
                 for (Long id : datasourceIds) {
-                    st.execute(attachSql(id, datasources.credentials(id)));
+                    DatasourceCredentials c = datasources.credentials(id);
+                    if (log.isDebugEnabled()) log.debug("federation ATTACH: {}", maskedAttachSql(id, c)); // 비밀번호 마스킹(§10)
+                    st.execute(attachSql(id, c));
                 }
                 st.execute("SET memory_limit='" + MEMORY_LIMIT + "'");
                 st.execute("SET threads TO " + THREADS);
@@ -79,7 +84,7 @@ public class DuckDbFederation {
                 ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
                 for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
                 try (ResultSet rs = ps.executeQuery()) {
-                    return read(rs, start);
+                    return QueryRows.from(rs, start);
                 }
             }
         } catch (SQLTimeoutException e) {
@@ -122,25 +127,6 @@ public class DuckDbFederation {
     /** DuckDB SQL 문자열 리터럴 — 단일따옴표를 '' 로 이스케이프. */
     private static String sqlLiteral(String s) {
         return "'" + s.replace("'", "''") + "'";
-    }
-
-    private QueryRows read(ResultSet rs, long start) throws SQLException {
-        List<Map<String, Object>> columns = new ArrayList<>();
-        int colCount = rs.getMetaData().getColumnCount();
-        for (int i = 1; i <= colCount; i++) {
-            columns.add(Map.of(
-                    "name", rs.getMetaData().getColumnLabel(i),
-                    "type", rs.getMetaData().getColumnTypeName(i)));
-        }
-        List<List<Object>> rows = new ArrayList<>();
-        while (rs.next()) {
-            List<Object> row = new ArrayList<>();
-            for (int i = 1; i <= colCount; i++) row.add(rs.getObject(i));
-            rows.add(row);
-        }
-        boolean truncated = rows.size() >= QueryExecutor.MAX_ROWS;
-        long elapsedMs = Math.max(1, (System.nanoTime() - start) / 1_000_000);
-        return new QueryRows(columns, rows, rows.size(), truncated, elapsedMs);
     }
 
     private static String firstLine(String s) {
