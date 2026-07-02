@@ -18,9 +18,11 @@ export const datasources: Datasource[] = [
 /** 삭제 시 영향받는 차트 수(409 경고용 목 데이터) */
 export const datasourceUsage: Record<number, number> = { 1: 3, 2: 2, 3: 0 };
 
-/** S2 스키마 탐색기용 테이블/컬럼 (figma 258:184 트리와 일치) */
+/** S2 스키마 탐색기용 테이블/컬럼. datasourceId 로 소속 소스를 태깅 — 다중 소스 조인 데모 포함. */
 export const schemaTables: SchemaTable[] = [
+  // 데이터소스 1 (analytics-db)
   {
+    datasourceId: 1,
     schema: 'public',
     name: 'sales',
     columns: [
@@ -29,9 +31,11 @@ export const schemaTables: SchemaTable[] = [
       { name: 'amount', type: 'numeric' },
       { name: 'dept', type: 'text' },
       { name: 'date', type: 'date' },
+      { name: 'customer_id', type: 'int' },
     ],
   },
   {
+    datasourceId: 1,
     schema: 'public',
     name: 'users',
     columns: [
@@ -41,6 +45,7 @@ export const schemaTables: SchemaTable[] = [
     ],
   },
   {
+    datasourceId: 1,
     schema: 'public',
     name: 'visits',
     columns: [
@@ -51,6 +56,7 @@ export const schemaTables: SchemaTable[] = [
   },
   // 조인 데모(생성규칙 11장): sales.id ↔ orders.sale_id, orders.prod_id ↔ products.id
   {
+    datasourceId: 1,
     schema: 'public',
     name: 'orders',
     columns: [
@@ -62,6 +68,7 @@ export const schemaTables: SchemaTable[] = [
     ],
   },
   {
+    datasourceId: 1,
     schema: 'public',
     name: 'products',
     columns: [
@@ -73,6 +80,7 @@ export const schemaTables: SchemaTable[] = [
   },
   // 비-public 스키마 데모(§1.2): 식별자는 "analytics.events" 로 한정된다.
   {
+    datasourceId: 1,
     schema: 'analytics',
     name: 'events',
     columns: [
@@ -80,6 +88,28 @@ export const schemaTables: SchemaTable[] = [
       { name: 'kind', type: 'text' },
       { name: 'value', type: 'numeric' },
       { name: 'occurred_at', type: 'timestamp' },
+    ],
+  },
+  // 데이터소스 2 (sales-db) — 다중 소스 조인 데모: sales.customer_id(ds1) ↔ customers.id(ds2)
+  {
+    datasourceId: 2,
+    schema: 'public',
+    name: 'customers',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'region', type: 'text' },
+      { name: 'grade', type: 'text' },
+    ],
+  },
+  // 동명 테이블 크로스소스 조인 데모: ds1.public.users ↔ ds2.public.users(같은 이름, 다른 소스). 핸들(users/users_2)로 구분.
+  {
+    datasourceId: 2,
+    schema: 'public',
+    name: 'users',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'region', type: 'text' },
+      { name: 'tier', type: 'text' },
     ],
   },
 ];
@@ -105,7 +135,7 @@ export function chartDetail(summary: ChartSummary): Chart {
     ...summary, // chartType·datasourceId 포함
     defineMode: 'builder',
     sqlQuery: 'SELECT category, SUM(amount) AS total FROM sales GROUP BY category',
-    builderConfig: { table: 'sales', xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null, sample: null },
+    builderConfig: { table: { datasourceId: summary.datasourceId, schema: 'public', name: 'sales' }, xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null, sample: null },
     options: { colorMode: 'palette', legend: { show: true } },
     refreshMode: 'ttl',
     cacheTtlSeconds: 3600,

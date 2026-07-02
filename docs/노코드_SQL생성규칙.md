@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v1.6 — 다중 스키마 지원. 테이블 식별자를 스키마 한정(`"schema"."table"`)으로 생성하고, 빌더가 스키마를 명시하지 않으면 public 으로 간주(하위호환). 고객 DB 의 public 외 사용자 스키마(예: tandanji) 업무 테이블도 조회 가능
-**관련 문서:** PRD v1.9 (7.3·7.7), API 계약서 v1.7 (builderConfig·schema), 화면설계서 v2.5 (S2 노코드 탭)
+**문서 버전:** v2.1 — v2.0 + **동명 테이블 크로스소스 조인**(핸들). builderConfig 의 테이블 참조가 소스 한정 `{datasourceId, schema, name, handle?}`. 실행 라우팅: 참조 소스 1개 → PG 직접(`"schema"."table"`), 2개+ → DuckDB 페더레이션(`"ds{id}"."schema"."table"`). 컬럼 참조는 `"핸들.컬럼"`(핸들 기본=테이블 이름, 동명 충돌 시만 `users_2`). 상세: docs/다중데이터소스_페더레이션_설계.md
+**관련 문서:** PRD v2.0 (7.3·7.7), API 계약서 v2.0 (builderConfig 구조화 참조), 화면설계서 v2.5 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -39,7 +39,7 @@
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | table | ✓ | base 테이블. 스키마 한정 시 `"schema.table"`(미지정 → public). 추가 테이블은 `joins[]` 로 조인 (11장) |
-| joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"테이블.컬럼"`(테이블 부분은 bare 이름 — 스키마는 테이블 선언에서 해석) |
+| joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"핸들.컬럼"`(핸들 기본=테이블 이름, 동명 충돌 시 `users_2` — 스키마·소스는 테이블 선언에서 해석) |
 | xAxis | ✓ | X축 컬럼 1개 (조인 시 qualified) |
 | xAxisBucket | — | `"day"` \| `"week"` \| `"month"` \| null. X축이 날짜 타입일 때만 허용. 지정 시 DATE_TRUNC로 묶어 집계 (3A장) |
 | yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. `agg:"none"`이면 원본값 튜플 모드. 복수면 다중 시리즈 |
@@ -184,7 +184,7 @@ generate(config, datasourceId):
 ```
 
 - quote(name): 큰따옴표로 감싸고 내부 " 는 "" 로 escape. 단 화이트리스트를 통과한 이름만 여기까지 온다(이중 방어).
-- qualify(table): 테이블을 `"schema"."table"` 로 한정한다(스키마 미지정 → public). 컬럼 참조는 `"schema"."table"."column"` 으로 한정된다. 조인 시 컬럼 참조의 테이블 부분은 bare 이름으로 표기하되, 같은 이름 테이블이 서로 다른 스키마로 한 쿼리에 동시에 등장하면 모호하므로 거부한다(조용한 오선택 방지).
+- qualify(table): 테이블을 `"schema"."table"` 로 한정한다(스키마 미지정 → public). 컬럼 참조는 `"schema"."table"."column"` 으로 한정된다. 조인 시 컬럼 참조의 테이블 부분은 **핸들**로 표기한다 — 같은 이름 테이블이 서로 다른 소스/스키마로 한 쿼리에 동시 등장하면 서로 다른 핸들(`users`/`users_2`)을 받아 함께 조인 가능하다(SQL 은 소스/스키마로 완전 한정돼 모호하지 않음).
 - 생성 결과 (sql, binds)는 기존 SQL 실행 엔진에 그대로 전달. 실행 엔진은 노코드/수기 SQL을 구분하지 않는다(수기 SQL은 binds가 빈 목록일 뿐).
 
 ## 7. 생성 예시
@@ -321,9 +321,10 @@ LIMIT 1000
 - **소프트 상한 5개**(성능·fan-out 가드). 초과는 UI 경고(생성기는 차단하지 않음).
 
 ### 11.2 컬럼 참조 — qualified 규칙
-- 조인이 **있으면** 모든 컬럼 참조(`xAxis`·`yAxis[].column`·`where[].column`·`on`)는 qualified `"테이블.컬럼"`.
+- 조인이 **있으면** 모든 컬럼 참조(`xAxis`·`yAxis[].column`·`where[].column`·`on`)는 qualified `"핸들.컬럼"`.
+- **핸들**: 한 차트 내 테이블 인스턴스의 유일 식별자. 기본은 테이블 이름, 서로 다른 소스/스키마의 **동명 테이블**이 겹칠 때만 프론트가 접미(`users_2`)로 구분 → 동명 테이블도 함께 조인 가능. 비충돌 시 핸들=이름이라 `"테이블.컬럼"` 과 동일. SQL 은 소스/스키마로 완전 한정돼 별칭 불필요.
 - 조인이 **없으면** 기존 unqualified `"컬럼"` 그대로(하위호환 — base 테이블 암묵). 기존 차트 마이그레이션 0.
-- 조인 시 unqualified 컬럼은 **모호성으로 400 거부**.
+- 조인 시 unqualified 컬럼은 **모호성으로 400 거부**. 같은 핸들이 서로 다른 물리 테이블을 가리키면 `Ambiguous table handle` 로 거부.
 
 ### 11.3 생성 템플릿
 ```sql
@@ -346,7 +347,8 @@ LIMIT 1000
 | ON 좌·우 컬럼 타입 호환(조인 키 타입 일치) | 400 JOIN_KEY_TYPE_MISMATCH |
 | 체인 규칙 위반(leftColumn 테이블이 base·앞선 조인에 없음) | 400 INVALID_JOIN_CHAIN |
 | 조인 시 unqualified 컬럼(모호) | 400 INVALID_IDENTIFIER |
-| 동명 테이블이 서로 다른 스키마로 한 쿼리에 동시 등장(예: base `tandanji.events` + join `public.events`) | 400 INVALID_IDENTIFIER (조용한 오선택 방지) |
+| 동명 테이블 크로스소스/크로스스키마 조인(예: base `tandanji.events` + join `public.events`) | **허용** — 서로 다른 핸들(`events`/`events_2`)로 구분(§11.2) |
+| 같은 핸들이 서로 다른 물리 테이블을 가리킴(잘못된 config) | 400 INVALID_IDENTIFIER (Ambiguous table handle) |
 | `sample`(TABLESAMPLE) + JOIN 동시 사용 | 400 INVALID_REQUEST (표본은 base 블록만 → 조인 결과 왜곡) |
 
 ### 11.5 fan-out 주의

@@ -29,6 +29,10 @@ class FederatedSqlBuilderTest {
         return Map.of("datasourceId", ds, "schema", schema, "name", name);
     }
 
+    private static Map<String, Object> ref(int ds, String schema, String name, String handle) {
+        return Map.of("datasourceId", ds, "schema", schema, "name", name, "handle", handle);
+    }
+
     private BuilderSqlBuilder.Sql gen(Map<String, Object> cfg, String chartType, boolean rawMode) {
         return BuilderSqlBuilder.generate(catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode);
     }
@@ -117,20 +121,41 @@ class FederatedSqlBuilderTest {
     }
 
     @Test
-    void rejectsAmbiguousTableNameAcrossDatasources() {
-        // 같은 bare 이름 orders 가 ds2·ds9 두 소스에 존재 → 조인 시 컬럼 참조 모호 → 거부.
+    void joinsSameNameTablesAcrossSourcesViaHandles() {
+        // 같은 이름 orders 가 ds2(sales)·ds9(public) 두 소스에 존재 — 서로 다른 핸들(orders / orders_2)로 함께 조인 가능.
+        FederatedCatalog dup = new FederatedCatalog(Map.of(
+                2L, new SchemaCatalog(Map.of(new SchemaCatalog.Key("sales", "orders"), Map.of("id", "bigint", "user_id", "bigint"))),
+                9L, new SchemaCatalog(Map.of(new SchemaCatalog.Key("public", "orders"), Map.of("id", "bigint", "amount", "numeric")))
+        ));
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(dup, RefRenderer.FEDERATED, Map.of(
+                "table", ref(2, "sales", "orders"), // handle 기본 = orders
+                "joins", List.of(Map.of("table", ref(9, "public", "orders", "orders_2"), "type", "inner",
+                        "on", Map.of("leftColumn", "orders.user_id", "rightColumn", "orders_2.id"))),
+                "xAxis", "orders.id",
+                "yAxis", List.of(Map.of("column", "orders_2.amount", "agg", "sum", "alias", "total"))
+        ), "bar", false);
+
+        // 두 orders 가 각자의 소스로 완전 한정돼 SQL 자체가 모호하지 않다(별칭 불필요).
+        assertThat(sql.text()).isEqualTo("""
+                SELECT "ds2"."sales"."orders"."id", SUM("ds9"."public"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" INNER JOIN "ds9"."public"."orders" ON "ds2"."sales"."orders"."user_id" = "ds9"."public"."orders"."id" GROUP BY "ds2"."sales"."orders"."id" LIMIT 1000\
+                """);
+    }
+
+    @Test
+    void rejectsDuplicateHandleForDifferentPhysicalTables() {
+        // 같은 핸들이 서로 다른 물리 테이블을 가리키면(잘못된 config) 모호하므로 거부.
         FederatedCatalog dup = new FederatedCatalog(Map.of(
                 2L, new SchemaCatalog(Map.of(new SchemaCatalog.Key("sales", "orders"), Map.of("id", "bigint", "user_id", "bigint"))),
                 9L, new SchemaCatalog(Map.of(new SchemaCatalog.Key("public", "orders"), Map.of("id", "bigint", "amount", "numeric")))
         ));
         assertThatThrownBy(() -> BuilderSqlBuilder.generate(dup, RefRenderer.FEDERATED, Map.of(
                 "table", ref(2, "sales", "orders"),
-                "joins", List.of(Map.of("table", ref(9, "public", "orders"), "type", "inner",
+                "joins", List.of(Map.of("table", ref(9, "public", "orders"), "type", "inner", // handle 기본 orders — base 와 충돌
                         "on", Map.of("leftColumn", "orders.user_id", "rightColumn", "orders.id"))),
                 "xAxis", "orders.id",
                 "yAxis", List.of(Map.of("column", "orders.amount", "agg", "sum"))
         ), "bar", false))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("Ambiguous table name across sources/schemas: orders");
+                .hasMessageContaining("Ambiguous table handle: orders");
     }
 }

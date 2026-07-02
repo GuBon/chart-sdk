@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v1.7 — v1.6 + 다중 스키마 지원. `/schema/tables` 응답에 `schema` 필드, preview 에 `schema` 파라미터. 식별자는 비-public 일 때 `"schema.table"` 로 한정
-**관련 문서:** PRD v1.9, 화면설계서 v2.5, 노코드 SQL 생성규칙 v1.6
+**문서 버전:** v2.1 — v2.0 + **동명 테이블 크로스소스 조인**(핸들). `builderConfig.table`/`joins[].table` 을 구조화 참조 `{datasourceId, schema, name, handle?}` 로(레거시 문자열은 primary 소스로 승격). `handle` 은 동명 테이블 구분용(없으면 이름) — 컬럼 참조는 `"핸들.컬럼"`. 다중 소스는 저장 스냅샷(`refresh_mode=manual`), 임베드는 캐시-온리. 상세: `docs/다중데이터소스_페더레이션_설계.md`
+**관련 문서:** PRD v2.0, 화면설계서 v2.5, 노코드 SQL 생성규칙 v2.0, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 

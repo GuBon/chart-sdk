@@ -35,16 +35,27 @@ export interface SampleConfig {
   rate: number; // 표본 비율(%) 1~100
 }
 
+/**
+ * 소스·스키마 한정 테이블 참조(다중 데이터소스 페더레이션). 백엔드 §12.3 과 1:1 — 컬럼 참조는 "handle.col" 문자열.
+ * handle: 한 차트 내 이 테이블의 유일 식별자. 기본은 name, 서로 다른 소스/스키마의 동명 테이블이 겹칠 때만 접미(users_2)로 구분.
+ */
+export interface TableRef {
+  datasourceId: number;
+  schema: string;
+  name: string;
+  handle?: string;
+}
+
 export type JoinType = 'inner' | 'left';
 /** 테이블 조인 (생성규칙 11장). N개 체인 — 각 on.leftColumn 은 base 또는 앞서 조인된 테이블의 qualified 컬럼. */
 export interface JoinSpec {
-  table: string; // 조인 대상 테이블
+  table: TableRef; // 조인 대상 테이블(소스 한정 — 다른 데이터소스도 가능)
   type: JoinType; // inner | left (full/right 는 후속)
   on: { leftColumn: string; rightColumn: string }; // qualified "table.col" 단일 매칭
 }
 
 export interface BuilderConfig {
-  table: string | null; // base 테이블. 신규 차트 초안에선 null 허용
+  table: TableRef | null; // base 테이블. 신규 차트 초안에선 null 허용
   // 조인이 있으면 모든 컬럼 참조(xAxis·yAxis·where·orderBy·on)는 qualified "table.col". 없으면 기존 "col" 허용(하위호환).
   joins?: JoinSpec[]; // 생성규칙 11장. 미지정/[] = 단일 테이블
   xAxis: string | null;
@@ -152,8 +163,9 @@ export interface User {
   displayName: string;
 }
 
-/** 스키마 탐색(S2 좌측). schema 는 소속 스키마(예: public, tandanji) — 비-public 일 때만 식별자를 "schema.table" 로 한정한다. */
+/** 스키마 탐색(S2 좌측). datasourceId 는 이 테이블이 속한 데이터소스(클라이언트가 로드 시 태깅) — 다중 소스 조인 식별에 쓴다. */
 export interface SchemaTable {
+  datasourceId: number;
   schema: string;
   name: string;
   columns: { name: string; type: string }[];

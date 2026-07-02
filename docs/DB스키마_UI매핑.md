@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v1.4 (2026-06-30 갱신: 고객 DB 다중 스키마 조회 — 스키마 탐색기가 public 외 사용자 스키마 테이블도 노출)
-**관련:** Flyway `V1__init.sql` v5.0 · PRD v1.9(9장) · API v1.7 · 화면설계서 v2.5 · `chart-options/optionRegistry.ts`
+**문서 버전:** v1.5 (2026-07-01 갱신: 1차트=N데이터소스 페더레이션 — `mc_chart_datasource`(V3) junction 으로 차트↔소스 N:M 기록, 다중 소스 차트 식별·삭제가드에 사용)
+**관련:** Flyway `V1~V3` · PRD v2.0(9장) · API v2.0 · 화면설계서 v2.5 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---

@@ -37,7 +37,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
 
-    await page.getByRole('combobox', { name: '테이블' }).selectOption('sales');
+    await page.getByRole('combobox', { name: '테이블' }).selectOption('1.public.sales');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
 
     // Y축 없으면 실행 비활성
@@ -80,7 +80,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('aside').first().getByText('analytics', { exact: true })).toBeVisible();
 
     // 노코드 테이블 셀렉트 값은 스키마 한정 키
-    await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('analytics.events');
+    await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('1.analytics.events');
 
     await page.getByRole('combobox', { name: 'X축' }).selectOption('kind');
     await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
@@ -159,7 +159,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('switch', { name: '표본 추출' }).click();
     await page.getByRole('spinbutton', { name: '표본 비율' }).fill('30');
 
-    await page.getByRole('combobox', { name: '테이블' }).selectOption('users');
+    await page.getByRole('combobox', { name: '테이블' }).selectOption('1.public.users');
     await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByRole('spinbutton', { name: '표본 비율' })).toHaveValue('30');
   });
@@ -187,7 +187,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 조인 추가 → orders, ON sales.id = orders.sale_id
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
-    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('orders');
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('1.public.orders');
     await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('sales.id');
     await page.getByRole('combobox', { name: '조인 대상 컬럼' }).selectOption('orders.sale_id');
 
@@ -199,6 +199,52 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // 생성된 SQL 에 LEFT JOIN ... ON (qualified)
     await page.getByText('생성된 SQL 보기').click();
     await expect(page.getByText(/LEFT JOIN "orders" ON "sales"\."id" = "orders"\."sale_id"/)).toBeVisible();
+  });
+
+  test('서로 다른 데이터소스의 테이블을 조인하면 페더레이션 SQL(ds 별칭)과 스냅샷 안내가 나온다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+
+    // 조인 추가 → 다른 소스(sales-db)의 customers, ON sales.customer_id = customers.id
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('2.public.customers');
+    await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('sales.customer_id');
+    await page.getByRole('combobox', { name: '조인 대상 컬럼' }).selectOption('customers.id');
+
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('customers.region');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+
+    // 다중 소스 스냅샷 안내(설계 §7)
+    await expect(page.getByText('여러 데이터소스를 조인하면 저장 시점 스냅샷으로 고정됩니다(새로고침으로 갱신).')).toBeVisible();
+
+    // 생성 SQL 이 ds 별칭으로 페더레이션 표기
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/FROM "ds1"\."sales"/)).toBeVisible();
+    await expect(page.getByText(/JOIN "ds2"\."customers"/)).toBeVisible();
+  });
+
+  test('서로 다른 소스의 동명 테이블(users ⋈ users)도 핸들로 구분해 조인할 수 있다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    // base = ds1.public.users
+    await page.locator('aside').first().getByRole('button', { name: /users/ }).click();
+
+    // 조인 → 다른 소스(sales-db)의 동명 users. 핸들이 users_2 로 부여돼 컬럼 참조가 구분된다.
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('2.public.users');
+    await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('users.id');
+    await page.getByRole('combobox', { name: '조인 대상 컬럼' }).selectOption('users_2.id');
+
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('users_2.region');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+
+    // 예전엔 "같은 테이블을 중복 조인할 수 없습니다"로 오차단됐다 — 이제 핸들로 구분돼 조인 가능(오류 없음).
+    await expect(page.getByText(/중복 조인/)).toHaveCount(0);
+    // 다중 소스 스냅샷 안내가 뜨고 실행이 활성화된다.
+    await expect(page.getByText('여러 데이터소스를 조인하면 저장 시점 스냅샷으로 고정됩니다(새로고침으로 갱신).')).toBeVisible();
+    await expect(page.getByRole('button', { name: '실행', exact: true })).toBeEnabled();
   });
 });
 

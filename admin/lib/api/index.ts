@@ -78,7 +78,10 @@ export const datasourcesApi = {
 };
 
 export const schemaApi = {
-  tables: (datasourceId: number) => request<{ tables: SchemaTable[] }>(`/schema/tables${qs({ datasourceId })}`).then((r) => r.tables),
+  // 백엔드 응답에는 datasourceId 가 없으므로 조회한 소스로 태깅한다(다중 소스 조인 식별).
+  tables: (datasourceId: number) =>
+    request<{ tables: Omit<SchemaTable, 'datasourceId'>[] }>(`/schema/tables${qs({ datasourceId })}`)
+      .then((r) => r.tables.map((t) => ({ ...t, datasourceId }))),
   preview: (schema: string, tableName: string, datasourceId: number) =>
     request<QueryResult>(`/schema/tables/${encodeURIComponent(tableName)}/preview${qs({ schema, datasourceId })}`),
 };

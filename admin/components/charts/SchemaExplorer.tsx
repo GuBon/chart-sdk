@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Search, Table2 } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
-import { tableKey } from '@/lib/builder';
+import { tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -15,9 +15,9 @@ interface Props {
   datasources: Datasource[];
   tables: SchemaTable[];
   datasourceId: number | null;
-  selectedTable: string | null;
+  selectedTable: string | null; // 선택된 base 테이블의 tableRefKey
   onChangeDatasource: (id: number) => void;
-  onSelectTable: (table: string) => void;
+  onSelectTable: (table: SchemaTable) => void;
 }
 
 export function SchemaExplorer({ datasources, tables, datasourceId, selectedTable, onChangeDatasource, onSelectTable }: Props) {
@@ -42,9 +42,9 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
       return next;
     });
 
-  const selectTable = (name: string) => {
-    onSelectTable(name);
-    setExpanded((prev) => new Set(prev).add(name));
+  const selectTable = (t: SchemaTable) => {
+    onSelectTable(t);
+    setExpanded((prev) => new Set(prev).add(tableRefKey(t)));
   };
 
   return (
@@ -85,14 +85,14 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
           <p className="px-2 py-3 text-xs text-text-tertiary">데이터소스를 먼저 선택하세요.</p>
         ) : (
           filtered.map((t) => {
-            const key = tableKey(t);
+            const key = tableRefKey(t);
             const open = expanded.has(key);
             const active = selectedTable === key;
             return (
               <div key={key}>
                 <button
                   type="button"
-                  onClick={() => selectTable(key)}
+                  onClick={() => selectTable(t)}
                   className={cn(
                     'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted',
                     active ? 'bg-muted font-medium text-text-primary' : 'text-text-primary',

@@ -244,19 +244,22 @@ class BuilderSqlBuilderTest {
     }
 
     @Test
-    void rejectsAmbiguousTableNameAcrossSchemasInOneQuery() {
-        // base=tandanji.events 와 join=public.events 는 이름이 같아 컬럼 참조가 모호 — 조용한 오선택 대신 거부.
-        assertThatThrownBy(() -> BuilderSqlBuilder.generate(multiSchema, Map.of(
-                "table", "tandanji.events",
+    void joinsSameNameTablesAcrossSchemasViaHandles() {
+        // base=tandanji.events 와 join=public.events 는 이름이 같지만 서로 다른 핸들(events / events_2)로 함께 조인 가능.
+        // 단일 소스라도 스키마로 완전 한정돼 SQL 이 모호하지 않다(별칭 불필요).
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(multiSchema, Map.of(
+                "table", "tandanji.events", // 문자열 → handle 기본 "events"
                 "joins", List.of(Map.of(
-                        "table", "public.events",
+                        "table", Map.of("schema", "public", "name", "events", "handle", "events_2"),
                         "type", "inner",
-                        "on", Map.of("leftColumn", "events.user_id", "rightColumn", "events.id")
+                        "on", Map.of("leftColumn", "events.user_id", "rightColumn", "events_2.id")
                 )),
-                "xAxis", "events.label",
-                "yAxis", List.of(Map.of("column", "events.amount", "agg", "sum"))
-        ), "bar", false))
-                .isInstanceOf(ApiException.class)
-                .hasMessageContaining("Ambiguous table name across sources/schemas: events");
+                "xAxis", "events_2.label",
+                "yAxis", List.of(Map.of("column", "events.amount", "agg", "sum", "alias", "total"))
+        ), "bar", false);
+
+        assertThat(sql.text()).isEqualTo("""
+                SELECT "public"."events"."label", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" INNER JOIN "public"."events" ON "tandanji"."events"."user_id" = "public"."events"."id" GROUP BY "public"."events"."label" LIMIT 1000\
+                """);
     }
 }

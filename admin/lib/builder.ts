@@ -1,4 +1,4 @@
-import type { AggType, BuilderConfig, ChartType, JoinSpec, JoinType, SchemaTable, WhereOp, XAxisBucket } from '@/lib/api';
+import type { AggType, BuilderConfig, ChartType, JoinSpec, JoinType, SchemaTable, TableRef, WhereOp, XAxisBucket } from '@/lib/api';
 
 // 노코드 빌더 UI 상수 — 생성규칙 3·3A·4장의 라벨.
 export const AGG_CHOICES: { value: AggType; label: string }[] = [
@@ -67,66 +67,85 @@ export function hasJoins(cfg: BuilderConfig): boolean {
   return !!cfg.joins && cfg.joins.length > 0;
 }
 
-/** base + 조인 테이블 (체인 등장 순서, 중복 제거) */
-export function activeTables(cfg: BuilderConfig): string[] {
-  const ts = cfg.table ? [cfg.table] : [];
-  (cfg.joins ?? []).forEach((j) => { if (j.table && !ts.includes(j.table)) ts.push(j.table); });
-  return ts;
+// ── 테이블 식별자(소스·스키마 한정 TableRef) ──────────────────────────────
+/** TableRef 안정 키 — 비교·중복제거·SchemaTable 매칭용. SchemaTable 도 같은 필드 구성이라 그대로 쓴다. */
+export function tableRefKey(t: { datasourceId: number; schema: string; name: string }): string {
+  return `${t.datasourceId}.${t.schema}.${t.name}`;
 }
 
-// ── 테이블 식별자(스키마 한정) ──────────────────────────────────
-/** config.table / join.table 에 저장하는 식별자. 비-public 스키마만 "schema.table" 로 한정(백엔드 §1.2). */
-export function tableKey(t: SchemaTable): string {
+/** 표시 라벨 — public 은 스키마 생략(schema.table 또는 table). 소스는 셀렉트 옆에 별도 표기. */
+export function tableRefLabel(t: TableRef | SchemaTable): string {
   return t.schema && t.schema !== 'public' ? `${t.schema}.${t.name}` : t.name;
 }
 
-/** 테이블 키에서 bare 이름 추출 — 조인 컬럼 참조는 bare 이름을 쓴다(백엔드 knownTables 가 bare 키). */
-export function bareTableName(key: string): string {
-  const i = key.indexOf('.');
-  return i < 0 ? key : key.slice(i + 1);
+/** 컬럼 참조 prefix 로 쓰는 테이블 핸들 — 기본은 이름, 동명 충돌 시 저장된 handle(users_2). 백엔드 parseTableRef 와 규약 일치. */
+export function tableHandle(ref: TableRef): string {
+  return ref.handle ?? ref.name;
 }
 
-/** 테이블 키를 {schema, name} 으로 분리(스키마 미지정 → public). 스키마 미리보기 요청에 쓴다. */
-export function splitTableKey(key: string): { schema: string; name: string } {
-  const i = key.indexOf('.');
-  return i < 0 ? { schema: 'public', name: key } : { schema: key.slice(0, i), name: key.slice(i + 1) };
+/** others(다른 활성 테이블)와 겹치지 않는 유일 핸들을 부여. 안 겹치면 이름 그대로(handle 미설정) — 비충돌 차트는 기존과 동일. */
+export function withUniqueHandle(ref: TableRef, others: TableRef[]): TableRef {
+  const taken = new Set(others.map(tableHandle));
+  if (!taken.has(ref.name)) return { ...ref, handle: undefined };
+  let n = 2;
+  while (taken.has(`${ref.name}_${n}`)) n += 1;
+  return { ...ref, handle: `${ref.name}_${n}` };
 }
 
-/** 테이블 키(base·셀렉터) 또는 bare 이름(조인 컬럼 참조) 어느 쪽으로도 테이블을 찾는다. */
-function findTable(tables: SchemaTable[], ref: string | null): SchemaTable | undefined {
+/** base + 조인 테이블(TableRef, 등장 순서·중복 제거). */
+export function activeTables(cfg: BuilderConfig): TableRef[] {
+  const ts: TableRef[] = cfg.table ? [cfg.table] : [];
+  (cfg.joins ?? []).forEach((j) => {
+    if (j.table && !ts.some((t) => tableRefKey(t) === tableRefKey(j.table))) ts.push(j.table);
+  });
+  return ts;
+}
+
+/** SchemaTable 풀에서 TableRef 에 해당하는 테이블(소스·스키마·이름 일치). */
+function schemaTableOf(tables: SchemaTable[], ref: TableRef | null | undefined): SchemaTable | undefined {
   if (!ref) return undefined;
-  return tables.find((t) => tableKey(t) === ref) ?? tables.find((t) => t.name === ref);
+  return tables.find((t) => tableRefKey(t) === tableRefKey(ref));
 }
 
-/** "table.col" → {table, column}. '.' 없으면 base 테이블 암묵(하위호환, 11.2) */
-export function parseColumn(ref: string, baseTable: string | null): { table: string | null; column: string } {
+const columnsOf = (tables: SchemaTable[], ref: TableRef | null | undefined) => schemaTableOf(tables, ref)?.columns ?? [];
+
+/** 컬럼 참조("handle.col" 또는 base 암묵 "col")가 속한 활성 TableRef. 조인 시 테이블 핸들로 매칭(§11.2, 동명 테이블 구분). */
+function refTable(cfg: BuilderConfig, colRef: string): TableRef | undefined {
+  const i = colRef.indexOf('.');
+  if (i < 0) return cfg.table ?? undefined; // 미조인/base 암묵
+  const handle = colRef.slice(0, i);
+  return activeTables(cfg).find((t) => tableHandle(t) === handle);
+}
+
+const colName = (ref: string): string => {
   const i = ref.indexOf('.');
-  return i < 0 ? { table: baseTable, column: ref } : { table: ref.slice(0, i), column: ref.slice(i + 1) };
+  return i < 0 ? ref : ref.slice(i + 1);
+};
+
+/** "table.col" → {table(bare), column}. '.' 없으면 base 테이블 이름 암묵(하위호환, 11.2) */
+export function parseColumn(ref: string, baseTableName: string | null): { table: string | null; column: string } {
+  const i = ref.indexOf('.');
+  return i < 0 ? { table: baseTableName, column: ref } : { table: ref.slice(0, i), column: ref.slice(i + 1) };
 }
 
-const columnsOf = (tables: SchemaTable[], table: string | null) => findTable(tables, table)?.columns ?? [];
-
-/** 빌더 컬럼 셀렉트 옵션 — 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (11.2) */
+/** 빌더 컬럼 셀렉트 옵션 — 조인 시 활성 테이블 전부 "핸들.컬럼", 미조인 시 base "컬럼" (11.2, 백엔드는 핸들을 소스로 해석) */
 export function columnsForBuilder(cfg: BuilderConfig, tables: SchemaTable[]): { value: string; label: string; type: string }[] {
   if (!hasJoins(cfg)) return columnsOf(tables, cfg.table).map((c) => ({ value: c.name, label: c.name, type: c.type }));
-  // 조인 컬럼 참조는 bare 테이블 이름으로 qualified — 백엔드가 bare 이름을 스키마로 해석(§11.2).
-  return activeTables(cfg).flatMap((t) => {
-    const bare = bareTableName(t);
-    return columnsOf(tables, t).map((c) => ({ value: `${bare}.${c.name}`, label: `${bare}.${c.name}`, type: c.type }));
-  });
+  return activeTables(cfg).flatMap((ref) =>
+    columnsOf(tables, ref).map((c) => ({ value: `${tableHandle(ref)}.${c.name}`, label: `${tableHandle(ref)}.${c.name}`, type: c.type })),
+  );
 }
 
 /** 컬럼 참조의 타입 해석 (조인 qualified·단일 모두) */
 export function columnType(ref: string | null | undefined, cfg: BuilderConfig, tables: SchemaTable[]): string | undefined {
   if (!ref) return undefined;
-  const { table, column } = parseColumn(ref, cfg.table);
-  return columnsOf(tables, table).find((c) => c.name === column)?.type;
+  return columnsOf(tables, refTable(cfg, ref)).find((c) => c.name === colName(ref))?.type;
 }
 
 const typeGroup = (type: string | undefined): 'num' | 'date' | 'text' =>
   isNumericType(type) ? 'num' : isDateType(type) ? 'date' : 'text';
 
-export function emptyJoin(table: string): JoinSpec {
+export function emptyJoin(table: TableRef): JoinSpec {
   return { table, type: 'left', on: { leftColumn: '', rightColumn: '' } };
 }
 
@@ -134,24 +153,24 @@ export function emptyJoin(table: string): JoinSpec {
 function joinValidationIssue(cfg: BuilderConfig, tables: SchemaTable[]): string | null {
   const joins = cfg.joins ?? [];
   if (joins.length === 0) return null;
-  // 컬럼 참조는 bare 테이블 이름을 쓰므로 체인 추적도 bare 이름으로 한다(§11.2).
-  const seen = cfg.table ? [bareTableName(cfg.table)] : []; // 체인: 이미 등장한 테이블(bare)
+  // 컬럼 참조는 테이블 핸들을 쓰므로 체인 추적도 핸들로 한다(§11.2). 동명 테이블은 핸들이 달라 함께 조인 가능.
+  const seen = cfg.table ? [tableHandle(cfg.table)] : [];
   for (const j of joins) {
     if (!j.table) return '조인할 테이블을 선택하세요.';
-    const jBare = bareTableName(j.table);
-    if (seen.includes(jBare)) return `같은 테이블을 중복 조인할 수 없습니다: ${j.table}`;
-    if (!findTable(tables, j.table)) return `존재하지 않는 테이블: ${j.table}`;
+    const jHandle = tableHandle(j.table);
+    if (seen.includes(jHandle)) return `같은 테이블을 중복 조인할 수 없습니다: ${tableRefLabel(j.table)}`;
+    if (!schemaTableOf(tables, j.table)) return `존재하지 않는 테이블: ${tableRefLabel(j.table)}`;
     if (!j.on.leftColumn || !j.on.rightColumn) return '조인 조건(ON)의 양쪽 컬럼을 선택하세요.';
-    const L = parseColumn(j.on.leftColumn, cfg.table);
-    const R = parseColumn(j.on.rightColumn, cfg.table);
+    const L = parseColumn(j.on.leftColumn, cfg.table ? tableHandle(cfg.table) : null);
+    const R = parseColumn(j.on.rightColumn, cfg.table ? tableHandle(cfg.table) : null);
     if (!seen.includes(L.table ?? '')) return `조인 기준(ON 왼쪽)은 앞선 테이블의 컬럼이어야 합니다: ${j.on.leftColumn}`;
-    if (R.table !== jBare) return `조인 대상(ON 오른쪽)은 ${j.table} 의 컬럼이어야 합니다.`;
-    const lt = columnsOf(tables, L.table).find((c) => c.name === L.column)?.type;
-    const rt = columnsOf(tables, R.table).find((c) => c.name === R.column)?.type;
+    if (R.table !== jHandle) return `조인 대상(ON 오른쪽)은 ${tableRefLabel(j.table)} 의 컬럼이어야 합니다.`;
+    const lt = columnsOf(tables, refTable(cfg, j.on.leftColumn)).find((c) => c.name === L.column)?.type;
+    const rt = columnsOf(tables, refTable(cfg, j.on.rightColumn)).find((c) => c.name === R.column)?.type;
     if (!lt) return `존재하지 않는 컬럼: ${j.on.leftColumn}`;
     if (!rt) return `존재하지 않는 컬럼: ${j.on.rightColumn}`;
     if (typeGroup(lt) !== typeGroup(rt)) return `조인 키 타입이 호환되지 않습니다: ${j.on.leftColumn} ↔ ${j.on.rightColumn}`;
-    seen.push(jBare);
+    seen.push(jHandle);
   }
   return null;
 }
@@ -177,13 +196,13 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (cfg.sample && (cfg.sample.rate < 1 || cfg.sample.rate > 100)) return '표본 비율은 1~100%여야 합니다.';
   const joinIssue = joinValidationIssue(cfg, tables);
   if (joinIssue) return joinIssue;
-  // 조인 시 모든 컬럼 참조는 qualified "테이블.컬럼" + 활성 테이블 (11.2)
+  // 조인 시 모든 컬럼 참조는 qualified "핸들.컬럼" + 활성 테이블 (11.2)
   if (hasJoins(cfg)) {
-    const active = activeTables(cfg).map(bareTableName); // 컬럼 참조의 테이블 접두는 bare 이름
+    const activeHandles = activeTables(cfg).map(tableHandle);
     const refs = [cfg.xAxis, ...cfg.yAxis.map((y) => y.column), ...cfg.where.map((w) => w.column)].filter(Boolean) as string[];
     for (const r of refs) {
       if (r.indexOf('.') < 0) return '조인 시 컬럼은 "테이블.컬럼" 형식이어야 합니다.';
-      if (!active.includes(parseColumn(r, cfg.table).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
+      if (!activeHandles.includes(parseColumn(r, tableHandle(cfg.table)).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
     }
     if (cfg.sample) return '표본 추출은 조인과 함께 사용할 수 없습니다.';
   }
@@ -205,6 +224,9 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
 /** 조인 개수 소프트 상한 경고 (실행은 가능, UI 안내용) — 11.1 */
 export function builderWarning(cfg: BuilderConfig): string | null {
   if ((cfg.joins?.length ?? 0) > MAX_JOINS) return `조인이 ${MAX_JOINS}개를 넘으면 느려질 수 있습니다.`;
+  // 다중 소스 안내(설계 §7) — 저장 시 스냅샷으로 고정, 소스 변경은 새로고침으로 반영. 가장 근본적 동작이라 먼저.
+  const sources = new Set(activeTables(cfg).map((t) => t.datasourceId));
+  if (sources.size >= 2) return '여러 데이터소스를 조인하면 저장 시점 스냅샷으로 고정됩니다(새로고침으로 갱신).';
   if (hasJoins(cfg) && cfg.yAxis.some((y) => y.agg === 'sum' || y.agg === 'count')) {
     return '1:N 조인 시 합계·개수가 중복 집계될 수 있습니다 — 고유 개수(COUNT DISTINCT)를 고려하세요.';
   }
@@ -220,6 +242,30 @@ export function emptyBuilder(): BuilderConfig {
 
 export function normalizeBuilder(cfg: BuilderConfig): BuilderConfig {
   return { ...emptyBuilder(), ...cfg, joins: cfg.joins ?? [], sample: cfg.sample ?? null };
+}
+
+/** 레거시 문자열 테이블 참조("schema.table"/"table") → TableRef 승격. 저장된 단일 소스 차트 로드 시(하위호환). */
+export function migrateTableRef(raw: unknown, primaryDatasourceId: number): TableRef | null {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw as TableRef; // 이미 구조화됨
+  const s = String(raw);
+  const i = s.indexOf('.');
+  return i < 0
+    ? { datasourceId: primaryDatasourceId, schema: 'public', name: s }
+    : { datasourceId: primaryDatasourceId, schema: s.slice(0, i), name: s.slice(i + 1) };
+}
+
+/** builderConfig 의 base·조인 테이블 참조를 TableRef 로 승격(레거시 차트 로드용). 저장된 handle 은 보존, 없는 것만 유일 핸들 부여. */
+export function migrateBuilderConfig(cfg: BuilderConfig, primaryDatasourceId: number): BuilderConfig {
+  const base = migrateTableRef(cfg.table, primaryDatasourceId);
+  const assigned: TableRef[] = base ? [base] : [];
+  const joins = (cfg.joins ?? []).map((j) => {
+    const t = migrateTableRef(j.table, primaryDatasourceId) as TableRef;
+    const withHandle = t.handle ? t : withUniqueHandle(t, assigned);
+    assigned.push(withHandle);
+    return { ...j, table: withHandle };
+  });
+  return { ...cfg, table: base, joins };
 }
 
 /** orderBy 대상 라벨 (x = X축, y{i} = i번째 시리즈 별칭) */

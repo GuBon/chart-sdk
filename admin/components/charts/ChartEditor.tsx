@@ -6,7 +6,7 @@ import { ChevronLeft } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable } from '@/lib/api';
-import { builderValidationIssue, emptyBuilder, normalizeBuilder, normalizeBuilderForChartType, splitTableKey } from '@/lib/builder';
+import { builderValidationIssue, emptyBuilder, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey } from '@/lib/builder';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -66,21 +66,25 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     void datasourcesApi.list().then(setDatasources);
   }, []);
 
+  // 다중 소스 조인 지원 — 모든 데이터소스의 테이블을 하나의 풀로 로드(각 datasourceId 태깅).
   useEffect(() => {
-    if (datasourceId == null) {
+    if (datasources.length === 0) {
       setTables([]);
       return;
     }
-    void schemaApi.tables(datasourceId).then(setTables);
-  }, [datasourceId]);
+    let cancelled = false;
+    void Promise.all(datasources.map((d) => schemaApi.tables(d.id).catch(() => [])))
+      .then((lists) => { if (!cancelled) setTables(lists.flat()); });
+    return () => { cancelled = true; };
+  }, [datasources]);
 
-  // 기존 차트 진입 → 상태 복원 + 1회 자동 실행(화면설계 4.1)
+  // 기존 차트 진입 → 상태 복원 + 1회 자동 실행(화면설계 4.1). 레거시 문자열 테이블 참조는 TableRef 로 승격.
   useEffect(() => {
     if (chartId == null) return;
     void chartsApi.get(chartId).then((c) => {
       setName(c.name);
       setDatasourceId(c.datasourceId);
-      setBuilder(normalizeBuilder(c.builderConfig));
+      setBuilder(migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId));
       setChartType(c.chartType);
       setOptions({ ...defaultsFor(c.chartType), ...c.options });
       setPendingRun(true);
@@ -125,13 +129,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     else applyDatasource(id);
   };
 
-  const selectTable = async (table: string) => {
-    setBuilder({ table, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
+  const selectTable = async (t: SchemaTable) => {
+    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
     resetResults();
     setDirty(true);
-    if (datasourceId == null) return;
-    const { schema, name } = splitTableKey(table);
-    setRaw(await schemaApi.preview(schema, name, datasourceId));
+    setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId));
     setResultTab('raw');
   };
 
@@ -260,9 +262,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         <aside style={{ width: leftPanel.size }} className="shrink-0 overflow-y-auto border-r border-border bg-bg-panel">
           <SchemaExplorer
             datasources={datasources}
-            tables={tables}
+            tables={tables.filter((t) => t.datasourceId === datasourceId)}
             datasourceId={datasourceId}
-            selectedTable={builder.table}
+            selectedTable={builder.table ? tableRefKey(builder.table) : null}
             onChangeDatasource={changeDatasource}
             onSelectTable={selectTable}
           />
@@ -275,6 +277,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
               config={builder}
               chartType={chartType}
               tables={tables}
+              datasources={datasources}
               onChange={(b) => {
                 // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
                 setBuilder(normalizeBuilderForChartType(b, chartType));

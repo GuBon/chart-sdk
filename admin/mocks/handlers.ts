@@ -167,11 +167,16 @@ export const handlers = [
   http.post('/api/v1/datasources/test', async () => HttpResponse.json({ ok: true, message: '연결 성공 (89ms)' })),
 
   // ── 스키마 탐색(S2) ───────────────────────────────
-  http.get('/api/v1/schema/tables', () => HttpResponse.json({ tables: schemaTables })),
+  http.get('/api/v1/schema/tables', ({ request }) => {
+    const dsId = Number(new URL(request.url).searchParams.get('datasourceId'));
+    return HttpResponse.json({ tables: schemaTables.filter((t) => t.datasourceId === dsId) });
+  }),
 
   http.get('/api/v1/schema/tables/:name/preview', ({ params, request }) => {
-    const schema = new URL(request.url).searchParams.get('schema') ?? 'public';
-    const table = schemaTables.find((t) => t.name === params.name && t.schema === schema);
+    const url = new URL(request.url);
+    const schema = url.searchParams.get('schema') ?? 'public';
+    const dsId = Number(url.searchParams.get('datasourceId'));
+    const table = schemaTables.find((t) => t.name === params.name && t.schema === schema && t.datasourceId === dsId);
     return table ? HttpResponse.json(buildTablePreview(table)) : err(404, 'NOT_FOUND', '테이블을 찾을 수 없습니다.');
   }),
 

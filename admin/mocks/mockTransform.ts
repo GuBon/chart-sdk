@@ -15,10 +15,10 @@ const qcol = (ref: string) => {
   const i = ref.indexOf('.');
   return i < 0 ? qident(ref) : `${qident(ref.slice(0, i))}.${qident(ref.slice(i + 1))}`;
 };
-// 테이블 키 quote. "schema.table" → "schema"."table", public(점 없음) → "table" (§1.2)
-const qtable = (key: string) => {
-  const i = key.indexOf('.');
-  return i < 0 ? qident(key) : `${qident(key.slice(0, i))}.${qident(key.slice(i + 1))}`;
+// 테이블 참조 quote. public → "table", 비-public → "schema"."table". 다중 소스면 "ds{id}" 접두(페더레이션 표시).
+const qtable = (ref: { datasourceId: number; schema: string; name: string }, multi: boolean) => {
+  const base = ref.schema === 'public' ? qident(ref.name) : `${qident(ref.schema)}.${qident(ref.name)}`;
+  return multi ? `${qident('ds' + ref.datasourceId)}.${base}` : base;
 };
 // qualified 컬럼의 표시명(별칭·헤더) — 테이블 접두 제거
 const colName = (ref: string) => {
@@ -71,10 +71,12 @@ function whereSql(w: { column: string; op: string; value?: unknown }): string {
 export function buildGeneratedSql(cfg: BuilderConfig): string {
   assertSampleAllowed(cfg);
   if (!cfg.table || !cfg.xAxis || cfg.yAxis.length === 0) return '';
+  // 다중 소스면 페더레이션 → ds 별칭 표기(백엔드 §6 모사).
+  const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((j) => j.table.datasourceId)]).size >= 2;
   const where = cfg.where.length ? ` WHERE ${cfg.where.map((w) => whereSql(w)).join(' AND ')}` : '';
   // 조인(11.3) — FROM base 뒤에 joins 순서대로 [INNER|LEFT] JOIN ... ON ...
   const joinSql = (cfg.joins ?? [])
-    .map((j) => ` ${j.type === 'inner' ? 'INNER' : 'LEFT'} JOIN ${qtable(j.table)} ON ${qcol(j.on.leftColumn)} = ${qcol(j.on.rightColumn)}`)
+    .map((j) => ` ${j.type === 'inner' ? 'INNER' : 'LEFT'} JOIN ${qtable(j.table, multi)} ON ${qcol(j.on.leftColumn)} = ${qcol(j.on.rightColumn)}`)
     .join('');
   const orderSql = () => {
     if (!cfg.orderBy) return '';
@@ -87,7 +89,7 @@ export function buildGeneratedSql(cfg: BuilderConfig): string {
       qcol(cfg.xAxis),
       ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
     ];
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table)}${joinSql}${where}${orderSql()}\nLIMIT 1000`;
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}\nLIMIT 1000`;
   }
   const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${qcol(cfg.xAxis)}) AS ${qident(colName(cfg.xAxis))}` : qcol(cfg.xAxis);
   const aggSql: Record<string, (c: string) => string> = {
@@ -103,7 +105,7 @@ export function buildGeneratedSql(cfg: BuilderConfig): string {
   const group = cfg.xAxisBucket ? '1' : qcol(cfg.xAxis);
   // 표본 추출(3C) — base 뒤 TABLESAMPLE SYSTEM. 조인과 동시 사용은 검증 단계에서 차단한다.
   const sample = cfg.sample ? ` TABLESAMPLE SYSTEM (${clampRate(cfg.sample.rate)})` : '';
-  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table)}${sample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${sample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
 }
 
 /** 표본 비율 1~100 클램프 (생성규칙 3C·9장) */

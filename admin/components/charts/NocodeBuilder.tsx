@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Play, X } from 'lucide-react';
-import type { BuilderConfig, ChartType, JoinSpec, SchemaTable, WhereCond, YAxisField } from '@/lib/api';
+import type { BuilderConfig, ChartType, Datasource, JoinSpec, SchemaTable, TableRef, WhereCond, YAxisField } from '@/lib/api';
 import {
   BUCKET_CHOICES,
   DEFAULT_SAMPLE_RATE,
@@ -12,14 +12,16 @@ import {
   VALUELESS_OPS,
   activeTables,
   aggChoicesForChart,
-  bareTableName,
   builderValidationIssue,
   builderWarning,
   columnsForBuilder,
   emptyJoin,
   isDateType,
   orderTargets,
-  tableKey,
+  tableHandle,
+  tableRefKey,
+  tableRefLabel,
+  withUniqueHandle,
 } from '@/lib/builder';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -30,7 +32,8 @@ import { Switch } from '@/components/ui/Switch';
 interface Props {
   config: BuilderConfig;
   chartType: ChartType;
-  tables: SchemaTable[];
+  tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 다중 소스 조인 지원
+  datasources: Datasource[];
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
   running: boolean;
@@ -39,7 +42,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -53,9 +56,19 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
 
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
+  // ── 다중 소스 테이블 참조 헬퍼 ──
+  const refOf = (t: SchemaTable): TableRef => ({ datasourceId: t.datasourceId, schema: t.schema, name: t.name });
+  const findByKey = (key: string) => tables.find((t) => tableRefKey(t) === key);
+  const dsName = (id: number) => datasources.find((d) => d.id === id)?.name ?? `ds${id}`;
+  const sourceLabel = (t: SchemaTable) => `${dsName(t.datasourceId)} · ${tableRefLabel(t)}`;
+  const tableOptions = tables.map((t) => ({ value: tableRefKey(t), label: sourceLabel(t) }));
+
   // 테이블 변경 시 컬럼·조인 참조가 모두 무효 → 구성 초기화
-  const changeTable = (table: string) =>
-    onChange({ table, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null });
+  const changeTable = (key: string) => {
+    const t = findByKey(key);
+    if (!t) return;
+    onChange({ table: refOf(t), joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null });
+  };
 
   const changeXAxis = (xAxis: string) => {
     const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
@@ -81,22 +94,28 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
   const rawValueMode = config.yAxis.some((y) => y.agg === 'none');
   const sampleDisabledByJoin = joins.length > 0;
   const sampleDisabled = sampleDisabledByJoin || rawValueMode;
-  const colsOf = (key: string) => (tables.find((x) => tableKey(x) === key) ?? tables.find((x) => x.name === key))?.columns ?? [];
-  const qualOpts = (tableKeys: string[]) =>
-    tableKeys.flatMap((t) => {
-      const bare = bareTableName(t);
-      return colsOf(t).map((c) => ({ value: `${bare}.${c.name}`, label: `${bare}.${c.name}` }));
-    });
+  const colsOf = (ref: TableRef) => tables.find((t) => tableRefKey(t) === tableRefKey(ref))?.columns ?? [];
+  // 조인 컬럼 참조는 테이블 핸들로 qualified — 백엔드가 핸들을 소스로 해석(§11.2). 동명 테이블은 핸들이 달라 구분됨.
+  const qualOpts = (refs: TableRef[]) =>
+    refs.flatMap((ref) => colsOf(ref).map((c) => ({ value: `${tableHandle(ref)}.${c.name}`, label: `${tableHandle(ref)}.${c.name}` })));
+  const usedKeys = () => new Set(activeTables(config).map(tableRefKey));
+  // 이 조인이 참조할 수 있는 앞선 테이블들(핸들 부여 시 겹침 검사 대상) — 자기 자신 제외.
+  const othersExcept = (i: number): TableRef[] =>
+    [config.table, ...joins.filter((_, idx) => idx !== i).map((x) => x.table)].filter(Boolean) as TableRef[];
   const setJoin = (i: number, p: Partial<JoinSpec>) => patch({ joins: joins.map((j, idx) => (idx === i ? { ...j, ...p } : j)) });
   const setJoinOn = (i: number, side: 'leftColumn' | 'rightColumn', col: string) => setJoin(i, { on: { ...joins[i].on, [side]: col } });
-  const changeJoinTable = (i: number, table: string) => setJoin(i, { table, on: { leftColumn: '', rightColumn: '' } });
+  const changeJoinTable = (i: number, key: string) => {
+    const t = findByKey(key);
+    // 동명 테이블이 겹치면 유일 핸들 부여(users_2) → 컬럼 참조가 어느 테이블인지 구분. 컬럼 참조는 초기화(새 테이블).
+    if (t) setJoin(i, { table: withUniqueHandle(refOf(t), othersExcept(i)), on: { leftColumn: '', rightColumn: '' } });
+  };
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
   const addJoin = () => {
-    const used = activeTables(config);
-    const next = tables.find((t) => !used.includes(tableKey(t)));
-    if (next) patch({ joins: [...joins, emptyJoin(tableKey(next))], sample: null });
+    const used = usedKeys();
+    const next = tables.find((t) => !used.has(tableRefKey(t)));
+    if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))], sample: null });
   };
-  const unusedTable = !!config.table && tables.some((t) => !activeTables(config).includes(tableKey(t)));
+  const unusedTable = !!config.table && tables.some((t) => !usedKeys().has(tableRefKey(t)));
 
   return (
     <div
@@ -123,13 +142,13 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
       {/* 구성 폼 */}
       <div className="flex flex-col gap-4 p-4">
         <Row label="테이블">
-          <div className="w-60">
+          <div className="w-72">
             <Select
               id="builder-table"
               aria-label="테이블"
-              value={config.table ?? ''}
+              value={config.table ? tableRefKey(config.table) : ''}
               onChange={(e) => changeTable(e.target.value)}
-              options={tables.map((t) => ({ value: tableKey(t), label: tableKey(t) }))}
+              options={tableOptions}
               placeholder="테이블 선택"
             />
           </div>
@@ -140,13 +159,15 @@ export function NocodeBuilder({ config, chartType, tables, onChange, onRun, runn
           <Row label="조인">
             <div className="flex flex-col gap-2">
               {joins.map((j, i) => {
-                const priorTables = [config.table!, ...joins.slice(0, i).map((x) => x.table)].filter(Boolean);
-                const usedExceptSelf = activeTables(config).filter((t) => t !== j.table);
-                const tableOpts = tables.filter((t) => !usedExceptSelf.includes(tableKey(t))).map((t) => ({ value: tableKey(t), label: tableKey(t) }));
+                const priorTables: TableRef[] = [config.table!, ...joins.slice(0, i).map((x) => x.table)];
+                const usedExceptSelf = new Set(
+                  activeTables(config).filter((t) => tableRefKey(t) !== tableRefKey(j.table)).map(tableRefKey),
+                );
+                const tableOpts = tables.filter((t) => !usedExceptSelf.has(tableRefKey(t))).map((t) => ({ value: tableRefKey(t), label: sourceLabel(t) }));
                 return (
                   <div key={i} className="flex items-center gap-2">
-                    <div className="w-36">
-                      <Select aria-label="조인 테이블" value={j.table} onChange={(e) => changeJoinTable(i, e.target.value)} options={tableOpts} />
+                    <div className="w-48">
+                      <Select aria-label="조인 테이블" value={tableRefKey(j.table)} onChange={(e) => changeJoinTable(i, e.target.value)} options={tableOpts} />
                     </div>
                     <div className="w-24">
                       <Select aria-label="조인 종류" value={j.type} onChange={(e) => setJoin(i, { type: e.target.value as JoinSpec['type'] })} options={JOIN_TYPE_CHOICES} />

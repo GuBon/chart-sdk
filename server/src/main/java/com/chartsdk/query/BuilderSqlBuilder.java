@@ -36,7 +36,7 @@ public final class BuilderSqlBuilder {
     private final TableRef baseRef;
     private final List<Map<String, Object>> joins;
     private final boolean hasJoins;
-    /** 이 쿼리에 등장한 테이블(이름 → 한정 참조). 컬럼 참조의 소스·스키마 해석에 쓴다. */
+    /** 이 쿼리에 등장한 테이블(핸들 → 한정 참조). 컬럼 참조의 소스·스키마 해석에 쓴다(동명 테이블은 서로 다른 핸들). */
     private final Map<String, TableRef> knownTables = new LinkedHashMap<>();
 
     private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
@@ -165,17 +165,17 @@ public final class BuilderSqlBuilder {
             if (on == null) throw invalidReq("join.on is required.");
             // 체인 규칙: leftColumn 은 base·앞선 조인 테이블만 / rightColumn 은 이 조인 테이블 자신 (§11.2).
             // 새 테이블을 먼저 등록해야 rightColumn(자기 자신)의 스키마를 해석할 수 있어, 등록 전 스냅샷으로 체인을 검사한다.
-            Set<String> preceding = new LinkedHashSet<>(knownTables.keySet());
+            Set<String> preceding = new LinkedHashSet<>(knownTables.keySet()); // 핸들 스냅샷
             registerTable(jt);
             Ref left = resolveRef(str(on.get("leftColumn")));
             Ref right = resolveRef(str(on.get("rightColumn")));
-            if (!preceding.contains(left.table().table())) {
+            if (!preceding.contains(left.table().handle())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JOIN_CHAIN",
-                        "Join left column must reference a preceding table: " + left.table().table());
+                        "Join left column must reference a preceding table: " + left.table().handle());
             }
-            if (!jt.table().equals(right.table().table())) {
+            if (!jt.handle().equals(right.table().handle())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JOIN_CHAIN",
-                        "Join right column must belong to the joined table: " + jt.table());
+                        "Join right column must belong to the joined table: " + jt.handle());
             }
             if (!joinKeyCompatible(typeOf(left), typeOf(right))) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "JOIN_KEY_TYPE_MISMATCH",
@@ -289,14 +289,17 @@ public final class BuilderSqlBuilder {
         }
     }
 
-    /** 같은 이름 테이블이 한 쿼리에서 서로 다른 소스/스키마로 등장하면 모호하므로 거부한다(조용한 오선택 방지). */
+    /**
+     * 컬럼 참조가 가리킬 테이블을 핸들로 등록한다. 서로 다른 소스/스키마의 동명 테이블은 서로 다른 핸들을 받으므로
+     * 한 쿼리에서 함께 조인할 수 있다(예: users ⋈ users_2). 같은 핸들이 서로 다른 물리 테이블을 가리키면 모호하므로 거부.
+     */
     private void registerTable(TableRef ref) {
-        TableRef existing = knownTables.get(ref.table());
-        if (existing != null && !existing.sameOrigin(ref)) {
+        TableRef existing = knownTables.get(ref.handle());
+        if (existing != null && !existing.samePhysical(ref)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER",
-                    "Ambiguous table name across sources/schemas: " + ref.table());
+                    "Ambiguous table handle: " + ref.handle());
         }
-        knownTables.put(ref.table(), ref);
+        knownTables.put(ref.handle(), ref);
     }
 
     private void assertAggCompatible(String agg, Ref col) {
@@ -351,10 +354,15 @@ public final class BuilderSqlBuilder {
     }
 
     // ── 식별자 해석 ───────────────────────────────────────
-    /** 소스·스키마 한정 테이블 참조. datasourceId 는 다중 소스에서만 non-null. */
-    private record TableRef(Long datasourceId, String schema, String table) {
-        boolean sameOrigin(TableRef o) {
-            return java.util.Objects.equals(datasourceId, o.datasourceId) && schema.equals(o.schema);
+    /**
+     * 소스·스키마 한정 테이블 참조. datasourceId 는 다중 소스에서만 non-null.
+     * {@code handle} 은 한 쿼리 내 이 테이블 인스턴스의 유일 식별자(컬럼 참조가 이 값을 prefix 로 쓴다) —
+     * 기본은 테이블 이름, 동명 테이블이 겹칠 때만 프론트가 접미(users_2)로 구분한다. SQL 출력에는 등장하지 않는다.
+     */
+    private record TableRef(Long datasourceId, String schema, String table, String handle) {
+        boolean samePhysical(TableRef o) {
+            return java.util.Objects.equals(datasourceId, o.datasourceId)
+                    && schema.equals(o.schema) && table.equals(o.table);
         }
     }
 
@@ -373,13 +381,16 @@ public final class BuilderSqlBuilder {
             String schema = str(m.get("schema"));
             String name = str(m.get("name"));
             if (name == null) return null;
-            return new TableRef(ds, schema == null ? SchemaCatalog.DEFAULT_SCHEMA : schema, name);
+            String handle = str(m.get("handle")); // 동명 테이블 구분용 — 없으면 이름이 곧 핸들(단일/비충돌 하위호환).
+            return new TableRef(ds, schema == null ? SchemaCatalog.DEFAULT_SCHEMA : schema, name, handle == null ? name : handle);
         }
         String s = str(raw);
         if (s == null) return null;
         int dot = s.indexOf('.');
-        if (dot < 0) return new TableRef(null, SchemaCatalog.DEFAULT_SCHEMA, s);
-        return new TableRef(null, s.substring(0, dot), s.substring(dot + 1));
+        if (dot < 0) return new TableRef(null, SchemaCatalog.DEFAULT_SCHEMA, s, s);
+        String schema = s.substring(0, dot);
+        String name = s.substring(dot + 1);
+        return new TableRef(null, schema, name, name);
     }
 
     /** 오류 메시지용 표기 — public 은 생략, 그 외는 schema.table (소스는 표기 생략, 검증 무관). */
@@ -401,10 +412,10 @@ public final class BuilderSqlBuilder {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER",
                         "Ambiguous column (qualify as table.column when joins are present): " + ref);
             }
-            tableName = baseRef.table();
+            tableName = baseRef.handle();
             column = ref;
         }
-        TableRef table = knownTables.get(tableName);
+        TableRef table = knownTables.get(tableName); // knownTables 는 핸들로 키잉
         if (table == null || !catalog.hasColumn(table.datasourceId(), table.schema(), table.table(), column)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown column: " + ref);
         }
