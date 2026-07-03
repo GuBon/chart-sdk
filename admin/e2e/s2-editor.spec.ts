@@ -159,7 +159,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('switch', { name: '표본 추출' }).click();
     await page.getByRole('spinbutton', { name: '표본 비율' }).fill('30');
 
-    await page.getByRole('combobox', { name: '테이블' }).selectOption('1.public.users');
+    // 차트 12 base=sales-db(ds2) → 테이블 드롭다운은 ds2 테이블만. ds2 의 users 로 변경해도 표본 설정 유지.
+    await page.getByRole('combobox', { name: '테이블' }).selectOption('2.public.users');
     await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByRole('spinbutton', { name: '표본 비율' })).toHaveValue('30');
   });
@@ -206,6 +207,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
 
+    // 사이드바를 sales-db 로 전환(구성 유지, 모달 없음) → 조인 대상은 그 소스에서 고른다
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
     // 조인 추가 → 다른 소스(sales-db)의 customers, ON sales.customer_id = customers.id
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
     await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('2.public.customers');
@@ -231,7 +234,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // base = ds1.public.users
     await page.locator('aside').first().getByRole('button', { name: /users/ }).click();
 
-    // 조인 → 다른 소스(sales-db)의 동명 users. 핸들이 users_2 로 부여돼 컬럼 참조가 구분된다.
+    // 사이드바를 sales-db 로 전환 → 조인 대상은 다른 소스(sales-db)의 동명 users. 핸들 users_2 부여.
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
     await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('2.public.users');
     await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('users.id');
@@ -295,13 +299,33 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
   });
 
-  test('구성이 있을 때 데이터소스 변경은 확인 모달을 거친다', async ({ page }) => {
-    await buildChart(page);
+  test('사이드바 데이터소스를 바꿔도 구성이 유지되고 테이블 드롭다운만 해당 소스로 필터된다', async ({ page }) => {
+    await buildChart(page); // base = analytics-db(ds1) sales, X축=category
+    // 소스를 sales-db 로 전환 — 모달 없이 구성(X축) 유지
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
-    await expect(page.getByText('데이터소스를 변경할까요?')).toBeVisible();
-    await page.getByRole('button', { name: '변경', exact: true }).click();
     await expect(page.getByText('데이터소스를 변경할까요?')).toBeHidden();
+    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeHidden();
     await expect(page.getByRole('combobox', { name: '데이터소스' })).toHaveValue('2');
+    await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue('category'); // 구성 유지
+    // 조인 테이블 드롭다운은 sales-db(ds2) 테이블만 — customers 선택 가능
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('2.public.customers');
+    await expect(page.getByRole('combobox', { name: '조인 테이블' })).toHaveValue('2.public.customers');
+  });
+
+  test('사이드바에서 다른 테이블을 클릭하면 기준 테이블 변경 확인 모달을 거친다', async ({ page }) => {
+    await buildChart(page); // base = ds1 sales
+    // 같은 소스의 다른 테이블(users) 트리 클릭 → 확인 모달
+    await page.locator('aside').first().getByRole('button', { name: /users/ }).click();
+    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeVisible();
+    // 취소 → base 유지
+    await page.getByRole('button', { name: '취소', exact: true }).click();
+    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeHidden();
+    await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('1.public.sales');
+    // 다시 클릭 → 변경 → base 교체
+    await page.locator('aside').first().getByRole('button', { name: /users/ }).click();
+    await page.getByRole('button', { name: '변경', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('1.public.users');
   });
 
   test('미저장 변경 상태에서 목록 이동은 이탈확인 모달을 거친다', async ({ page }) => {

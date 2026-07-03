@@ -56,7 +56,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [pendingDatasource, setPendingDatasource] = useState<number | null>(null);
+  const [pendingBaseTable, setPendingBaseTable] = useState<SchemaTable | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [pendingRun, setPendingRun] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
@@ -116,20 +116,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setRunError(null);
   };
 
-  const applyDatasource = (id: number) => {
-    setDatasourceId(id);
-    setBuilder(emptyBuilder());
-    resetResults();
-    setDirty(true);
-  };
+  // 사이드바 데이터소스 = 탐색 컨텍스트. 소스 변경은 드롭다운 필터만 바꾸고 구성은 보존(비파괴).
+  const changeDatasource = (id: number) => setDatasourceId(id);
 
-  // 구성이 있으면 소스변경확인 모달, 없으면 즉시 변경(화면설계 4.1)
-  const changeDatasource = (id: number) => {
-    if (builder.table) setPendingDatasource(id);
-    else applyDatasource(id);
-  };
+  // 실행·저장에 쓰는 primary 데이터소스는 base 테이블에서 파생(사이드바 탐색 소스와 무관).
+  const primaryDatasourceId = builder.table?.datasourceId ?? datasourceId;
 
-  const selectTable = async (t: SchemaTable) => {
+  // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
+  const applyBaseTable = async (t: SchemaTable) => {
     setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
     resetResults();
     setDirty(true);
@@ -137,9 +131,23 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setResultTab('raw');
   };
 
+  // 사이드바 트리 클릭. base 가 이미 있고 다른 테이블이면 초기화 경고 모달, 없거나 같은 테이블이면 즉시.
+  const selectTable = async (t: SchemaTable) => {
+    if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
+      setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId)); // 같은 base 재클릭 → 미리보기만
+      setResultTab('raw');
+      return;
+    }
+    if (builder.table) {
+      setPendingBaseTable(t); // 다른 테이블 → 확인 모달(구성 초기화 경고)
+      return;
+    }
+    await applyBaseTable(t);
+  };
+
   const runBuilder = async () => {
     const issue = builderValidationIssue(builder, chartType, tables);
-    if (issue || datasourceId == null) {
+    if (issue || primaryDatasourceId == null) {
       if (issue) setRunError(issue);
       return;
     }
@@ -148,8 +156,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     try {
       // 집계(실행 결과) + 조건 적용 원본(원본 데이터, mode:rows) 동시 갱신 — 화면설계 4.2
       const [res, rawRes] = await Promise.all([
-        queryApi.runBuilder({ datasourceId, builderConfig: builder, chartType, options, mode: 'aggregate' }),
-        queryApi.runBuilder({ datasourceId, builderConfig: builder, chartType, options, mode: 'rows' }),
+        queryApi.runBuilder({ datasourceId: primaryDatasourceId, builderConfig: builder, chartType, options, mode: 'aggregate' }),
+        queryApi.runBuilder({ datasourceId: primaryDatasourceId, builderConfig: builder, chartType, options, mode: 'rows' }),
       ]);
       setResult(res);
       setRaw(rawRes);
@@ -183,14 +191,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const canSave = !!name.trim() && !builderValidationIssue(builder, chartType, tables) && !!result;
 
   const save = async (): Promise<boolean> => {
-    if (!canSave || datasourceId == null) return false;
+    if (!canSave || primaryDatasourceId == null) return false;
     setSaving(true);
     try {
       const { jsonb, cols } = splitOptions(options);
       const input: ChartInput = {
         name: name.trim(),
         description: (cols.description as string) || null,
-        datasourceId,
+        datasourceId: primaryDatasourceId,
         defineMode: 'builder',
         sqlQuery: generatedSql ?? '',
         builderConfig: builder,
@@ -277,6 +285,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
               config={builder}
               chartType={chartType}
               tables={tables}
+              browseDatasourceId={datasourceId}
               datasources={datasources}
               onChange={(b) => {
                 // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
@@ -338,25 +347,25 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </aside>
       </div>
 
-      {/* 소스변경확인 모달 */}
-      {pendingDatasource != null && (
+      {/* 기준 테이블 변경 확인 모달 (사이드바 트리 클릭 시) */}
+      {pendingBaseTable != null && (
         <Modal
-          title="데이터소스를 변경할까요?"
-          width={440}
+          title="기준 테이블을 바꿀까요?"
+          width={460}
           divided={false}
-          onClose={() => setPendingDatasource(null)}
+          onClose={() => setPendingBaseTable(null)}
           footer={
             <>
-              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setPendingDatasource(null)}>
+              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setPendingBaseTable(null)}>
                 취소
               </Button>
-              <Button size="sm" className="h-[34px]" onClick={() => { applyDatasource(pendingDatasource); setPendingDatasource(null); }}>
+              <Button size="sm" className="h-[34px]" onClick={() => { const t = pendingBaseTable; setPendingBaseTable(null); if (t) void applyBaseTable(t); }}>
                 변경
               </Button>
             </>
           }
         >
-          <p className="text-[13px] text-text-secondary">데이터소스를 바꾸면 현재 구성(테이블·축·조건)이 초기화됩니다. 기존 구성은 이전 DB 스키마를 가리키므로 유지할 수 없습니다.</p>
+          <p className="text-[13px] text-text-secondary">기준 테이블을 바꾸면 현재 구성(조인·축·조건)이 초기화됩니다. 다른 데이터소스의 테이블과 조인하려면 사이드바에서 소스만 바꾼 뒤 우측 "조인" 행에서 추가하세요.</p>
         </Modal>
       )}
 
@@ -388,7 +397,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       {/* 임베드 코드 모달(S3) — 저장된 차트에서만 */}
       {embedOpen && savedId != null && (
         <EmbedModal
-          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, datasourceId: datasourceId ?? 0, updatedAt: new Date().toISOString() }}
+          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, datasourceId: primaryDatasourceId ?? 0, updatedAt: new Date().toISOString() }}
           onClose={() => setEmbedOpen(false)}
         />
       )}

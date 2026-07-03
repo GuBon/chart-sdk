@@ -32,7 +32,8 @@ import { Switch } from '@/components/ui/Switch';
 interface Props {
   config: BuilderConfig;
   chartType: ChartType;
-  tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 다중 소스 조인 지원
+  tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
+  browseDatasourceId: number | null; // 사이드바에서 선택한 탐색 소스 — 테이블/조인 드롭다운을 이 소스로 필터
   datasources: Datasource[];
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
@@ -42,7 +43,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, datasources, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -61,9 +62,22 @@ export function NocodeBuilder({ config, chartType, tables, datasources, onChange
   const findByKey = (key: string) => tables.find((t) => tableRefKey(t) === key);
   const dsName = (id: number) => datasources.find((d) => d.id === id)?.name ?? `ds${id}`;
   const sourceLabel = (t: SchemaTable) => `${dsName(t.datasourceId)} · ${tableRefLabel(t)}`;
-  const tableOptions = tables.map((t) => ({ value: tableRefKey(t), label: sourceLabel(t) }));
+  // 탐색 소스의 테이블만 드롭다운 옵션으로. 사이드바가 소스를 정하고, 드롭다운은 그 소스의 테이블만 노출.
+  const browseTables = tables.filter((t) => t.datasourceId === browseDatasourceId);
+  // browse 소스 테이블 − exclude. 현재 선택값이 목록 밖(타 소스 base/조인)이면 선택 유지용으로 앞에 추가(출처 표기).
+  const tableOptionsFor = (currentKey: string | null, exclude: Set<string>) => {
+    const opts = browseTables
+      .filter((t) => !exclude.has(tableRefKey(t)))
+      .map((t) => ({ value: tableRefKey(t), label: tableRefLabel(t) }));
+    if (currentKey && !opts.some((o) => o.value === currentKey)) {
+      const cur = findByKey(currentKey);
+      if (cur) opts.unshift({ value: currentKey, label: sourceLabel(cur) });
+    }
+    return opts;
+  };
+  const tableOptions = tableOptionsFor(config.table ? tableRefKey(config.table) : null, new Set());
 
-  // 테이블 변경 시 컬럼·조인 참조가 모두 무효 → 구성 초기화
+  // 테이블 변경 시 컬럼·조인 참조가 모두 무효 → 구성 초기화 (드롭다운 직접 선택은 의도적 변경이라 모달 없음)
   const changeTable = (key: string) => {
     const t = findByKey(key);
     if (!t) return;
@@ -112,10 +126,10 @@ export function NocodeBuilder({ config, chartType, tables, datasources, onChange
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
   const addJoin = () => {
     const used = usedKeys();
-    const next = tables.find((t) => !used.has(tableRefKey(t)));
+    const next = browseTables.find((t) => !used.has(tableRefKey(t)));
     if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))], sample: null });
   };
-  const unusedTable = !!config.table && tables.some((t) => !usedKeys().has(tableRefKey(t)));
+  const unusedTable = !!config.table && browseTables.some((t) => !usedKeys().has(tableRefKey(t)));
 
   return (
     <div
@@ -163,7 +177,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, onChange
                 const usedExceptSelf = new Set(
                   activeTables(config).filter((t) => tableRefKey(t) !== tableRefKey(j.table)).map(tableRefKey),
                 );
-                const tableOpts = tables.filter((t) => !usedExceptSelf.has(tableRefKey(t))).map((t) => ({ value: tableRefKey(t), label: sourceLabel(t) }));
+                const tableOpts = tableOptionsFor(tableRefKey(j.table), usedExceptSelf);
                 return (
                   <div key={i} className="flex items-center gap-2">
                     <div className="w-48">
