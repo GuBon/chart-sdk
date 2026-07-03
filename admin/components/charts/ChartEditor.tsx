@@ -63,7 +63,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [embedOpen, setEmbedOpen] = useState(false);
 
   useEffect(() => {
-    void datasourcesApi.list().then(setDatasources);
+    void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
   }, []);
 
   // 다중 소스 조인 지원 — 모든 데이터소스의 테이블을 하나의 풀로 로드(각 datasourceId 태깅).
@@ -88,7 +88,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setChartType(c.chartType);
       setOptions({ ...defaultsFor(c.chartType), ...c.options });
       setPendingRun(true);
-    });
+    }).catch(() => setToast('차트를 불러오지 못했습니다.'));
   }, [chartId]);
 
   // 옵션/대분류 변경 → SQL 재실행 없이 option 재조립(2B preview). 디바운스.
@@ -127,15 +127,20 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
     resetResults();
     setDirty(true);
-    setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId));
-    setResultTab('raw');
+    // 원본 미리보기는 부가 기능 — 실패해도 테이블 선택은 유지(미처리 rejection·크래시 방지).
+    try {
+      setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId));
+      setResultTab('raw');
+    } catch {
+      setRaw(null);
+    }
   };
 
   // 사이드바 트리 클릭. base 가 이미 있고 다른 테이블이면 초기화 경고 모달, 없거나 같은 테이블이면 즉시.
   const selectTable = async (t: SchemaTable) => {
     if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
-      setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId)); // 같은 base 재클릭 → 미리보기만
-      setResultTab('raw');
+      // 같은 base 재클릭 → 미리보기만(실패 무시)
+      try { setRaw(await schemaApi.preview(t.schema, t.name, t.datasourceId)); setResultTab('raw'); } catch { setRaw(null); }
       return;
     }
     if (builder.table) {
