@@ -1,5 +1,7 @@
 package com.chartsdk.web;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -11,6 +13,8 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, Object>> handle(ApiException e) {
         return ResponseEntity.status(e.status()).body(error(e.code(), e.getMessage()));
@@ -37,6 +41,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleUnexpected(Exception e) {
+        log.error("Unexpected error", e);
         return ResponseEntity.internalServerError().body(error("INTERNAL_ERROR", "Internal server error."));
     }
 
