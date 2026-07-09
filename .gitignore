@@ -4,6 +4,7 @@ node_modules/
 # builds
 dist/
 admin/.next/
+admin/.next-e2e/
 admin/out/
 sdk/dist/
 

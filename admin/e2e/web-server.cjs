@@ -9,6 +9,8 @@ const child = spawn(process.execPath, [nextBin, 'dev', '-p', '3100'], {
   env: {
     ...process.env,
     NEXT_PUBLIC_E2E_MSW: 'true',
+    // 개발 서버(:3000)의 .next 와 분리 — 동시 구동 시 빌드 산출물 상호 덮어쓰기(ENOENT) 방지. L14.
+    NEXT_DIST_DIR: '.next-e2e',
   },
   stdio: 'inherit',
   windowsHide: true,
