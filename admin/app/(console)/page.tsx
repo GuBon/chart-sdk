@@ -74,7 +74,16 @@ function ChartList() {
         setPreviewOptions({});
         setTotal(res.total);
         setTotalPages(res.totalPages);
-        if (page > res.totalPages) setPage(res.totalPages, res.totalPages);
+        // 페이지 초과(필터·삭제로 총 페이지 감소) 보정. setPage 는 totalPages 에 의존하므로 deps 에 넣으면
+        // 최초 로드에서 totalPages 갱신이 reload 를 재생성 → useEffect 재실행 → 목록·미리보기 중복 조회 사이클이 된다.
+        // URL 을 직접 치환해 그 사이클을 끊는다.
+        if (page > res.totalPages) {
+          const next = new URLSearchParams(params.toString());
+          if (res.totalPages <= 1) next.delete('page');
+          else next.set('page', String(res.totalPages));
+          const query = next.toString();
+          router.replace(query ? `/?${query}` : '/', { scroll: false });
+        }
       })
       .catch(() => {
         setCharts([]);
@@ -82,7 +91,7 @@ function ChartList() {
         setTotal(0);
         setTotalPages(1);
       });
-  }, [q, type, ds, sort, page, setPage]);
+  }, [q, type, ds, sort, page, params, router]);
 
   useEffect(() => void reload(), [reload]);
   useEffect(() => {
