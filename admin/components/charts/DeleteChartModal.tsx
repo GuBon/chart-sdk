@@ -40,7 +40,7 @@ export function DeleteChartModal({ chart, onClose, onDeleted }: { chart: ChartSu
         </>
       }
     >
-      <p className="text-[13px] text-text-secondary">
+      <p className="break-words text-[13px] text-text-secondary">
         ‘{chart.name}’ 차트를 삭제할까요? 이 차트를 임베드한 모든 페이지에서 차트가 더 이상 표시되지 않습니다. 발급된 토큰은 사용자에 귀속되어 삭제되지 않습니다.
       </p>
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}

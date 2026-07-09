@@ -39,10 +39,12 @@ export function TokenTable({ tokens, users, onRevoke, onReissue }: Props) {
         <tbody>
           {tokens.map((t) => {
             const status = tokenStatus(t);
+            const name = nameOf(t.userId);
             return (
               <tr key={t.tokenId} className="h-[52px] border-t border-border">
-                <td className="pl-5 text-[13px] font-medium text-text-primary">{nameOf(t.userId)}</td>
-                <td className="font-mono text-xs text-text-secondary">{preview(t.token)}</td>
+                <td className="truncate pl-5 text-[13px] font-medium text-text-primary" title={name}>{name}</td>
+                {/* 토큰은 마스킹이 설계(전체는 임베드 모달에서만) — title 로도 원문을 노출하지 않는다 */}
+                <td className="truncate font-mono text-xs text-text-secondary">{preview(t.token)}</td>
                 <td className="text-[13px] text-text-secondary">{t.createdAt?.slice(0, 10) ?? '—'}</td>
                 <td className="text-[13px] text-text-secondary">{t.expiresAt.slice(0, 10)}</td>
                 <td>

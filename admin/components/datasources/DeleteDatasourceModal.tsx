@@ -42,7 +42,7 @@ export function DeleteDatasourceModal({ datasource, onClose, onDeleted }: { data
       }
     >
       <div className="flex flex-col gap-3">
-        <p className="text-[13px] text-text-secondary">
+        <p className="break-words text-[13px] text-text-secondary">
           ‘{datasource.name}’ 데이터소스를 삭제합니다. 저장된 접속 정보가 제거되며 복구할 수 없습니다.
         </p>
         <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2.5 text-xs text-danger">

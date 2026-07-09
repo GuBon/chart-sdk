@@ -107,8 +107,8 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
                   >
                     {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   </span>
-                  <Table2 className="size-3.5 text-text-secondary" />
-                  <span className="truncate">{t.name}</span>
+                  <Table2 className="size-3.5 shrink-0 text-text-secondary" />
+                  <span className="min-w-0 truncate" title={t.name}>{t.name}</span>
                   {t.schema !== 'public' && (
                     <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-text-tertiary">{t.schema}</span>
                   )}
@@ -116,8 +116,8 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
                 {open &&
                   t.columns.map((c) => (
                     <div key={c.name} className="flex items-center gap-2 py-1 pl-9 pr-2 text-[13px]">
-                      <span className="text-text-primary">{c.name}</span>
-                      <span className="text-xs text-text-tertiary">{c.type}</span>
+                      <span className="min-w-0 truncate text-text-primary" title={c.name}>{c.name}</span>
+                      <span className="shrink-0 text-xs text-text-tertiary">{c.type}</span>
                     </div>
                   ))}
               </div>

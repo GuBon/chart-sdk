@@ -38,11 +38,11 @@ export function DatasourceTable({ datasources, testingId, onTest, onEdit, onDele
         <tbody>
           {datasources.map((ds) => (
             <tr key={ds.id} className="h-[52px] border-t border-border">
-              <td className="pl-5 text-[13px] font-medium text-text-primary">{ds.name}</td>
-              <td className="text-[13px] text-text-secondary">
+              <td className="truncate pl-5 text-[13px] font-medium text-text-primary" title={ds.name}>{ds.name}</td>
+              <td className="truncate text-[13px] text-text-secondary" title={`${ds.host} : ${ds.port}`}>
                 {ds.host} : {ds.port}
               </td>
-              <td className="text-[13px] text-text-secondary">{ds.databaseName}</td>
+              <td className="truncate text-[13px] text-text-secondary" title={ds.databaseName}>{ds.databaseName}</td>
               <td>
                 <StatusDot ok={ds.lastTestOk} />
               </td>
