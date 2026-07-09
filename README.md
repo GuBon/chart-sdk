@@ -39,6 +39,16 @@ npm run build:sdk           # sdk.js 번들
 cd server && gradle bootRun   # 또는 IntelliJ 임포트
 ```
 
+## 테스트
+
+```bash
+npm run test:unit             # 워크스페이스 단위 테스트(admin + sdk)
+npm run test:e2e              # 프론트 E2E (Playwright + MSW, 자체 dev 서버 :3100)
+cd server && ./gradlew test   # 서버 단위·통합 (통합은 실 DB 필요)
+```
+
+계층·수치·라이브 스위프 절차는 [`docs/테스트_전략.md`](docs/테스트_전략.md)가 단일 관리한다.
+
 ## Docker PostgreSQL
 
 로컬 PostgreSQL이 5432를 쓰는 환경을 피하기 위해 Docker DB는 `localhost:5433`으로 노출한다.
