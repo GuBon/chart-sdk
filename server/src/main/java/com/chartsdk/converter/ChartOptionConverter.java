@@ -193,30 +193,39 @@ public class ChartOptionConverter {
         Map<String, Object> barCfg = map(opt.get("bar"));
         Map<String, Object> lineCfg = map(opt.get("line"));
         Map<String, Object> scatterCfg = map(opt.get("scatter"));
+        Map<String, Object> seriesTypes = map(opt.get("seriesTypes")); // 혼합(combo): 시리즈명 → "bar"/"line"
         boolean stacked = "stacked".equals(variant) || "stackedArea".equals(variant);
         boolean secondAxis = !horizontal && !scatter && Boolean.TRUE.equals(map(opt.get("yAxis")).get("secondAxis"));
         boolean individual = "individual".equals(string(opt.get("colorMode"), "palette"));
         int bubbleIdx = scatter && "bubble".equals(variant) ? columnIndex(columns, string(scatterCfg.get("bubbleField"), null)) : -1;
 
-        // 100% 정규화(누적 막대): 카테고리별 합으로 나눔
-        double[] totals = (stacked && Boolean.TRUE.equals(barCfg.get("normalize"))) ? columnTotals(columns, dataRows) : null;
+        // 100% 정규화(누적 막대): 카테고리(행)별 합으로 나눠 각 카테고리 스택이 100%가 되게 한다.
+        double[] catTotals = (stacked && Boolean.TRUE.equals(barCfg.get("normalize"))) ? rowTotals(columns, dataRows) : null;
 
         List<Map<String, Object>> series = new ArrayList<>();
         for (int c = 1; c < columns.size(); c++) {
             int col = c;
             Map<String, Object> s = new LinkedHashMap<>();
-            s.put("type", chartType);
-            s.put("name", columns.get(c).get("name"));
+            String colName = string(columns.get(c).get("name"), "");
+            // 혼합(combo): 시리즈별 type 오버라이드(bar/line). 분포는 오버라이드 없음.
+            String seriesType = chartType;
+            if (!scatter) {
+                Object override = seriesTypes.get(colName);
+                if ("bar".equals(override) || "line".equals(override)) seriesType = (String) override;
+            }
+            s.put("type", seriesType);
+            s.put("name", colName);
 
             List<Object> data = new ArrayList<>();
-            for (List<Object> r : dataRows) {
+            for (int ri = 0; ri < dataRows.size(); ri++) {
+                List<Object> r = dataRows.get(ri);
                 Object y = r.size() > col ? r.get(col) : null;
                 if (scatter) {
                     Object x = r.isEmpty() ? null : r.get(0);
                     if (bubbleIdx >= 0 && r.size() > bubbleIdx) data.add(java.util.Arrays.asList(x, y, r.get(bubbleIdx)));
                     else data.add(java.util.Arrays.asList(x, y));
-                } else if (totals != null && y instanceof Number n && totals[col] != 0) {
-                    data.add(n.doubleValue() / totals[col]);
+                } else if (catTotals != null && y instanceof Number n && catTotals[ri] != 0) {
+                    data.add(n.doubleValue() / catTotals[ri]);
                 } else {
                     data.add(y);
                 }
@@ -226,15 +235,15 @@ public class ChartOptionConverter {
             if (stacked) s.put("stack", "total");
             applyVariantDelta(s, variant, lineCfg);
             applyLabel(s, opt);
-            if ("bar".equals(chartType)) applyBar(s, barCfg);
-            if ("line".equals(chartType)) applyLine(s, lineCfg);
+            if ("bar".equals(seriesType)) applyBar(s, barCfg);
+            if ("line".equals(seriesType)) applyLine(s, lineCfg);
             if (scatter && bubbleIdx < 0 && scatterCfg.get("symbolSize") != null) s.put("symbolSize", scatterCfg.get("symbolSize"));
             if (scatter && scatterCfg.get("symbol") != null) s.put("symbol", scatterCfg.get("symbol"));
             if (individual) {
-                Object color = ColorResolver.pickColor(opt, string(columns.get(c).get("name"), ""), c - 1);
-                ColorResolver.applySeriesColor(s, chartType, color);
+                Object color = ColorResolver.pickColor(opt, colName, c - 1);
+                ColorResolver.applySeriesColor(s, seriesType, color);
             } else {
-                ColorResolver.applySeriesColor(s, chartType, ColorResolver.paletteColor(opt, c - 1));
+                ColorResolver.applySeriesColor(s, seriesType, ColorResolver.paletteColor(opt, c - 1));
             }
             if (secondAxis && c >= 2) s.put("yAxisIndex", 1);
             series.add(s);
@@ -322,11 +331,13 @@ public class ChartOptionConverter {
     }
 
     // ── 색 매핑 ──────────────────────────────────────────
-    private double[] columnTotals(List<Map<String, Object>> columns, List<List<Object>> rows) {
-        double[] totals = new double[columns.size()];
-        for (List<Object> r : rows) {
+    /** 카테고리(행)별 값 시리즈 합 — 100% 정규화 분모. */
+    private double[] rowTotals(List<Map<String, Object>> columns, List<List<Object>> rows) {
+        double[] totals = new double[rows.size()];
+        for (int ri = 0; ri < rows.size(); ri++) {
+            List<Object> r = rows.get(ri);
             for (int c = 1; c < columns.size(); c++) {
-                if (r.size() > c && r.get(c) instanceof Number n) totals[c] += n.doubleValue();
+                if (r.size() > c && r.get(c) instanceof Number n) totals[ri] += n.doubleValue();
             }
         }
         return totals;

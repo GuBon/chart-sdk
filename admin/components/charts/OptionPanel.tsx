@@ -234,6 +234,35 @@ function Control({
     );
   }
 
+  // 혼합(combo) — 결과 시리즈별 막대/선 지정. 실행 후 결과 컬럼[1..] 이 있을 때만 활성.
+  if (def.control === 'seriesTypes') {
+    const seriesCols = columns.slice(1);
+    if (!hasResult || seriesCols.length === 0) {
+      return (
+        <Labeled label={def.label} stack>
+          <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>
+        </Labeled>
+      );
+    }
+    const map = value && typeof value === 'object' ? (value as Record<string, string>) : {};
+    return (
+      <Labeled label={def.label} stack>
+        <div className="flex flex-col gap-2">
+          {seriesCols.map((col) => (
+            <div key={col.name} data-testid={`series-type-${col.name}`} className="flex items-center justify-between gap-2">
+              <span className="min-w-0 flex-1 truncate text-[13px] text-text-secondary">{col.name}</span>
+              <Segmented
+                value={String(map[col.name] ?? chartType)}
+                options={[{ value: 'bar', label: '막대' }, { value: 'line', label: '선' }]}
+                onChange={(v) => onChange({ ...map, [col.name]: v })}
+              />
+            </div>
+          ))}
+        </div>
+      </Labeled>
+    );
+  }
+
   // 라벨 + 우측 컨트롤
   let control: React.ReactNode = null;
   switch (def.control) {

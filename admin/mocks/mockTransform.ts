@@ -230,21 +230,32 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   opt.grid = { containLabel: o.grid?.containLabel !== false };
 
   const stack = variant === 'stacked' || variant === 'stackedArea' ? 'total' : undefined;
+  // 100% 정규화(누적 막대) — 카테고리(행)별 합으로 나눠 각 카테고리 스택이 1이 되게 (서버 변환기와 동일).
+  const normalize = chartType === 'bar' && variant === 'stacked' && !!o.bar?.normalize;
+  const rowTotals = normalize
+    ? result.rows.map((r) => seriesCols.reduce((sum, _c, si) => sum + (Number(r[1 + si]) || 0), 0))
+    : null;
+  // 혼합(combo): 시리즈별 type 오버라이드 (서버 변환기와 동일).
+  const seriesTypeMap: Record<string, any> = o.seriesTypes && typeof o.seriesTypes === 'object' ? o.seriesTypes : {};
   opt.series = seriesCols.map((c, s) => {
+    const seriesType = seriesTypeMap[c.name] === 'bar' || seriesTypeMap[c.name] === 'line' ? seriesTypeMap[c.name] : chartType;
     const base: Record<string, any> = {
-      type: chartType,
+      type: seriesType,
       name: c.name,
-      data: result.rows.map((r) => Number(r[1 + s]) || 0),
+      data: result.rows.map((r, ri) => {
+        const v = Number(r[1 + s]) || 0;
+        return rowTotals && rowTotals[ri] ? v / rowTotals[ri] : v;
+      }),
       label,
       stack,
       color: paletteColor(palette, s),
       itemStyle: { color: paletteColor(palette, s) },
     };
-    if (chartType === 'bar') {
+    if (seriesType === 'bar') {
       if (o.bar?.borderRadius) base.itemStyle = { ...base.itemStyle, borderRadius: o.bar.borderRadius };
       if (o.bar?.showBackground) base.showBackground = true;
     }
-    if (chartType === 'line') {
+    if (seriesType === 'line') {
       base.smooth = variant === 'smooth';
       base.step = variant === 'step' ? 'end' : undefined;
       if (variant === 'area' || variant === 'stackedArea') base.areaStyle = { opacity: o.line?.areaOpacity ?? 0.3 };

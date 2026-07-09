@@ -40,6 +40,7 @@ export type Control =
   | 'palette'    // 팔레트 프리셋 선택
   | 'colorMap'   // 항목별 컬러 피커 (실행 후 동적)
   | 'columnRef'  // 결과 컬럼 참조 셀렉트 (버블 크기 등, 실행 후 동적)
+  | 'seriesTypes' // 시리즈별 막대/선 지정 (혼합 차트, 실행 후 동적)
   | 'button';    // 액션 (저장 안 됨)
 
 /** 옵션 값 저장 위치 */
@@ -475,6 +476,14 @@ export const OPTION_REGISTRY: OptionDef[] = [
     min: 0, max: 1, step: 0.1,
     showIf: (o) => o.variant === 'area' || o.variant === 'stackedArea',
     echarts: 'series.areaStyle.opacity',
+  },
+
+  // ── 혼합 (combo) — 시리즈별 막대/선 (bar·line 공용) ──
+  {
+    key: 'seriesTypes', zone: 'type', section: '혼합', label: '시리즈 종류',
+    control: 'seriesTypes', appliesTo: ['bar', 'line'], default: {},
+    echarts: '@seriesTypes',
+    help: '실행 후 시리즈별로 막대/선을 지정해 혼합 차트를 만든다(미지정=대분류 종류)',
   },
 
   // ── 원형 ──
