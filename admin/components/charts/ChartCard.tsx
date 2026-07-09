@@ -49,7 +49,7 @@ export function ChartCard({
 
       <div className="flex flex-col gap-2.5 px-3.5 pb-3.5 pt-3">
         <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{chart.name}</p>
+          <p data-testid="chart-card-name" className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{chart.name}</p>
           <span className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-muted pl-1.5 pr-2 text-xs font-medium text-text-primary">
             <Icon className="size-3" />
             {label}

@@ -218,6 +218,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               <span className="text-[13px] text-text-secondary">묶기</span>
               <div className="w-28">
                 <Select
+                  aria-label="X축 묶기"
                   value={config.xAxisBucket ?? 'month'}
                   onChange={(e) => patch({ xAxisBucket: e.target.value as BuilderConfig['xAxisBucket'] })}
                   options={BUCKET_CHOICES}
@@ -263,10 +264,10 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
             {config.where.map((w, i) => (
               <div key={i} className="flex items-center gap-2">
                 <div className="w-40">
-                  <Select value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
+                  <Select aria-label="조건 컬럼" value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
                 </div>
                 <div className="w-32">
-                  <Select value={w.op} onChange={(e) => changeWhereOp(i, e.target.value as WhereCond['op'])} options={OP_CHOICES} />
+                  <Select aria-label="조건 연산자" value={w.op} onChange={(e) => changeWhereOp(i, e.target.value as WhereCond['op'])} options={OP_CHOICES} />
                 </div>
                 <WhereValueControl cond={w} onChange={(value) => setW(i, { value })} />
                 <button type="button" aria-label="조건 제거" onClick={() => removeW(i)} className="text-text-tertiary hover:text-danger">
@@ -283,6 +284,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
         <Row label="정렬">
           <div className="w-40">
             <Select
+              aria-label="정렬 기준"
               value={config.orderBy?.target ?? ''}
               onChange={(e) => patch({ orderBy: e.target.value ? { target: e.target.value, direction: config.orderBy?.direction ?? 'desc' } : null })}
               options={orderTargets(config)}
@@ -292,6 +294,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           {config.orderBy && (
             <div className="w-28">
               <Select
+                aria-label="정렬 방향"
                 value={config.orderBy.direction}
                 onChange={(e) => patch({ orderBy: { target: config.orderBy!.target, direction: e.target.value as 'asc' | 'desc' } })}
                 options={[{ value: 'asc', label: '오름차순' }, { value: 'desc', label: '내림차순' }]}
