@@ -322,10 +322,11 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByRole('button', { name: '취소', exact: true }).click();
     await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeHidden();
     await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('1.public.sales');
-    // 다시 클릭 → 변경 → base 교체
+    // 다시 클릭 → 변경 → base 교체 + 구성(X축) 초기화
     await page.locator('aside').first().getByRole('button', { name: /users/ }).click();
     await page.getByRole('button', { name: '변경', exact: true }).click();
     await expect(page.getByRole('combobox', { name: '테이블' })).toHaveValue('1.public.users');
+    await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue(''); // 기준 변경 시 구성 초기화
   });
 
   test('미저장 변경 상태에서 목록 이동은 이탈확인 모달을 거친다', async ({ page }) => {
@@ -334,5 +335,222 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeVisible();
     await page.getByRole('button', { name: '계속 편집' }).click();
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeHidden();
+  });
+});
+
+// 신규 진입 + base(sales) 선택까지 공통.
+async function newSalesBase(page: import('@playwright/test').Page) {
+  await page.goto('/charts/new');
+  await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+  await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+}
+
+test.describe('S2 노코드 구성 — 날짜 묶기·조건·정렬·실행', () => {
+  test('날짜형 X축을 고르면 묶기 셀렉트가 기본 월로 나타난다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('date');
+    await expect(page.getByRole('combobox', { name: 'X축 묶기' })).toHaveValue('month');
+  });
+
+  test('묶기를 주로 바꾸면 생성 SQL에 DATE_TRUNC(week)가 반영된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('date');
+    await page.getByRole('combobox', { name: 'X축 묶기' }).selectOption('week');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/DATE_TRUNC\('week', "date"\)/)).toBeVisible();
+  });
+
+  test('조건 연산자에 따라 값 입력 컨트롤이 분기된다(in·between·is_null)', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('button', { name: '+ 조건 추가' }).click();
+    // 기본 eq → 단일 값
+    await expect(page.getByPlaceholder('값', { exact: true })).toBeVisible();
+    // in → 콤마 목록 1개
+    await page.getByRole('combobox', { name: '조건 연산자' }).selectOption('in');
+    await expect(page.getByPlaceholder('값1, 값2, 값3')).toBeVisible();
+    // between → 시작·끝 2개
+    await page.getByRole('combobox', { name: '조건 연산자' }).selectOption('between');
+    await expect(page.getByPlaceholder('시작')).toBeVisible();
+    await expect(page.getByPlaceholder('끝')).toBeVisible();
+    // is_null → 값 입력 없음
+    await page.getByRole('combobox', { name: '조건 연산자' }).selectOption('is_null');
+    await expect(page.getByPlaceholder('값1, 값2, 값3')).toHaveCount(0);
+    await expect(page.getByPlaceholder('시작')).toHaveCount(0);
+  });
+
+  test('in 조건으로 실행하면 SQL에 IN 절이 생성된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 조건 추가' }).click();
+    await page.getByRole('combobox', { name: '조건 연산자' }).selectOption('in');
+    await page.getByPlaceholder('값1, 값2, 값3').fill('의류, 식품');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/IN \(\?, \?\)/)).toBeVisible();
+  });
+
+  test('조건 제거 버튼으로 조건 행이 사라진다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('button', { name: '+ 조건 추가' }).click();
+    await expect(page.getByRole('combobox', { name: '조건 연산자' })).toBeVisible();
+    await page.getByRole('button', { name: '조건 제거' }).click();
+    await expect(page.getByRole('combobox', { name: '조건 연산자' })).toHaveCount(0);
+  });
+
+  test('정렬 기준·방향을 지정하면 생성 SQL에 ORDER BY가 들어간다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('combobox', { name: '정렬 기준' }).selectOption('x');
+    await page.getByRole('combobox', { name: '정렬 방향' }).selectOption('asc');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/ORDER BY 1 ASC/)).toBeVisible();
+  });
+
+  test('Ctrl+Enter로 실행된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('combobox', { name: 'X축' }).focus();
+    await page.keyboard.press('Control+Enter');
+    await expect(page.getByText('의류')).toBeVisible();
+  });
+
+  test('조인 종류 INNER 반영 후, 조인을 제거하면 표본 추출이 다시 활성화된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('button', { name: '+ 조인 추가' }).click();
+    await page.getByRole('combobox', { name: '조인 테이블' }).selectOption('1.public.orders');
+    await page.getByRole('combobox', { name: '조인 종류' }).selectOption('inner');
+    await page.getByRole('combobox', { name: '조인 기준 컬럼' }).selectOption('sales.id');
+    await page.getByRole('combobox', { name: '조인 대상 컬럼' }).selectOption('orders.sale_id');
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('sales.category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.getByText(/INNER JOIN "orders"/)).toBeVisible();
+    // 조인 제거 → 표본 스위치 재활성
+    await page.getByRole('button', { name: '조인 제거' }).click();
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toBeEnabled();
+  });
+});
+
+test.describe('S2 차트 유형 제약', () => {
+  test('원형은 시리즈를 1개로 제한한다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await expect(page.locator('#builder-y-column-1')).toBeVisible();
+    // 원형 전환 → 시리즈 1개로 정규화 + 추가 버튼 비활성
+    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await expect(page.locator('#builder-y-column-1')).toHaveCount(0);
+    await expect(page.locator('#builder-y-column-0')).toBeVisible();
+    await expect(page.getByRole('button', { name: '+ 시리즈 추가' })).toBeDisabled();
+  });
+
+  test('분포로 전환하면 집계는 원본값뿐이고 표본·날짜 묶기 컨트롤이 사라진다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('date');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    // 전환 전: 날짜 묶기·표본 스위치 존재
+    await expect(page.getByRole('combobox', { name: 'X축 묶기' })).toBeVisible();
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toBeVisible();
+    // 분포 전환
+    await page.getByRole('button', { name: '분포', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: 'X축 묶기' })).toHaveCount(0);
+    await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveCount(0);
+    // 집계 셀렉트는 원본값 1개뿐
+    await expect(page.locator('#builder-y-agg-0 option')).toHaveCount(1);
+  });
+
+  test('분포 전환은 실행 결과를 무효화해 저장이 비활성화된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
+    await page.getByPlaceholder('차트 이름').fill('분포전환');
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+    // 분포 전환 → 구성이 바뀌어 결과 무효화
+    await page.getByRole('button', { name: '분포', exact: true }).click();
+    await expect(page.getByText('실행하면 미리보기가 표시됩니다.')).toBeVisible();
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
+  });
+});
+
+test.describe('S2 이탈 모달·옵션 검색', () => {
+  test('이탈확인에서 저장 안 함을 누르면 목록으로 이동한다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '목록' }).click();
+    await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeVisible();
+    await page.getByRole('button', { name: '저장 안 함' }).click();
+    await expect(page.getByText('새 차트 만들기')).toBeVisible(); // 목록 도착
+  });
+
+  test('저장 후 나가기는 실행 결과가 있어야 활성화되고, 저장 후 목록에 반영된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByPlaceholder('차트 이름').fill('이탈저장차트');
+    // 미실행 → 저장 후 나가기 비활성
+    await page.getByRole('button', { name: '목록' }).click();
+    await expect(page.getByRole('button', { name: '저장 후 나가기' })).toBeDisabled();
+    await page.getByRole('button', { name: '계속 편집' }).click();
+    // 실행 후 → 저장 후 나가기 활성 → 저장 + 이동
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
+    await page.getByRole('button', { name: '목록' }).click();
+    await page.getByRole('button', { name: '저장 후 나가기' }).click();
+    await expect(page.getByText('이탈저장차트', { exact: true })).toBeVisible();
+  });
+
+  test('옵션 검색으로 옵션 항목이 필터되고 지우면 복원된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('의류')).toBeVisible();
+    // '제목' 검색 → 차트 제목은 남고 색 모드는 사라짐
+    await page.locator('#option-search').fill('제목');
+    await expect(page.getByText('차트 제목', { exact: true })).toBeVisible();
+    await expect(page.getByText('색 모드', { exact: true })).toBeHidden();
+    // 지우면 복원
+    await page.locator('#option-search').fill('');
+    await expect(page.getByText('색 모드', { exact: true })).toBeVisible();
+  });
+});
+
+test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => {
+  test('누적 variant를 고르면 100% 정규화 토글이 나타나고 미리보기가 유지된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    // 기본 variant → 100% 정규화 숨김(showIf: variant==='stacked')
+    await expect(page.getByText('100% 정규화')).toBeHidden();
+    // 누적 선택 → 토글 노출 → 켜도 미리보기 유지
+    await page.getByRole('button', { name: '누적', exact: true }).click();
+    await expect(page.getByText('100% 정규화')).toBeVisible();
+    await page.getByRole('switch', { name: '100% 정규화' }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('시리즈 종류에서 한 시리즈를 선으로 바꾸면 혼합 차트가 렌더된다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click(); // 시리즈 sum_id
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    // 실행 후 '시리즈 종류' 컨트롤 노출 → sum_id 시리즈를 선으로
+    await expect(page.getByText('시리즈 종류')).toBeVisible();
+    await page.getByTestId('series-type-sum_id').getByRole('button', { name: '선', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 });

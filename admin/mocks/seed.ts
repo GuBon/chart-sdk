@@ -2,11 +2,22 @@
 import type { Chart, ChartSummary, Datasource, SchemaTable, User, UserToken } from '@/lib/api/types';
 
 export const charts: ChartSummary[] = [
+  // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
   { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-10T09:30:00Z' },
   { id: 13, name: '일별 방문자', description: '서비스 일별 방문자(UV) 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-09T14:00:00Z' },
   { id: 14, name: '카테고리별 판매', description: '상품 카테고리별 판매량 비교', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-08T11:20:00Z' },
   { id: 15, name: '분기별 이익', description: null, chartType: 'pie', datasourceId: 2, updatedAt: '2026-06-05T16:45:00Z' },
   { id: 16, name: '시간대별 트래픽', description: '시간대별 API 요청 수', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-03T08:10:00Z' },
+  // 추가 8개(5월) — 페이지네이션(총 13 = 12+1)·종류/데이터소스 필터·정렬 검증용. 전부 6월보다 과거라 2페이지로 밀리는 건 #24 하나뿐.
+  // '가격대별 분포'는 name_asc 정렬에서 결정적 첫 항목(ㄱ 초성). scatter 2개(17·18)로 종류 필터 '분포' 검증.
+  { id: 17, name: '가격대별 분포', description: '상품 가격대 산포', chartType: 'scatter', datasourceId: 1, updatedAt: '2026-05-28T09:00:00Z' },
+  { id: 18, name: '지역별 고객 분포', description: '지역별 고객 산포', chartType: 'scatter', datasourceId: 2, updatedAt: '2026-05-25T09:00:00Z' },
+  { id: 19, name: '부서별 지출', description: '부서별 지출 합계', chartType: 'bar', datasourceId: 1, updatedAt: '2026-05-22T09:00:00Z' },
+  { id: 20, name: '채널별 전환율', description: '유입 채널별 전환', chartType: 'line', datasourceId: 2, updatedAt: '2026-05-19T09:00:00Z' },
+  { id: 21, name: '등급별 회원', description: '회원 등급 분포', chartType: 'pie', datasourceId: 2, updatedAt: '2026-05-16T09:00:00Z' },
+  { id: 22, name: '요일별 주문', description: '요일별 주문 수', chartType: 'bar', datasourceId: 1, updatedAt: '2026-05-13T09:00:00Z' },
+  { id: 23, name: '상품별 재고', description: '상품별 재고량', chartType: 'bar', datasourceId: 2, updatedAt: '2026-05-10T09:00:00Z' },
+  { id: 24, name: '월별 순이익', description: '월별 순이익 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-05-05T09:00:00Z' },
 ];
 
 export const datasources: Datasource[] = [
