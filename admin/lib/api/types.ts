@@ -1,14 +1,16 @@
-// API 계약서 v1.4 도메인 타입. 서버 응답 형태와 1:1.
+import type { SamplingMetadata, SamplingMode } from '@chartsdk/chart-options/sampling';
+
+// API 계약서 v2.5 도메인 타입. 서버 응답 형태와 1:1.
 // options JSONB 키는 chart-options/optionRegistry.ts(SSOT)를 따른다 — 여기선 느슨한 맵으로 둔다.
 
-export type ChartType = 'bar' | 'line' | 'pie' | 'scatter';
+export type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
 export type DefineMode = 'builder' | 'sql';
 export type RefreshMode = 'live' | 'ttl' | 'manual';
 
 export type ChartOptions = Record<string, unknown>;
 
 // 노코드 빌더 (SQL 생성규칙 2장)
-export type AggType = 'sum' | 'avg' | 'stddev' | 'count' | 'count_distinct' | 'min' | 'max' | 'none';
+export type AggType = 'sum' | 'avg' | 'stddev' | 'variance' | 'count' | 'count_distinct' | 'min' | 'max' | 'none';
 export type WhereOp =
   | 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'
   | 'contains' | 'starts_with' | 'in' | 'between' | 'is_null' | 'is_not_null';
@@ -30,9 +32,16 @@ export interface OrderBy {
   direction: 'asc' | 'desc';
 }
 
-/** 표본 추출 (생성규칙 3C) — 대용량 테이블 일부만 스캔해 근사 집계. method 는 SYSTEM 고정(블록 단위, 전체 스캔 회피). */
+/**
+ * 표본 설정 (생성규칙 3C v5) — 무편향 표본은 절대 갯수(size)가 추정 정밀도를 결정한다.
+ * auto: 서버가 방식·크기 결정 / manual: size(갯수) 지정. rate·method 는 레거시 SYSTEM 핀 전용.
+ */
 export interface SampleConfig {
-  rate: number; // 표본 비율(%) 1~100
+  mode?: SamplingMode; // 'auto'(서버 결정) | 'manual'(size 지정). legacy {rate}는 manual로 승격
+  size?: number; // 수동 표본 크기(행) 1000~50000
+  rate?: number; // 레거시/SYSTEM 핀 전용(%). 서버는 있으면 SYSTEM 비율로 사용
+  method?: 'auto' | 'system'; // 'auto'(기본, INDEX_RANDOM+폴백) | 'system'(레거시 블록 표본 강제)
+  seed?: number; // legacy 미지정은 공용 기본 seed로 승격
 }
 
 /**
@@ -64,7 +73,7 @@ export interface BuilderConfig {
   where: WhereCond[];
   orderBy: OrderBy | null;
   limit?: number;
-  sample?: SampleConfig | null; // 집계 모드 전용. 지정 시 FROM 에 TABLESAMPLE SYSTEM 주입. 조인과 동시 사용 불가(11장)
+  sample?: SampleConfig | null; // 집계 모드 전용. 기본은 개수 기반 INDEX_RANDOM, 불가 시 SYSTEM. 조인과 동시 사용 불가(11장)
 }
 
 /** S1 목록 카드 */
@@ -168,6 +177,7 @@ export interface SchemaTable {
   datasourceId: number;
   schema: string;
   name: string;
+  estimatedRowCount?: number; // pg_class.reltuples 기반 계획용 추정치 — 표본 계획·전량 폴백·UI 안내에만 사용
   columns: { name: string; type: string }[];
 }
 
@@ -180,8 +190,9 @@ export interface QueryResult {
   elapsedMs: number;
   generatedSql?: string;
   option?: ChartOptions; // run-builder(aggregate) · preview 에서 동봉
+  sampling?: SamplingMetadata; // 정식 표본 메타데이터 계약
   approximate?: boolean; // 표본 추출로 계산된 근사 결과
-  sampleRate?: number; // 사용된 표본 비율(%) — approximate 일 때만
+  sampleRate?: number; // 레거시 하위 호환 별칭 — 신규 코드는 sampling.rate 사용
 }
 
 /** 임베드 데이터(SDK 가 받는 형태) */
@@ -190,6 +201,9 @@ export interface ChartDataResponse {
   computedAt: string;
   rowCount?: number;
   truncated?: boolean;
+  sampling?: SamplingMetadata;
+  approximate?: boolean;
+  sampleRate?: number;
   option: ChartOptions;
 }
 

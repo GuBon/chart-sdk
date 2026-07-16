@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BarChart3, ChevronDown, ChevronRight, LineChart, PieChart, ScatterChart, Search } from 'lucide-react';
+import { BarChart3, CandlestickChart, ChevronDown, ChevronRight, Grid3x3, LineChart, MapIcon, MapPin, PieChart, ScatterChart, Search } from 'lucide-react';
 import {
   defaultOf,
   getPath,
@@ -33,8 +33,8 @@ interface Props {
 
 const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 축', type: '대분류 전용' };
 const ZONE_ORDER = ['common', 'axis', 'type'];
-const TYPE_ICONS: Record<string, typeof BarChart3> = { bar: BarChart3, line: LineChart, pie: PieChart, scatter: ScatterChart };
-const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포' };
+const TYPE_ICONS: Record<string, typeof BarChart3> = { bar: BarChart3, line: LineChart, pie: PieChart, scatter: ScatterChart, boxplot: CandlestickChart, heatmap: Grid3x3, map: MapIcon, geoscatter: MapPin };
+const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포', boxplot: '상자수염', heatmap: '히트맵', map: '지도', geoscatter: '지도 포인트' };
 const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
 export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions }: Props) {
@@ -192,28 +192,41 @@ function Control({
 
   // 전체폭 컨트롤
   if (def.control === 'iconGrid') {
+    const choices = def.choices ?? [];
+    // 그룹 없는 유형은 평평한 그리드, group 지정(예: GEO)은 소구분 헤더 아래로 (화면설계 S2 옵션 패널)
+    const groups = [...new Set(choices.filter((c) => c.group).map((c) => c.group!))];
+    const typeButton = (c: NonNullable<OptionDef['choices']>[number]) => {
+      const Icon = TYPE_ICONS[String(c.value)] ?? BarChart3;
+      const active = c.value === value;
+      return (
+        <button
+          key={c.value}
+          type="button"
+          aria-label={c.label}
+          disabled={false}
+          onClick={() => onChangeType(c.value as MajorType)}
+          className={cn(
+            'flex flex-col items-center gap-1.5 rounded-md border py-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+            active ? 'border-primary bg-muted text-text-primary' : 'border-border text-text-secondary hover:bg-muted',
+          )}
+        >
+          <Icon className="size-4" />
+          {c.label}
+        </button>
+      );
+    };
     return (
-      <div className="grid grid-cols-4 gap-2">
-        {(def.choices ?? []).map((c) => {
-          const Icon = TYPE_ICONS[String(c.value)] ?? BarChart3;
-          const active = c.value === value;
-          return (
-            <button
-              key={c.value}
-              type="button"
-              aria-label={c.label}
-              disabled={false}
-              onClick={() => onChangeType(c.value as MajorType)}
-              className={cn(
-                'flex flex-col items-center gap-1.5 rounded-md border py-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                active ? 'border-primary bg-muted text-text-primary' : 'border-border text-text-secondary hover:bg-muted',
-              )}
-            >
-              <Icon className="size-4" />
-              {c.label}
-            </button>
-          );
-        })}
+      <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-4 gap-2">{choices.filter((c) => !c.group).map(typeButton)}</div>
+        {groups.map((g) => (
+          <div key={g} className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 pt-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">{g}</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <div className="grid grid-cols-4 gap-2">{choices.filter((c) => c.group === g).map(typeButton)}</div>
+          </div>
+        ))}
       </div>
     );
   }

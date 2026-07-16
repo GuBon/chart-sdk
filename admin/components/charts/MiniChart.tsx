@@ -26,7 +26,8 @@ function toThumbnailOption(option: ChartOptions): ChartOptions {
   delete next.tooltip;
   delete next.toolbox;
   delete next.dataZoom;
-  delete next.visualMap;
+  // visualMap 은 삭제하지 않는다 — heatmap·map 의 색 인코딩이 사라진다. 위젯만 숨긴다(show:false).
+  setVisualMapHidden(next.visualMap);
   delete next.graphic;
   next.grid = {
     left: 4,
@@ -41,6 +42,15 @@ function toThumbnailOption(option: ChartOptions): ChartOptions {
   hideAxis(next.yAxis);
   stripSeriesDecoration(next.series);
   return next;
+}
+
+function setVisualMapHidden(vm: unknown) {
+  if (Array.isArray(vm)) {
+    vm.forEach(setVisualMapHidden);
+    return;
+  }
+  if (!vm || typeof vm !== 'object') return;
+  (vm as Record<string, unknown>).show = false;
 }
 
 function stripAxisName(axis: unknown) {

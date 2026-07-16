@@ -20,6 +20,10 @@ const TYPE_OPTIONS = [
   { value: 'line', label: '선' },
   { value: 'pie', label: '원형' },
   { value: 'scatter', label: '분포' },
+  { value: 'boxplot', label: '상자수염' },
+  { value: 'heatmap', label: '히트맵' },
+  { value: 'map', label: '지도' },
+  { value: 'geoscatter', label: '지도 포인트' },
 ];
 
 const SORT_OPTIONS = [
