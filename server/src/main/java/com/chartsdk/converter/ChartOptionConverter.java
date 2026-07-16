@@ -16,10 +16,24 @@ import java.util.Map;
  */
 @Service
 public class ChartOptionConverter {
+    // 레이아웃 예약 높이(px) — 제목·범례·visualMap 이 같은 모서리에 쌓일 때 서로 겹치지 않도록 grid 여백을 가산한다.
+    // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않으므로(각자 독립 좌표) 조립자가 조정한다. mock 변환기와 값 일치 필수.
+    private static final int TITLE_H = 26;
+    private static final int LEGEND_H = 24;
+    private static final int VISUALMAP_H = 36;
+
     private final OptionDefaults defaults;
 
     public ChartOptionConverter(OptionDefaults defaults) {
         this.defaults = defaults;
+    }
+
+    private static boolean hasTitle(Map<String, Object> opt) {
+        return !string(opt.get("title"), "").isEmpty();
+    }
+
+    private static boolean titleAtBottom(Map<String, Object> opt) {
+        return hasTitle(opt) && "bottom".equals(string(opt.get("titleV"), "top"));
     }
 
     public Map<String, Object> convert(QueryRows rows, String chartType, Map<String, Object> options) {
@@ -32,10 +46,19 @@ public class ChartOptionConverter {
         for (List<Object> r : dataRows) categories.add(r.isEmpty() ? null : r.get(0));
 
         Map<String, Object> o = new LinkedHashMap<>();
+        // 배경: 임베드가 어떤 호스트 페이지(다크 포함) 위에서도 자기완결적으로 보이도록 불투명 기본(흰색).
+        // 저장된 옵션에 backgroundColor 가 있으면 그 값을 쓴다(차트별 설정). SDK 는 data-chart-background 로 재정의 가능.
+        o.put("backgroundColor", string(opt.get("backgroundColor"), "#ffffff"));
         applyTitle(o, opt);
         applyColor(o, opt);
         applyLegend(o, opt);
         applyTooltip(o, opt, chartType);
+
+        // 신규 유형은 직교 폴스루를 타지 않고 전용 조립(축·시리즈 형태가 다르다).
+        if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows); return o; }
+        if ("heatmap".equals(chartType)) { buildHeatmap(o, opt, columns, dataRows); return o; }
+        if ("map".equals(chartType)) { buildMap(o, opt, dataRows); return o; }
+        if ("geoscatter".equals(chartType)) { buildGeoScatter(o, opt, columns, dataRows); return o; }
 
         if ("pie".equals(chartType)) {
             o.put("series", List.of(buildPieSeries(opt, variant, dataRows)));
@@ -88,24 +111,253 @@ public class ChartOptionConverter {
         Map<String, Object> l = new LinkedHashMap<>();
         l.put("show", legend.getOrDefault("show", true));
         String position = string(legend.get("position"), "bottom");
+        // 제목이 같은 모서리(상/하)에 있으면 범례를 제목 다음 줄로 밀어 겹침 방지(규칙 1). 좌/우 범례는 제목과 축이 달라 무관.
+        boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
+        boolean titleBottom = titleAtBottom(opt);
         switch (position) {
-            case "top" -> { l.put("top", 0); l.put("orient", "horizontal"); }
+            case "top" -> { l.put("top", titleTop ? TITLE_H : 0); l.put("orient", "horizontal"); }
             case "left" -> { l.put("left", 0); l.put("orient", "vertical"); }
             case "right" -> { l.put("right", 0); l.put("orient", "vertical"); }
-            default -> { l.put("bottom", 0); l.put("orient", "horizontal"); }
+            default -> { l.put("bottom", titleBottom ? TITLE_H : 0); l.put("orient", "horizontal"); }
         }
-        if (Boolean.TRUE.equals(legend.get("scroll"))) l.put("type", "scroll");
+        // 상·하 범례는 항상 scroll 로 단일행을 보장해야 LEGEND_H=24 예약 높이가 실제 레이아웃과 일치한다.
+        // 좌·우는 기존 T2 토글을 존중한다.
+        boolean horizontal = "top".equals(position) || "bottom".equals(position);
+        if (horizontal || Boolean.TRUE.equals(legend.get("scroll"))) l.put("type", "scroll");
         o.put("legend", l);
     }
 
     private void applyTooltip(Map<String, Object> o, Map<String, Object> opt, String chartType) {
         Map<String, Object> tooltip = map(opt.get("tooltip"));
         Map<String, Object> t = new LinkedHashMap<>();
-        boolean itemDefault = "pie".equals(chartType) || "scatter".equals(chartType);
-        t.put("trigger", string(tooltip.get("trigger"), itemDefault ? "item" : "axis"));
+        boolean itemDefault = "pie".equals(chartType) || "scatter".equals(chartType) || "boxplot".equals(chartType);
+        // heatmap·map·geoscatter 는 항목(셀/지역/포인트) 단위 hover 만 의미 → trigger 를 item 으로 고정(공통 zone 잔존 'axis' 클램프).
+        boolean itemForced = "heatmap".equals(chartType) || "map".equals(chartType) || "geoscatter".equals(chartType);
+        t.put("trigger", itemForced ? "item" : string(tooltip.get("trigger"), itemDefault ? "item" : "axis"));
         String axisPointer = string(tooltip.get("axisPointer"), null);
-        if (axisPointer != null) t.put("axisPointer", Map.of("type", axisPointer));
+        if (axisPointer != null && !itemForced) t.put("axisPointer", Map.of("type", axisPointer));
+        // 임베드 방어: 툴팁(HTML div)을 차트 컨테이너 안으로 제한 — 호스트의 overflow:hidden 클리핑·좌표 어긋남 차단.
+        t.put("confine", true);
         o.put("tooltip", t);
+    }
+
+    // ── 신규: 상자수염·히트맵·지도 ────────────────────────
+    /** 상자수염: 카테고리(0열)별로 값(1열)을 모아 5수 요약([min,Q1,median,Q3,max])을 계산. 전용 축(직교 폴스루의 이중축 오염 회피). */
+    private void buildBoxplot(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+        LinkedHashMap<String, List<Double>> groups = new LinkedHashMap<>();
+        for (List<Object> r : rows) {
+            String cat = r.isEmpty() ? "" : String.valueOf(r.get(0));
+            if (r.size() > 1 && r.get(1) instanceof Number n) {
+                groups.computeIfAbsent(cat, k -> new ArrayList<>()).add(n.doubleValue());
+            }
+        }
+        List<Object> cats = new ArrayList<>(groups.keySet());
+        List<Object> data = new ArrayList<>();
+        for (List<Double> vs : groups.values()) data.add(fiveNumberSummary(vs));
+
+        Map<String, Object> xCfg = map(opt.get("xAxis"));
+        Map<String, Object> yCfg = map(opt.get("yAxis"));
+        Map<String, Object> xAxis = new LinkedHashMap<>();
+        xAxis.put("type", "category");
+        xAxis.put("data", cats);
+        xAxis.put("boundaryGap", true);
+        decorateAxis(xAxis, xCfg, true);
+        Map<String, Object> yAxis = new LinkedHashMap<>();
+        yAxis.put("type", "log".equals(string(yCfg.get("scale"), "value")) ? "log" : "value");
+        decorateAxis(yAxis, yCfg, false);
+
+        applyGrid(o, opt);
+        o.put("xAxis", xAxis);
+        o.put("yAxis", yAxis);
+
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("type", "boxplot");
+        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "분포") : "분포");
+        s.put("data", data);
+        Object color = ColorResolver.paletteColor(opt, 0);
+        if (color != null) {
+            Map<String, Object> itemStyle = new LinkedHashMap<>();
+            itemStyle.put("color", color);
+            itemStyle.put("borderColor", color);
+            s.put("itemStyle", itemStyle);
+        }
+        o.put("series", List.of(s));
+    }
+
+    /** 히트맵: X=카테고리(행), Y=값 시리즈 컬럼명, 값=집계값 → data [xIdx, yIdx, value] + visualMap. */
+    private void buildHeatmap(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+        List<Object> cats = new ArrayList<>();
+        for (List<Object> r : rows) cats.add(r.isEmpty() ? null : r.get(0));
+        List<Object> yNames = new ArrayList<>();
+        for (int c = 1; c < columns.size(); c++) yNames.add(string(columns.get(c).get("name"), "series" + c));
+
+        List<Object> data = new ArrayList<>();
+        double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
+        for (int xi = 0; xi < rows.size(); xi++) {
+            List<Object> r = rows.get(xi);
+            for (int c = 1; c < columns.size(); c++) {
+                double v = (r.size() > c && r.get(c) instanceof Number n) ? n.doubleValue() : 0;
+                data.add(List.of(xi, c - 1, v));
+                if (v < min) min = v;
+                if (v > max) max = v;
+            }
+        }
+        if (Double.isInfinite(min)) { min = 0; max = 1; }
+        if (min == max) max = min + 1;
+
+        Map<String, Object> xCfg = map(opt.get("xAxis"));
+        Map<String, Object> yCfg = map(opt.get("yAxis"));
+        Map<String, Object> xAxis = new LinkedHashMap<>();
+        xAxis.put("type", "category");
+        xAxis.put("data", cats);
+        xAxis.put("splitArea", Map.of("show", true));
+        decorateAxis(xAxis, xCfg, true);
+        Map<String, Object> yAxis = new LinkedHashMap<>();
+        yAxis.put("type", "category");
+        yAxis.put("data", yNames);
+        yAxis.put("splitArea", Map.of("show", true));
+        String yTitle = string(yCfg.get("title"), "");
+        if (!yTitle.isEmpty()) yAxis.put("name", yTitle);
+
+        Map<String, Object> grid = new LinkedHashMap<>(presetGrid(string(map(opt.get("grid")).get("preset"), "normal")));
+        grid.put("containLabel", map(opt.get("grid")).getOrDefault("containLabel", true));
+        applyMargins(grid, opt, false); // 제목만 가산(heatmap 은 범례 제거) — 규칙 2
+        // 하단 visualMap 공간 확보. visualMap 은 titleAtBottom 이면 이미 TITLE_H 만큼 올라가 있으므로 그 위에 쌓는다.
+        grid.put("bottom", ((Number) grid.get("bottom")).intValue() + VISUALMAP_H);
+        o.remove("legend"); // heatmap 은 visualMap 이 범례 대체 (공통 zone 잔존 legend 제거)
+        o.put("grid", grid);
+        o.put("xAxis", xAxis);
+        o.put("yAxis", yAxis);
+        o.put("visualMap", visualMap(min, max, opt));
+
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("type", "heatmap");
+        s.put("name", "값");
+        s.put("data", data);
+        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel"))));
+        o.put("series", List.of(s));
+    }
+
+    /** 지도: 지역명(0열)별 값(1열) → series map(map.name: kr-sido|kr-sigungu) data {name,value} + visualMap. 축·범례 없음. */
+    private void buildMap(Map<String, Object> o, Map<String, Object> opt, List<List<Object>> rows) {
+        List<Object> data = new ArrayList<>();
+        double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
+        for (List<Object> r : rows) {
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("name", r.isEmpty() ? "" : String.valueOf(r.get(0)));
+            double v = (r.size() > 1 && r.get(1) instanceof Number n) ? n.doubleValue() : 0;
+            point.put("value", v);
+            data.add(point);
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        if (Double.isInfinite(min)) { min = 0; max = 1; }
+        if (min == max) max = min + 1;
+
+        o.remove("legend"); // 지도는 visualMap 이 범례 대체
+        o.put("visualMap", visualMap(min, max, opt));
+
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("type", "map");
+        s.put("map", mapName(opt));
+        s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
+        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel"))));
+        applyLabelLayout(s, opt);
+        s.put("emphasis", Map.of("label", Map.of("show", true)));
+        s.put("data", data);
+        o.put("series", List.of(s));
+    }
+
+    /**
+     * 지도 포인트: 경도(0열)·위도(1열)(+선택 크기값 2열) → geo 좌표계 + scatter (공식 effectScatter-map 예제 구조).
+     * JSON 전송이라 symbolSize 콜백 불가 → 크기값이 있으면 포인트별 symbolSize 를 계산해 데이터 항목에 넣는다(6~28px sqrt).
+     */
+    private void buildGeoScatter(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+        boolean hasSize = columns.size() > 2;
+        double sMin = Double.POSITIVE_INFINITY, sMax = Double.NEGATIVE_INFINITY;
+        if (hasSize) {
+            for (List<Object> r : rows) {
+                if (r.size() > 2 && r.get(2) instanceof Number n) {
+                    double v = n.doubleValue();
+                    if (v < sMin) sMin = v;
+                    if (v > sMax) sMax = v;
+                }
+            }
+        }
+        int base = map(opt.get("geoscatter")).get("symbolSize") instanceof Number n ? n.intValue() : 10;
+
+        List<Object> data = new ArrayList<>();
+        for (List<Object> r : rows) {
+            double lng = (r.size() > 0 && r.get(0) instanceof Number n) ? n.doubleValue() : 0;
+            double lat = (r.size() > 1 && r.get(1) instanceof Number n) ? n.doubleValue() : 0;
+            if (!hasSize || Double.isInfinite(sMin)) {
+                data.add(List.of(lng, lat));
+                continue;
+            }
+            double v = (r.size() > 2 && r.get(2) instanceof Number n) ? n.doubleValue() : 0;
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("value", List.of(lng, lat, v));
+            point.put("symbolSize", sMax == sMin ? base : (int) Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
+            data.add(point);
+        }
+
+        o.remove("legend"); // 단일 포인트 시리즈 — 범례 무의미
+        Map<String, Object> geo = new LinkedHashMap<>();
+        geo.put("map", mapName(opt));
+        geo.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
+        geo.put("label", Map.of("show", false));
+        geo.put("itemStyle", Map.of("areaColor", "#f3f4f6", "borderColor", "#d1d5db"));
+        geo.put("emphasis", Map.of("itemStyle", Map.of("areaColor", "#e5e7eb"), "label", Map.of("show", false)));
+        o.put("geo", geo);
+
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("type", "scatter");
+        s.put("coordinateSystem", "geo");
+        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "포인트") : "포인트");
+        s.put("symbolSize", base);
+        Object color = ColorResolver.paletteColor(opt, 0);
+        if (color != null) s.put("itemStyle", Map.of("color", color));
+        s.put("data", data);
+        o.put("series", List.of(s));
+    }
+
+    /** map.name 옵션(kr-sido|kr-sigungu) — 화이트리스트 밖 값은 kr-sido 로 폴백(등록 자산만 허용). */
+    private String mapName(Map<String, Object> opt) {
+        String name = string(map(opt.get("map")).get("name"), "kr-sido");
+        return "kr-sigungu".equals(name) ? "kr-sigungu" : "kr-sido";
+    }
+
+    /** heatmap·map 공용 연속 visualMap — 팔레트[0]을 고강도색으로. */
+    private Map<String, Object> visualMap(double min, double max, Map<String, Object> opt) {
+        Object top = ColorResolver.paletteColor(opt, 0);
+        Map<String, Object> vm = new LinkedHashMap<>();
+        vm.put("min", min);
+        vm.put("max", max);
+        vm.put("calculable", true);
+        vm.put("orient", "horizontal");
+        vm.put("left", "center");
+        // 제목이 하단이면 visualMap 을 제목 위로 올려 겹침 방지(규칙 1의 map/heatmap 변형).
+        vm.put("bottom", titleAtBottom(opt) ? TITLE_H : 0);
+        vm.put("inRange", Map.of("color", List.of("#f7f7f7", top != null ? top : "#5470C6")));
+        return vm;
+    }
+
+    /** 정렬 후 R-7 선형보간 분위수. */
+    private static double quantile(List<Double> sorted, double p) {
+        int n = sorted.size();
+        if (n == 0) return 0;
+        if (n == 1) return sorted.get(0);
+        double h = (n - 1) * p;
+        int lo = (int) Math.floor(h);
+        int hi = Math.min(lo + 1, n - 1);
+        return sorted.get(lo) + (h - lo) * (sorted.get(hi) - sorted.get(lo));
+    }
+
+    /** 5수 요약 [min, Q1, median, Q3, max]. */
+    private static List<Double> fiveNumberSummary(List<Double> values) {
+        List<Double> s = new ArrayList<>(values);
+        s.sort(Double::compare);
+        return List.of(s.get(0), quantile(s, 0.25), quantile(s, 0.5), quantile(s, 0.75), s.get(s.size() - 1));
     }
 
     // ── 그리드·축 ────────────────────────────────────────
@@ -113,15 +365,36 @@ public class ChartOptionConverter {
         Map<String, Object> grid = map(opt.get("grid"));
         Map<String, Object> g = new LinkedHashMap<>(presetGrid(string(grid.get("preset"), "normal")));
         g.put("containLabel", grid.getOrDefault("containLabel", true));
+        applyMargins(g, opt, true); // 제목·범례 스택만큼 top/bottom 가산(규칙 2)
         o.put("grid", g);
     }
 
+    /** 프리셋 기초 여백 — 제목·범례 영역은 뺀 순수 플롯 여백. 요소별 가산은 applyMargins 가 담당. */
     private Map<String, Object> presetGrid(String preset) {
         return switch (preset) {
-            case "compact" -> Map.of("left", 8, "right", 8, "top", 32, "bottom", 24);
-            case "loose" -> Map.of("left", 48, "right", 48, "top", 64, "bottom", 64);
-            default -> Map.of("left", 24, "right", 24, "top", 48, "bottom", 40);
+            case "compact" -> Map.of("left", 8, "right", 8, "top", 8, "bottom", 8);
+            case "loose" -> Map.of("left", 48, "right", 48, "top", 48, "bottom", 48);
+            default -> Map.of("left", 24, "right", 24, "top", 28, "bottom", 24);
         };
+    }
+
+    /** grid 의 top/bottom 에 제목(TITLE_H)·범례(LEGEND_H) 예약 높이를 같은 모서리별로 가산한다.
+     *  includeLegend=false 는 범례를 제거하는 유형(heatmap 등)에서 범례 가산을 건너뛸 때. */
+    private void applyMargins(Map<String, Object> g, Map<String, Object> opt, boolean includeLegend) {
+        int top = ((Number) g.get("top")).intValue();
+        int bottom = ((Number) g.get("bottom")).intValue();
+        boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
+        if (titleTop) top += TITLE_H;
+        if (titleAtBottom(opt)) bottom += TITLE_H;
+        if (includeLegend) {
+            Map<String, Object> legend = map(opt.get("legend"));
+            boolean shown = !legend.isEmpty() && !Boolean.FALSE.equals(legend.get("show"));
+            String pos = string(legend.get("position"), "bottom");
+            if (shown && "top".equals(pos)) top += LEGEND_H;
+            if (shown && "bottom".equals(pos)) bottom += LEGEND_H;
+        }
+        g.put("top", top);
+        g.put("bottom", bottom);
     }
 
     private void applyAxes(Map<String, Object> o, Map<String, Object> opt, boolean scatter, boolean horizontal, List<Object> categories) {
@@ -270,6 +543,15 @@ public class ChartOptionConverter {
             String position = string(opt.get("labelPosition"), null);
             if (position != null) label.put("position", position);
             s.put("label", label);
+            applyLabelLayout(s, opt);
+        }
+    }
+
+    /** 데이터 라벨을 노출하는 시리즈 공통 겹침 방지. map처럼 전용 조립 경로에서도 재사용한다. */
+    private void applyLabelLayout(Map<String, Object> s, Map<String, Object> opt) {
+        if (Boolean.TRUE.equals(opt.get("dataLabel"))) {
+            // 공식 labelLayout.hideOverlap. JSON 직렬화 가능한 객체형이라 방식 A 제약과 충돌하지 않는다.
+            s.put("labelLayout", Map.of("hideOverlap", true));
         }
     }
 
