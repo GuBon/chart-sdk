@@ -18,6 +18,8 @@ public class CorsConfig {
         config.setAllowedHeaders(List.of("*"));
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", config);
+        // 지도(map) 차트의 공개 GeoJSON 자산 — 임베드 호스트(SDK)가 교차 출처로 fetch 하므로 CORS 허용.
+        source.registerCorsConfiguration("/maps/**", config);
         return new CorsFilter(source);
     }
 }
