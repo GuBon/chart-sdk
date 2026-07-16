@@ -1,10 +1,22 @@
 import type { AggType, BuilderConfig, ChartType, JoinSpec, JoinType, SchemaTable, TableRef, WhereOp, XAxisBucket } from '@/lib/api';
+import {
+  DEFAULT_SAMPLE_SEED,
+  DEFAULT_SAMPLE_SIZE,
+  MAX_SAMPLE_RATE,
+  MAX_SAMPLE_SIZE,
+  MIN_SAMPLE_RATE,
+  MIN_SAMPLE_SIZE,
+  normalizeSampleRate,
+  normalizeSampleSize,
+  type SamplingMode,
+} from '@chartsdk/chart-options/sampling';
 
 // 노코드 빌더 UI 상수 — 생성규칙 3·3A·4장의 라벨.
 export const AGG_CHOICES: { value: AggType; label: string }[] = [
   { value: 'sum', label: '합계 (SUM)' },
   { value: 'avg', label: '평균 (AVG)' },
   { value: 'stddev', label: '표준편차 (STDDEV)' },
+  { value: 'variance', label: '분산 (VARIANCE)' },
   { value: 'count', label: '개수 (COUNT)' },
   { value: 'count_distinct', label: '고유 개수' },
   { value: 'min', label: '최소 (MIN)' },
@@ -50,7 +62,8 @@ export function isNumericType(type: string | undefined): boolean {
 }
 
 export function aggChoicesForChart(chartType: ChartType): { value: AggType; label: string }[] {
-  if (chartType === 'scatter') return AGG_CHOICES.filter((a) => a.value === 'none');
+  // 분포·상자수염·지도 포인트는 원본값(좌표/분포)이 필요 → 집계 없이 none 만.
+  if (chartType === 'scatter' || chartType === 'boxplot' || chartType === 'geoscatter') return AGG_CHOICES.filter((a) => a.value === 'none');
   return AGG_CHOICES;
 }
 
@@ -184,16 +197,48 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
       yAxis: cfg.yAxis.map((y) => ({ ...y, agg: 'none' })),
     };
   }
+  // 상자수염: 카테고리별 원본값 분포 → 집계 없음·표본 금지·버킷 금지·단일 값 컬럼.
+  if (chartType === 'boxplot') {
+    return {
+      ...cfg,
+      xAxisBucket: null,
+      sample: null,
+      yAxis: cfg.yAxis.slice(0, 1).map((y) => ({ ...y, agg: 'none' })),
+    };
+  }
+  // 지도 포인트: X=경도, Y1=위도(+선택 Y2=크기값) 원본 좌표 → 집계 없음·표본/버킷 금지·최대 2컬럼.
+  if (chartType === 'geoscatter') {
+    return {
+      ...cfg,
+      xAxisBucket: null,
+      sample: null,
+      yAxis: cfg.yAxis.slice(0, 2).map((y) => ({ ...y, agg: 'none' })),
+    };
+  }
   return {
     ...cfg,
-    yAxis: chartType === 'pie' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    // 원형·지도는 1개 값 컬럼(지역/조각별 단일 값).
+    yAxis: chartType === 'pie' || chartType === 'map' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
     sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
   };
 }
 
 export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
   if (!cfg.table) return '테이블을 선택하세요.';
-  if (cfg.sample && (cfg.sample.rate < 1 || cfg.sample.rate > 100)) return '표본 비율은 1~100%여야 합니다.';
+  if (cfg.sample?.rate != null && (cfg.sample.rate < MIN_SAMPLE_RATE || cfg.sample.rate > MAX_SAMPLE_RATE ||
+      Math.abs(cfg.sample.rate * 10 - Math.round(cfg.sample.rate * 10)) > 1e-7)) {
+    return '표본 비율은 0.1~100%이며 소수점 한 자리까지 입력할 수 있습니다.';
+  }
+  if (cfg.sample?.size != null && (!Number.isInteger(cfg.sample.size)
+      || cfg.sample.size < MIN_SAMPLE_SIZE || cfg.sample.size > MAX_SAMPLE_SIZE)) {
+    return `표본 크기는 ${MIN_SAMPLE_SIZE.toLocaleString()}~${MAX_SAMPLE_SIZE.toLocaleString()}행이어야 합니다.`;
+  }
+  if (cfg.sample?.method != null && !['auto', 'system'].includes(cfg.sample.method)) return '표본 방식이 올바르지 않습니다.';
+  if (cfg.sample?.mode != null && !['auto', 'manual'].includes(cfg.sample.mode)) return '표본 모드는 자동 또는 수동이어야 합니다.';
+  if (cfg.sample?.seed != null && (!Number.isInteger(cfg.sample.seed) || cfg.sample.seed < 0 || cfg.sample.seed > 2_147_483_647)) {
+    return '표본 seed가 올바르지 않습니다.';
+  }
+  if (cfg.yAxis.some((y) => y.alias?.startsWith('__chartsdk_'))) return '별칭은 __chartsdk_로 시작할 수 없습니다.';
   const joinIssue = joinValidationIssue(cfg, tables);
   if (joinIssue) return joinIssue;
   // 조인 시 모든 컬럼 참조는 qualified "핸들.컬럼" + 활성 테이블 (11.2)
@@ -210,8 +255,20 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
   if (cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
+  if (chartType === 'map' && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
   const rawSeriesCount = cfg.yAxis.filter((y) => y.agg === 'none').length;
+  if (chartType === 'boxplot') {
+    if (cfg.yAxis.length !== 1) return '상자수염 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
+    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '상자수염 차트는 집계 없이 원본값만 사용합니다.';
+    if (!isNumericType(columnType(cfg.yAxis[0]?.column, cfg, tables))) return '상자수염 차트는 숫자 값 컬럼(Y축)이 필요합니다.';
+  }
+  if (chartType === 'geoscatter') {
+    if (cfg.yAxis.length > 2) return '지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';
+    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '지도 포인트는 집계 없이 원본 좌표만 사용합니다.';
+    if (!isNumericType(xType)) return '지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.';
+    if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.';
+  }
   if (chartType === 'scatter' && !isNumericType(xType)) return '분포 차트는 숫자 X축 컬럼이 필요합니다.';
   if (chartType === 'scatter' && cfg.yAxis.some((y) => y.agg !== 'none')) return '분포 차트는 집계 없이 원본값만 사용할 수 있습니다.';
   if (rawSeriesCount > 0 && rawSeriesCount !== cfg.yAxis.length) {
@@ -233,15 +290,49 @@ export function builderWarning(cfg: BuilderConfig): string | null {
   return null;
 }
 
-/** 표본 추출 토글 시 적용할 기본 비율(%) — 생성규칙 3C */
-export const DEFAULT_SAMPLE_RATE = 10;
+export function createSampleSeed(): number {
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const value = new Uint32Array(1);
+    globalThis.crypto.getRandomValues(value);
+    return value[0] & 0x7fffffff;
+  }
+  return Math.floor(Math.random() * 2_147_483_648);
+}
+
+// 표본 토글 ON → 자동(서버가 방식·크기 결정). 정확도는 절대 갯수가 결정하므로 auto 는 rate 를 싣지 않는다.
+export function createSampleConfig() {
+  return { mode: 'auto' as const, seed: createSampleSeed() };
+}
+
+export function updateSampleMode(
+  sample: BuilderConfig['sample'],
+  mode: SamplingMode,
+  manualSize = DEFAULT_SAMPLE_SIZE,
+) {
+  const seed = sample?.seed ?? createSampleSeed();
+  if (mode === 'auto') return { mode: 'auto' as const, seed };
+  return { mode: 'manual' as const, size: normalizeSampleSize(sample?.size ?? manualSize), seed };
+}
+
+export function normalizeSampleConfig(sample: BuilderConfig['sample']): BuilderConfig['sample'] {
+  if (!sample) return null;
+  const mode = sample.mode === 'auto' ? 'auto' : 'manual';
+  const normalized: NonNullable<BuilderConfig['sample']> = {
+    mode,
+    seed: Number.isInteger(sample.seed) ? sample.seed : DEFAULT_SAMPLE_SEED,
+  };
+  if (mode === 'manual' && sample.size != null) normalized.size = normalizeSampleSize(sample.size);
+  if (sample.rate != null) normalized.rate = normalizeSampleRate(sample.rate); // 레거시 SYSTEM 핀 보존
+  if (sample.method != null) normalized.method = sample.method;
+  return normalized;
+}
 
 export function emptyBuilder(): BuilderConfig {
   return { table: null, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: null };
 }
 
 export function normalizeBuilder(cfg: BuilderConfig): BuilderConfig {
-  return { ...emptyBuilder(), ...cfg, joins: cfg.joins ?? [], sample: cfg.sample ?? null };
+  return { ...emptyBuilder(), ...cfg, joins: cfg.joins ?? [], sample: normalizeSampleConfig(cfg.sample) };
 }
 
 /** 레거시 문자열 테이블 참조("schema.table"/"table") → TableRef 승격. 저장된 단일 소스 차트 로드 시(하위호환). */
@@ -265,7 +356,7 @@ export function migrateBuilderConfig(cfg: BuilderConfig, primaryDatasourceId: nu
     assigned.push(withHandle);
     return { ...j, table: withHandle };
   });
-  return { ...cfg, table: base, joins };
+  return { ...cfg, table: base, joins, sample: normalizeSampleConfig(cfg.sample) };
 }
 
 /** orderBy 대상 라벨 (x = X축, y{i} = i번째 시리즈 별칭) */

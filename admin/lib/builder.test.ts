@@ -7,6 +7,7 @@ import {
   builderWarning,
   columnType,
   columnsForBuilder,
+  createSampleConfig,
   emptyBuilder,
   emptyJoin,
   hasJoins,
@@ -16,6 +17,7 @@ import {
   migrateTableRef,
   normalizeBuilder,
   normalizeBuilderForChartType,
+  normalizeSampleConfig,
   orderTargets,
   parseColumn,
   tableHandle,
@@ -90,8 +92,27 @@ describe('aggChoicesForChart', () => {
     expect(choices).toHaveLength(1);
     expect(choices[0].value).toBe('none');
   });
-  it('막대는 집계 8종을 모두 제공한다', () => {
-    expect(aggChoicesForChart('bar')).toHaveLength(8);
+  it('막대는 분산을 포함한 집계 9종을 모두 제공한다', () => {
+    expect(aggChoicesForChart('bar')).toHaveLength(9);
+    expect(aggChoicesForChart('bar').map((choice) => choice.value)).toContain('variance');
+  });
+});
+
+describe('표본 설정', () => {
+  it('자동 모드는 방식·크기를 서버에 위임한다(rate 없이 seed만, 테이블 독립)', () => {
+    const sample = createSampleConfig();
+    expect(sample.mode).toBe('auto');
+    expect((sample as { rate?: number }).rate).toBeUndefined();
+    expect(Number.isInteger(sample.seed)).toBe(true);
+  });
+
+  it('수동 모드는 표본 크기(갯수)를 1,000~50,000 으로 정규화한다', () => {
+    expect(normalizeSampleConfig({ mode: 'manual', size: 999_999 })).toEqual({ mode: 'manual', size: 50_000, seed: 48_291 });
+    expect(normalizeSampleConfig({ mode: 'manual', size: 100 })).toEqual({ mode: 'manual', size: 1_000, seed: 48_291 });
+  });
+
+  it('레거시 rate 전용 설정은 수동 모드와 기본 seed로 정규화한다', () => {
+    expect(normalizeSampleConfig({ rate: 10 })).toEqual({ mode: 'manual', rate: 10, seed: 48_291 });
   });
 });
 
@@ -194,8 +215,11 @@ describe('builderValidationIssue', () => {
     expect(builderValidationIssue(emptyBuilder(), 'bar', TABLES)).toBe('테이블을 선택하세요.');
   });
   it('표본 비율 범위를 잡는다', () => {
-    expect(builderValidationIssue(bar({ sample: { rate: 0 } }), 'bar', TABLES)).toBe('표본 비율은 1~100%여야 합니다.');
-    expect(builderValidationIssue(bar({ sample: { rate: 150 } }), 'bar', TABLES)).toBe('표본 비율은 1~100%여야 합니다.');
+    const message = '표본 비율은 0.1~100%이며 소수점 한 자리까지 입력할 수 있습니다.';
+    expect(builderValidationIssue(bar({ sample: { rate: 0 } }), 'bar', TABLES)).toBe(message);
+    expect(builderValidationIssue(bar({ sample: { rate: 150 } }), 'bar', TABLES)).toBe(message);
+    expect(builderValidationIssue(bar({ sample: { rate: 0.15 } }), 'bar', TABLES)).toBe(message);
+    expect(builderValidationIssue(bar({ sample: { rate: 0.1 } }), 'bar', TABLES)).toBeNull();
   });
   it('X축 미선택을 잡는다', () => {
     expect(builderValidationIssue(bar({ xAxis: null }), 'bar', TABLES)).toBe('X축 컬럼을 선택하세요.');
@@ -281,5 +305,71 @@ describe('orderTargets · 기타', () => {
     const normalized = normalizeBuilder({ table: salesRef, xAxis: 'category', xAxisBucket: null, yAxis: [], where: [], orderBy: null } as BuilderConfig);
     expect(normalized.joins).toEqual([]);
     expect(normalized.sample).toBeNull();
+  });
+});
+
+describe('신규 유형 — boxplot · heatmap · map', () => {
+  it('boxplot 은 원본값(none)만 허용한다', () => {
+    const choices = aggChoicesForChart('boxplot');
+    expect(choices).toHaveLength(1);
+    expect(choices[0].value).toBe('none');
+  });
+
+  it('normalize(boxplot) 은 집계 none·표본/버킷 null·값 컬럼 1개로 정규화한다', () => {
+    const src = bar({ xAxisBucket: 'month', sample: { rate: 20 }, yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'avg' }] });
+    const out = normalizeBuilderForChartType(src, 'boxplot');
+    expect(out.xAxisBucket).toBeNull();
+    expect(out.sample).toBeNull();
+    expect(out.yAxis).toHaveLength(1);
+    expect(out.yAxis[0].agg).toBe('none');
+  });
+
+  it('normalize(map) 은 값 컬럼을 1개로 자른다', () => {
+    const src = bar({ yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }] });
+    expect(normalizeBuilderForChartType(src, 'map').yAxis).toHaveLength(1);
+  });
+
+  it('boxplot 검증 — 값 컬럼은 숫자·1개·집계 없음', () => {
+    // 정상: 숫자 amount 1개, none
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'none' }] }), 'boxplot', TABLES)).toBeNull();
+    // 2개 → 거부
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'none' }, { column: 'id', agg: 'none' }] }), 'boxplot', TABLES))
+      .toBe('상자수염 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.');
+    // 집계 있음 → 거부
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }] }), 'boxplot', TABLES))
+      .toBe('상자수염 차트는 집계 없이 원본값만 사용합니다.');
+    // 비숫자 값 컬럼(category) → 거부
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'category', agg: 'none' }] }), 'boxplot', TABLES))
+      .toBe('상자수염 차트는 숫자 값 컬럼(Y축)이 필요합니다.');
+  });
+
+  it('map 검증 — 값 컬럼 1개', () => {
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }] }), 'map', TABLES)).toBeNull();
+    expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }] }), 'map', TABLES))
+      .toBe('지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.');
+  });
+
+  it('geoscatter 는 원본값(none)만 허용하고 normalize 가 좌표 2컬럼으로 정규화한다', () => {
+    expect(aggChoicesForChart('geoscatter')).toHaveLength(1);
+    const src = bar({ xAxisBucket: 'month', sample: { rate: 20 }, yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'avg' }, { column: 'customer_id', agg: 'count' }] });
+    const out = normalizeBuilderForChartType(src, 'geoscatter');
+    expect(out.xAxisBucket).toBeNull();
+    expect(out.sample).toBeNull();
+    expect(out.yAxis).toHaveLength(2);
+    expect(out.yAxis.every((y) => y.agg === 'none')).toBe(true);
+  });
+
+  it('geoscatter 검증 — 경도·위도 숫자 필수, 최대 2컬럼', () => {
+    // 정상: 경도=amount(숫자), 위도=id(숫자)
+    expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES)).toBeNull();
+    // 텍스트 X(category) → 거부
+    expect(builderValidationIssue(bar({ xAxis: 'category', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES))
+      .toBe('지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.');
+    // 3컬럼 → 거부
+    expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }, { column: 'amount', agg: 'none' }, { column: 'customer_id', agg: 'none' }] }), 'geoscatter', TABLES))
+      .toBe('지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.');
+    // 비숫자 위도 → 거부
+    expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'category', agg: 'none' }] }), 'geoscatter', TABLES))
+      .toBe('지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.');
   });
 });
