@@ -1,6 +1,6 @@
 # Embed Chart Data API Specification
 
-**Version:** v1.1
+**Version:** v1.6 (2026-07-15 — sampling v5·SUM/COUNT 표본값·통계 추정 구간 분리)
 **Endpoint:** `GET /api/v1/charts/data`  
 **Caller:** `sdk.js` running in a customer-owned web page  
 **Purpose:** Return a server-built Apache ECharts option JSON for one saved chart.
@@ -120,6 +120,21 @@ Execution guardrails:
 {
   "chartId": 12,
   "computedAt": "2026-06-24T01:25:30Z",
+  "sampling": {
+    "version": 5,
+    "approximate": true,
+    "method": "SYSTEM",
+    "mode": "manual",
+    "rate": 10,
+    "seed": 48291,
+    "valueMode": "sample",
+    "sampledRowCount": 2850,
+    "groups": [{ "key": "food", "sampleCount": 500 }],
+    "estimates": [{ "series": "sum_amount", "aggregate": "sum", "treatment": "SAMPLE_AGGREGATE" }],
+    "warnings": ["BLOCK_SAMPLE_CLUSTERING", "SAMPLE_AGGREGATE_ONLY"]
+  },
+  "approximate": true,
+  "sampleRate": 10,
   "option": {
     "tooltip": { "trigger": "axis" },
     "xAxis": { "type": "category", "data": ["food", "goods"] },
@@ -139,6 +154,8 @@ Execution guardrails:
 | `computedAt` | ISO-8601 UTC | Time of the row result used to build `option`. |
 | `rowCount` | integer | Number of rows used to build the option. |
 | `truncated` | boolean | `true` when the row cap was reached and the result may be partial. |
+| `sampling` | object, optional | Sampling execution metadata v5. Includes INDEX_RANDOM/SYSTEM/FULL_SCAN, requested size/rate/seed, actual sampled input count, per-group counts, per-series treatment/error summary, optional statistical `intervals[]`, and warnings. Sampled SUM/COUNT use `SAMPLE_AGGREGATE`; AVG/STDDEV/VARIANCE use `SAMPLE_ESTIMATE`. Persisted with the cached result. |
+| `approximate` / `sampleRate` | boolean / number, optional | Backward-compatible aliases for older clients. New clients use `sampling`. |
 | `option` | object | Complete Apache ECharts option. SDK must pass it to `chart.setOption(option)` without rebuilding. |
 
 ## 7. Error Responses
@@ -189,6 +206,65 @@ SDK behavior:
 1. Scan DOM for `[data-chart-id]`.
 2. Read `data-chart-id` and `data-auth-token`.
 3. Fetch `GET /api/v1/charts/data?chartId={id}` with Bearer token.
-4. Create an ECharts instance with `echarts.init(hostElement)`.
-5. Call `chart.setOption(response.option)`.
-6. On failure, render an isolated error state inside the chart container only.
+4. Replace the slot content with an internal chart host and create an ECharts instance with `echarts.init(chartHost)`.
+5. If a title exists, merge its responsive width (`chartHost.clientWidth - 32`) and `overflow:'truncate'`, then call `chart.setOption(response.option)`.
+6. If `sampling` exists, show `{samplingMethodLabel} {sampledRowCount}행 · 표본 결과` or `전체 데이터 · 정확한 결과`. Label sampled SUM/COUNT as `표본 합계`/`표본 개수` and state that they are not whole-population totals. If an AVG/STDDEV/VARIANCE confidence summary exists, append `95% 신뢰수준 · 오차 약 ±X%`. Render every `sampling.warnings` entry visibly; STDDEV/VARIANCE intervals require the normality-assumption warning and SYSTEM requires the block-clustering warning.
+7. Observe the host size; on resize call `chart.resize()` and refresh the title width patch.
+8. On failure, render an isolated error state inside the chart container only.
+
+SPA integrations can use the imperative API. Rendering the same element again disposes the previous ECharts instance and observer automatically; call `dispose` when the component unmounts.
+
+```js
+await ChartSDK.render(element, { chartId: '12', token });
+ChartSDK.dispose(element);
+```
+
+## 10. Host Page Responsibilities & Style Isolation
+
+The SDK renders directly into the host page's DOM (no iframe). The chart body is drawn on a `<canvas>`, so host CSS cannot corrupt bars, axes, or legends. The design goal is: **the client's intentional code wins; the client's unrelated global CSS cannot break the chart by accident.**
+
+### 10.1 Host page must provide
+
+| Concern | Rule |
+|---|---|
+| Container height | The chart follows its container size. Give `[data-chart-id]` an explicit height (`height`, `aspect-ratio`, or a sized flex/grid parent). If the container resolves to `0px` at render time, the SDK applies a `min-height: 320px` fallback so the chart never silently disappears. Note: a container that is hidden when rendered (e.g. `display: none`, an inactive tab/accordion) also measures `0px`, so it inherits the 320px floor — if you render into a hidden slot and later reveal it at a shorter height, set an explicit height so the floor does not win. |
+| Container content | On render the SDK **replaces the container's inner content**. Do not keep meaningful child nodes inside `[data-chart-id]`; use it as a dedicated chart slot. |
+| Positioning | The SDK adds `position: relative` **only when** the container computes to `position: static`. Any positioning you set via CSS (class or inline) is respected. |
+
+### 10.2 What the SDK guarantees (defensive)
+
+- Tooltips use `confine: true` so they stay inside the container instead of being clipped by an ancestor `overflow: hidden` or misplaced under an ancestor `transform`.
+- The rendered `<canvas>` is pinned with `max-width/height: none` so a global `canvas { max-width: 100% }` reset cannot shrink it and break click/hover coordinates.
+- The chart option carries an opaque `backgroundColor` (default `#ffffff`) so the chart is self-contained on any host background, including dark themes.
+- Long titles stay inside the canvas: the SDK preserves existing title text styles, injects the current chart-host width minus a 32px horizontal inset, applies `overflow:'truncate'`, and recalculates it through `ResizeObserver`.
+
+### 10.3 Map (지도·지도 포인트) charts — GeoJSON assets
+
+Geo charts need a GeoJSON registered with `echarts.registerMap(name, geoJson)` before render. The SDK does this automatically:
+
+1. After fetching the chart option, the SDK scans it for map names — both `series[].map` (choropleth `type:'map'`) and `option.geo.map` (geo-scatter point charts).
+2. For each not-yet-registered name it fetches `GET {apiBase}/maps/{name}.json` **once** (cached module-side; re-renders do not re-fetch), then calls `registerMap`.
+3. `apiBase` is the same origin the chart data came from (`sdk.js` script origin or `window.CHARTSDK_API_BASE`).
+
+The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). Bundled maps (KOSTAT open data — see `chart-options/maps/LICENSE.md`):
+
+| Asset | Regions | Region name format in chart data |
+|---|---|---|
+| `kr-sido.json` | 대한민국 17개 시·도 | 정식 시·도명 — `서울특별시`, `경상남도` |
+| `kr-sigungu.json` | 251개 시·군·구 | `시도명 시군구명` — `부산광역시 중구` (원본의 중복 시군구명을 시도 접두로 해소한 전처리본) |
+
+Region names must match the GeoJSON `properties.name` exactly. Geo-scatter (지도 포인트) charts use raw `[경도, 위도(, 크기값)]` coordinates instead of region names; per-point `symbolSize` is precomputed server-side (JSON cannot carry callbacks).
+
+### 10.4 Official customization surface
+
+Only the hooks below are supported. Internal DOM structure and inline defaults are private and may change between versions.
+
+| Hook | How | Example |
+|---|---|---|
+| `.chartsdk-caption` | CSS class on the "데이터 기준 …" caption. Defaults are inline, so override with `!important`. | `.chartsdk-caption { color: #ccc !important; }` |
+| `.chartsdk-error` | CSS class on the error state box. Same `!important` rule. | `.chartsdk-error { color: #f66 !important; }` |
+| `data-chart-background` | Attribute on `[data-chart-id]`. Overrides the chart background (e.g. `transparent` to blend into a dark site, or a custom color). | `<div data-chart-id="12" data-auth-token="…" data-chart-background="transparent"></div>` |
+
+> The `!important` requirement is intentional: because defaults are inline, an ordinary (non-`!important`) global rule such as `.card div { font-size: 18px }` can never touch the caption or error text by accident. A deliberate override must name the SDK class **and** use `!important` — a combination that cannot occur unintentionally.
+>
+> Residual limitation: a host page that applies a *global `!important`* rule to a broad selector (e.g. `div { color: red !important }`) can still bleed into the caption/error text, since `!important` outranks inline styles. The chart body (canvas) is never affected. Full isolation from such extreme resets would require a Shadow DOM or iframe wrapper, which is intentionally out of scope for the current embed model.
