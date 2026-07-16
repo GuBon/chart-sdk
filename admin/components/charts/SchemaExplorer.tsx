@@ -1,16 +1,25 @@
 'use client';
 
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, Search, Table2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Filter, Search, Table2 } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
 import { tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 
 // S2 좌측 스키마 탐색기(258:178) — 표시 전용. 데이터/선택 상태는 ChartEditor 소유.
 // 데이터소스→테이블→컬럼의 수직 선택 흐름(Redash 패턴).
+// 대형 스키마(수백 테이블) 대비 — 데이터는 전부 로드(빌더 컬럼해석 유지)하고 표시만 페이지로 자른다.
+const PAGE_SIZE = 50;
+type SortMode = 'schema' | 'name_asc' | 'name_desc';
+const SORT_CHOICES: { value: SortMode; label: string }[] = [
+  { value: 'schema', label: '스키마순' },
+  { value: 'name_asc', label: '이름 오름차순' },
+  { value: 'name_desc', label: '이름 내림차순' },
+];
 interface Props {
   datasources: Datasource[];
   tables: SchemaTable[];
@@ -20,12 +29,34 @@ interface Props {
   onSelectTable: (table: SchemaTable) => void;
 }
 
+/** 필터 팝오버 메뉴 항목 — 라벨 + 활성 체크 (정렬·스키마 공용) */
+function MenuItem({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[13px] text-text-primary hover:bg-muted"
+    >
+      {label}
+      {active && <Check className="size-3.5 text-text-primary" />}
+    </button>
+  );
+}
+
 export function SchemaExplorer({ datasources, tables, datasourceId, selectedTable, onChangeDatasource, onSelectTable }: Props) {
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<SortMode>('schema');
+  const [sortOpen, setSortOpen] = useState(false);
+  const [schemaFilter, setSchemaFilter] = useState<string | null>(null); // null = 전체
+  const [page, setPage] = useState(1);
+
+  // 현재 소스의 스키마 목록(데이터에서 유도). 1개뿐이면 필터 섹션을 숨긴다.
+  const schemas = [...new Set(tables.map((t) => t.schema))];
 
   const q = query.toLowerCase().trim();
-  const filtered = q
+  // 검색은 전체 테이블 대상(페이지 밖도 포함) — 표시만 이후 단계에서 자른다.
+  const searched = q
     ? tables.filter(
         (t) =>
           t.name.toLowerCase().includes(q) ||
@@ -33,6 +64,25 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
           t.columns.some((c) => c.name.toLowerCase().includes(q)),
       )
     : tables;
+  // 스키마 필터(팝오버) — 검색과 독립 적용.
+  const filtered = schemaFilter ? searched.filter((t) => t.schema === schemaFilter) : searched;
+
+  // 정렬: schema=백엔드 원본 순서(table_schema, table_name) 유지 / 이름 오름·내림.
+  const sorted =
+    sort === 'schema'
+      ? filtered
+      : [...filtered].sort((a, b) => {
+          const c = a.name.localeCompare(b.name, 'ko');
+          return sort === 'name_asc' ? c : -c;
+        });
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const pageClamped = Math.min(Math.max(1, page), totalPages);
+  const pageItems = sorted.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE);
+
+  // 검색·정렬·소스 변경 시 1페이지로 리셋.
+  useEffect(() => setPage(1), [query, sort, schemaFilter, datasourceId]);
+  // 소스가 바뀌면 이전 소스의 스키마 필터는 무효 — 전체로 리셋.
+  useEffect(() => setSchemaFilter(null), [datasourceId]);
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -68,23 +118,63 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
         <p className="mt-1 text-xs text-text-tertiary">읽기 전용 조회</p>
       </div>
 
+      {/* 검색 + 정렬 — 정렬은 인풋 우측 안쪽 필터 아이콘의 팝오버 메뉴 (화면설계 S2 사이드바) */}
       <div className="px-3 pb-2">
-        <Input
-          id="schema-search"
-          name="schemaSearch"
-          icon={<Search className="size-3.5" />}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="테이블·컬럼 검색"
-          disabled={datasourceId == null}
-        />
+        {/* relative 기준을 인풋과 정확히 일치시킨다(패딩 포함 시 top-1/2 가 어긋남) */}
+        <div className="relative">
+          <Input
+            id="schema-search"
+            name="schemaSearch"
+            icon={<Search className="size-3.5" />}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="검색"
+            disabled={datasourceId == null}
+            className="pr-6"
+          />
+          <button
+            type="button"
+            aria-label="정렬"
+            disabled={datasourceId == null}
+            onClick={() => setSortOpen((v) => !v)}
+            className={cn(
+              'absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+              sort !== 'schema' || schemaFilter !== null ? 'text-text-primary' : 'text-text-tertiary hover:text-text-primary',
+            )}
+          >
+            <Filter className="size-3.5" />
+          </button>
+          {sortOpen && (
+            <>
+              {/* 바깥 클릭 시 닫힘 */}
+              <button type="button" aria-hidden className="fixed inset-0 z-10 cursor-default" onClick={() => setSortOpen(false)} />
+              <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-md border border-border bg-bg-panel py-1 shadow-md">
+                <p className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium tracking-wide text-text-tertiary">정렬</p>
+                {SORT_CHOICES.map((c) => (
+                  <MenuItem key={c.value} label={c.label} active={sort === c.value} onClick={() => { setSort(c.value); setSortOpen(false); }} />
+                ))}
+                {/* 스키마 필터 — 현재 소스에 스키마가 2개 이상일 때만 노출 (화면설계 S2-보조 팝오버) */}
+                {schemas.length >= 2 && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <p className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium tracking-wide text-text-tertiary">스키마</p>
+                    <MenuItem label="전체" active={schemaFilter === null} onClick={() => { setSchemaFilter(null); setSortOpen(false); }} />
+                    {schemas.map((s) => (
+                      <MenuItem key={s} label={s} active={schemaFilter === s} onClick={() => { setSchemaFilter(s); setSortOpen(false); }} />
+                    ))}
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {datasourceId == null ? (
           <p className="px-2 py-3 text-xs text-text-tertiary">데이터소스를 먼저 선택하세요.</p>
         ) : (
-          filtered.map((t) => {
+          pageItems.map((t) => {
             const key = tableRefKey(t);
             const open = expanded.has(key);
             const active = selectedTable === key;
@@ -125,6 +215,20 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
           })
         )}
       </div>
+
+      {datasourceId != null && totalPages > 1 && (
+        <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border px-2 py-2">
+          <Button variant="secondary" size="sm" className="h-7" disabled={pageClamped <= 1} onClick={() => setPage(pageClamped - 1)}>
+            이전
+          </Button>
+          <span className="min-w-16 text-center text-xs text-text-secondary">
+            {pageClamped} / {totalPages}
+          </span>
+          <Button variant="secondary" size="sm" className="h-7" disabled={pageClamped >= totalPages} onClick={() => setPage(pageClamped + 1)}>
+            다음
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
