@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChartSDK 적대적 호스트 CSS 스트레스 테스트</title>
+  <style>
+    /* ── 페이지 자체 UI (임베드 컨테이너 밖) ───────────────────────── */
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #171717; }
+    h1 { font-size: 18px; }
+    form { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; align-items: center; margin: 16px 0; max-width: 720px; }
+    form input { padding: 6px 8px; border: 1px solid #e5e5e5; border-radius: 8px; font: inherit; }
+    form button { grid-column: 2; justify-self: start; padding: 8px 16px; background: #171717; color: #fff; border: 0; border-radius: 8px; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 20px; }
+    .panel { border: 1px solid #e5e5e5; border-radius: 12px; padding: 12px; }
+    .panel > h2 { font-size: 14px; margin: 0 0 4px; }
+    .panel > p { font-size: 12px; color: #737373; margin: 0 0 10px; }
+
+    /* ── 적대적 CSS 시나리오 (각 .case 래퍼가 임베드 컨테이너를 공격) ── */
+
+    /* A. 전역 div 리셋(비-!important) — 인라인 방어가 이겨야 함(캡션 회색 유지) */
+    .case-reset div { font-size: 30px; color: red; border: 2px solid lime; letter-spacing: 3px; }
+    .case-reset .chart { height: 260px; }
+
+    /* B. 전역 canvas 축소 reset — SDK 가 max-width:none 로 무력화해야 함(좌표 정상) */
+    .case-canvas canvas { max-width: 50% !important; max-height: 50% !important; }
+    .case-canvas .chart { height: 260px; }
+
+    /* C. 조상 overflow:hidden + 작은 높이 — 툴팁이 confine 으로 안 잘려야 함 */
+    .case-overflow { overflow: hidden; }
+    .case-overflow .chart { height: 200px; }
+
+    /* D. 조상 transform: scale — 툴팁 좌표가 어긋나지 않아야 함(confine) */
+    .case-transform { transform: scale(0.85); transform-origin: top left; }
+    .case-transform .chart { height: 260px; }
+
+    /* E. 다크 배경 — 불투명 흰 배경(backgroundColor)으로 검정 라벨이 보여야 함 */
+    .case-dark { background: #111; }
+    .case-dark .chart { height: 260px; }
+    .case-dark > h2, .case-dark > p { color: #ddd; }
+
+    /* F. 높이 미지정 컨테이너 — SDK 320px 폴백으로 차트가 사라지지 않아야 함 */
+    /* (.chart 에 height 를 일부러 주지 않음) */
+
+    /* G. 클라이언트가 의도적으로 position 지정 — SDK 가 존중해야 함 */
+    .case-position .chart { position: absolute; top: 40px; left: 12px; right: 12px; height: 200px; }
+    .case-position { position: relative; height: 260px; }
+
+    /* H. 공식 훅으로 캡션 색 오버라이드 — .chartsdk-caption + !important 만 먹혀야 함 */
+    .case-hook .chartsdk-caption { color: #0a7 !important; font-weight: 700 !important; }
+    .case-hook .chart { height: 260px; }
+  </style>
+</head>
+<body>
+  <h1>ChartSDK 적대적 호스트 CSS 스트레스 테스트</h1>
+  <p>실행 중인 서버와 발급된 임베드 토큰이 필요합니다. 값을 채우고 <b>렌더</b>를 누르면 각 패널의
+     적대적 CSS 안에서 같은 차트를 명령형으로 그립니다. 각 패널 설명의 <b>기대</b>대로 보이면 방어 성공입니다.</p>
+
+  <form id="cfg">
+    <label for="api">API Base</label>
+    <input id="api" placeholder="http://localhost:8080" />
+    <label for="chartId">Chart ID</label>
+    <input id="chartId" placeholder="12" />
+    <label for="token">Auth Token</label>
+    <input id="token" placeholder="eyJ... (S7에서 발급한 JWT)" />
+    <button type="submit">렌더</button>
+  </form>
+
+  <div class="grid">
+    <div class="panel case-reset">
+      <h2>A. 전역 <code>div{...}</code> 리셋 (비-!important)</h2>
+      <p>기대: 캡션은 인라인 방어로 회색·작은 글씨 유지(빨강·30px 아님). 차트 본체는 canvas 라 무관.</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-canvas">
+      <h2>B. 전역 <code>canvas{max-width:50% !important}</code></h2>
+      <p>기대: SDK 가 canvas 에 <code>max-width:none</code> 을 걸어 표시 크기·클릭 좌표가 정상.</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-overflow">
+      <h2>C. 조상 <code>overflow:hidden</code> + 낮은 높이</h2>
+      <p>기대: 툴팁이 <code>confine:true</code> 로 컨테이너 안에 머물러 잘리지 않음(막대 위 hover).</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-transform">
+      <h2>D. 조상 <code>transform:scale(0.85)</code></h2>
+      <p>기대: hover 시 툴팁이 커서/막대 위치에서 크게 어긋나지 않음.</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-dark">
+      <h2>E. 다크 배경 <code>#111</code></h2>
+      <p>기대: 차트에 불투명 흰 배경이 깔려 검정 축 라벨·텍스트가 보임(투명 아님).</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-height">
+      <h2>F. 높이 미지정 컨테이너</h2>
+      <p>기대: 컨테이너에 height 가 없어도 SDK 320px 폴백으로 차트가 보임(0px 붕괴 아님).</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-position">
+      <h2>G. 클라이언트 <code>position:absolute</code></h2>
+      <p>기대: SDK 가 relative 로 덮어쓰지 않고 클라이언트의 absolute 배치를 존중.</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+
+    <div class="panel case-hook">
+      <h2>H. 공식 훅 <code>.chartsdk-caption{...!important}</code></h2>
+      <p>기대: 의도적 오버라이드는 먹혀서 캡션이 초록·굵게. (클래스+!important 조합만 통과)</p>
+      <div class="chart" data-chart-id="" data-auth-token=""></div>
+    </div>
+  </div>
+
+  <!--
+    apiBase 는 sdk.js 로드 시점에 1회 확정된다(window.CHARTSDK_API_BASE > 스크립트 출처 > 페이지 출처).
+    ?api= 로 들어온 값을 sdk.js 로드 전에 주입하고, 폼 제출로 리로드한다(embed.html 과 동일 패턴).
+  -->
+  <script>
+    const params = new URLSearchParams(location.search);
+    const api = params.get('api');
+    if (api) window.CHARTSDK_API_BASE = api;
+    document.addEventListener('DOMContentLoaded', () => {
+      for (const k of ['api', 'chartId', 'token']) {
+        const v = params.get(k);
+        if (v) document.getElementById(k).value = v;
+      }
+      document.getElementById('cfg').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const q = new URLSearchParams();
+        for (const k of ['api', 'chartId', 'token']) {
+          const v = document.getElementById(k).value.trim();
+          if (v) q.set(k, v);
+        }
+        location.search = q.toString();
+      });
+    });
+  </script>
+  <script src="../dist/sdk.js"></script>
+  <script>
+    // sdk.js 로드 후: chartId·token 이 모두 있으면 각 패널 컨테이너에 명령형 렌더.
+    const chartId = params.get('chartId');
+    const token = params.get('token');
+    if (chartId && token && window.ChartSDK) {
+      for (const el of document.querySelectorAll('.chart')) {
+        ChartSDK.render(el, { chartId, token });
+      }
+    }
+  </script>
+</body>
+</html>
