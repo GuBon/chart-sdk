@@ -29,6 +29,8 @@ admin/test-results/
 admin/playwright-report/
 admin/blob-report/
 admin/.playwright/
+.playwright-cli/
+sdk/test-results/
 
 # misc
 *.log
