@@ -20,7 +20,28 @@ interface RequestInitJson extends Omit<RequestInit, 'body'> {
   body?: unknown; // 객체를 받으면 JSON 직렬화
 }
 
-export async function request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
+// React Strict Mode 등에서 같은 GET이 동시에 시작되면 하나의 네트워크 요청을 공유한다.
+// 완료 후 즉시 제거하므로 응답 캐시가 아니며, 이후의 명시적 새로고침은 그대로 서버를 조회한다.
+const inFlightGets = new Map<string, Promise<unknown>>();
+
+export function request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  if (method !== 'GET' || init.body !== undefined) return execute<T>(path, init);
+
+  const key = `${BASE}${path}`;
+  const existing = inFlightGets.get(key);
+  if (existing) return existing as Promise<T>;
+
+  const pending = execute<T>(path, init);
+  inFlightGets.set(key, pending);
+  const clear = () => {
+    if (inFlightGets.get(key) === pending) inFlightGets.delete(key);
+  };
+  void pending.then(clear, clear);
+  return pending;
+}
+
+async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
   const { body, headers, ...rest } = init;
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
