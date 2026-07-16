@@ -1,0 +1,66 @@
+[
+  {
+    "name": "sum-is-the-observed-sample-total",
+    "agg": "sum",
+    "rate": 10,
+    "sampledValue": 125,
+    "expectedValue": 125,
+    "extrapolated": false
+  },
+  {
+    "name": "count-is-the-observed-sample-count",
+    "agg": "count",
+    "rate": 25,
+    "sampledValue": 20,
+    "expectedValue": 20,
+    "extrapolated": false
+  },
+  {
+    "name": "average-is-not-scaled",
+    "agg": "avg",
+    "rate": 10,
+    "sampledValue": 42.5,
+    "expectedValue": 42.5,
+    "extrapolated": false
+  },
+  {
+    "name": "stddev-is-a-sample-estimate",
+    "agg": "stddev",
+    "rate": 5,
+    "sampledValue": 12.25,
+    "expectedValue": 12.25,
+    "extrapolated": false
+  },
+  {
+    "name": "variance-is-a-sample-estimate",
+    "agg": "variance",
+    "rate": 5,
+    "sampledValue": 150.0625,
+    "expectedValue": 150.0625,
+    "extrapolated": false
+  },
+  {
+    "name": "minimum-is-only-the-observed-sample-extreme",
+    "agg": "min",
+    "rate": 10,
+    "sampledValue": 5,
+    "expectedValue": 5,
+    "extrapolated": false
+  },
+  {
+    "name": "maximum-is-only-the-observed-sample-extreme",
+    "agg": "max",
+    "rate": 10,
+    "sampledValue": 99,
+    "expectedValue": 99,
+    "extrapolated": false
+  },
+  {
+    "name": "distinct-count-is-not-naively-scaled",
+    "agg": "count_distinct",
+    "rate": 10,
+    "sampledValue": 14,
+    "expectedValue": 14,
+    "extrapolated": false
+  }
+]

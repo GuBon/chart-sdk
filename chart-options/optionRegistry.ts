@@ -19,12 +19,12 @@
 
 // ── 기본 타입 ─────────────────────────────────────────────────────
 
-export type MajorType = 'bar' | 'line' | 'pie' | 'scatter';
+export type MajorType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
 export type Zone = 'common' | 'axis' | 'type';
 export type Tier = 'T1' | 'T2' | 'T3';
 
 /** 활성 대분류 런타임 목록 (MajorType 의 단일 진실원 — 패널 그리드·기본값 생성·전환이 공유) */
-export const MAJOR_TYPES: MajorType[] = ['bar', 'line', 'pie', 'scatter'];
+export const MAJOR_TYPES: MajorType[] = ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'];
 
 /** 패널 컨트롤 종류 — 공통 컴포넌트(화면설계서 2.4)와 1:1 */
 export type Control =
@@ -72,8 +72,8 @@ export interface OptionDef {
   storage?: Storage;        // 기본 'jsonb'
   column?: string;          // storage='column'일 때 mc_chart 컬럼명
   tier?: Tier;              // 미지정 = T1
-  /** select/segment 선택지 */
-  choices?: { value: string | number; label: string }[];
+  /** select/segment/iconGrid 선택지. group 은 iconGrid 의 시각 그룹핑(예: 'GEO') — 값·저장과 무관한 표시 계층 */
+  choices?: { value: string | number; label: string; group?: string }[];
   /** slider/number 범위 */
   min?: number;
   max?: number;
@@ -120,6 +120,19 @@ export const VARIANTS: Record<MajorType, VariantDef[]> = {
     { value: 'scatter', label: '산점도' },
     { value: 'bubble',  label: '버블', flags: { bubble: true }, help: '버블 크기 컬럼을 symbolSize 로 인코딩' },
   ],
+  // 신규 3종은 MVP 기본형 1개씩 (중분류 없음).
+  boxplot: [
+    { value: 'basic', label: '기본', help: '카테고리별 5수 요약(min·Q1·중앙값·Q3·max) 상자수염' },
+  ],
+  heatmap: [
+    { value: 'basic', label: '기본', help: 'X·Y 카테고리 매트릭스를 색 강도로 인코딩(visualMap)' },
+  ],
+  map: [
+    { value: 'basic', label: '지도', help: '지역명별 값을 대한민국 지도에 색으로 인코딩(visualMap)' },
+  ],
+  geoscatter: [
+    { value: 'basic', label: '포인트', help: '경도·위도 좌표를 지도 위 점으로 표시(선택: 값 컬럼으로 점 크기 인코딩)' },
+  ],
 };
 
 // ── 공통 선택지 상수 ──────────────────────────────────────────────
@@ -147,75 +160,80 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── 기본 ──
   {
     key: 'chartType', zone: 'common', section: '기본', label: '대분류',
-    control: 'iconGrid', appliesTo: ['bar', 'line', 'pie', 'scatter'],
+    control: 'iconGrid', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     storage: 'column', column: 'chart_type', default: 'bar', echarts: '@series.type',
     choices: [
       { value: 'bar', label: '막대' }, { value: 'line', label: '선' },
       { value: 'pie', label: '원형' }, { value: 'scatter', label: '분포' },
+      { value: 'boxplot', label: '상자수염' }, { value: 'heatmap', label: '히트맵' },
+      { value: 'map', label: '지도', group: 'GEO' }, { value: 'geoscatter', label: '지도 포인트', group: 'GEO' },
     ],
-    help: 'MVP 4종 활성. 원형·분포 이후 추가 차트는 잠금("후속") 표기',
+    help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 옵션 패널). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
   },
   {
     key: 'variant', zone: 'common', section: '기본', label: '중분류',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'],
-    defaultByType: { bar: 'basic', line: 'basic', pie: 'pie', scatter: 'scatter' },
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
+    defaultByType: { bar: 'basic', line: 'basic', pie: 'pie', scatter: 'scatter', boxplot: 'basic', heatmap: 'basic', map: 'basic', geoscatter: 'basic' },
     echarts: '@variant',
     help: '선택지는 VARIANTS[chartType] 에서 동적으로 채운다 (대분류 종속)',
   },
   {
     key: 'title', zone: 'common', section: '기본', label: '차트 제목',
-    control: 'text', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: '',
+    control: 'text', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: '',
     echarts: 'title.text',
   },
   {
     key: 'titleH', zone: 'common', section: '기본', label: '제목 가로 위치',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'center',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'center',
     echarts: 'title.left',
     choices: [{ value: 'left', label: '좌' }, { value: 'center', label: '중앙' }, { value: 'right', label: '우' }],
   },
   {
     key: 'titleV', zone: 'common', section: '기본', label: '제목 세로 위치',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'top',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'top',
     echarts: 'title.top',
     choices: [{ value: 'top', label: '상' }, { value: 'bottom', label: '하' }],
   },
   {
     key: 'description', zone: 'common', section: '기본', label: '설명',
-    control: 'textarea', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: '',
+    control: 'textarea', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: '',
     storage: 'column', column: 'description', echarts: '@none',
     help: 'S1 카드 표시·검색용. option 미반영 (차트 메타)',
   },
 
   // ── 색상 ──
+  // boxplot: 팔레트/개별색 = 상자 색. heatmap·map: 팔레트[0]을 visualMap 그라디언트 상단색으로 사용(개별색 무의미 → 제외).
   {
     key: 'colorMode', zone: 'common', section: '색상', label: '색 모드',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'palette',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: 'palette',
     echarts: '@color',
     choices: [{ value: 'palette', label: '팔레트' }, { value: 'individual', label: '개별' }],
   },
   {
     key: 'palette', zone: 'common', section: '색상', label: '팔레트 프리셋',
-    control: 'palette', appliesTo: ['bar', 'line', 'pie', 'scatter'],
+    control: 'palette', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     default: ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'],
     echarts: 'color',
+    help: 'heatmap·map 은 팔레트[0]을 visualMap 그라디언트 상단색으로 사용',
   },
   {
     key: 'colorMap', zone: 'common', section: '색상', label: '개별 색 지정',
-    control: 'colorMap', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: {},
+    control: 'colorMap', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: {},
     showIf: (o) => o.colorMode === 'individual',
     echarts: '@colorMap',
     help: '실행 성공 후 활성(동적). 막대=항목/시리즈, 선=시리즈, 원형=조각. colorMap에 없으면 팔레트 순서 자동',
   },
 
   // ── 범례 ──
+  // heatmap·map 은 visualMap 이 범례를 대체하므로 범례 def 제외.
   {
     key: 'legend.show', zone: 'common', section: '범례', label: '범례 표시',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: true,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: true,
     echarts: 'legend.show',
   },
   {
     key: 'legend.position', zone: 'common', section: '범례', label: '위치',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'bottom',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: 'bottom',
     showIf: (o) => o.legend?.show !== false,
     echarts: '@legend.position',
     choices: [
@@ -225,18 +243,19 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: '좌/우 선택 시 변환기가 legend.orient=vertical 로 자동 설정',
   },
   {
-    key: 'legend.scroll', zone: 'common', section: '범례', label: '많을 때 스크롤',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: false, tier: 'T2',
-    showIf: (o) => o.legend?.show !== false,
+    key: 'legend.scroll', zone: 'common', section: '범례', label: '좌·우 범례 스크롤',
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: false, tier: 'T2',
+    showIf: (o) => o.legend?.show !== false && (o.legend?.position === 'left' || o.legend?.position === 'right'),
     echarts: '@legend.type',
-    help: 'true → legend.type=scroll (항목 많을 때 페이지네이션)',
+    help: '상·하 범례는 단일행을 보장하기 위해 항상 scroll. 좌·우만 이 토글로 페이지네이션을 켠다',
   },
 
   // ── 툴팁 ──
+  // heatmap·map 은 변환기가 trigger='item' 으로 고정(축/지역 항목 단위) → 트리거 컨트롤 미노출.
   {
     key: 'tooltip.trigger', zone: 'common', section: '툴팁', label: '트리거',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'],
-    defaultByType: { bar: 'axis', line: 'axis', pie: 'item', scatter: 'item' },
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'],
+    defaultByType: { bar: 'axis', line: 'axis', pie: 'item', scatter: 'item', boxplot: 'item' },
     echarts: 'tooltip.trigger',
     choices: [{ value: 'item', label: '항목' }, { value: 'axis', label: '축' }],
   },
@@ -256,8 +275,9 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── 계열 ──
   {
     key: 'dataLabel', zone: 'common', section: '계열', label: '데이터 라벨 표시',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: false,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: false,
     echarts: 'series.label.show',
+    help: 'heatmap = 셀 값, map = 지역명 라벨',
   },
   {
     key: 'labelPosition', zone: 'common', section: '계열', label: '라벨 위치',
@@ -281,26 +301,26 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── 데이터 갱신 ──
   {
     key: 'refreshMode', zone: 'common', section: '데이터 갱신', label: '갱신 모드',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'ttl',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'ttl',
     storage: 'column', column: 'refresh_mode', echarts: '@none',
     choices: [{ value: 'live', label: '실시간' }, { value: 'ttl', label: '주기' }, { value: 'manual', label: '수동' }],
     help: 'PRD 7.7 결과 캐싱',
   },
   {
     key: 'cacheTtlSeconds', zone: 'common', section: '데이터 갱신', label: '주기',
-    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 3600,
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 3600,
     storage: 'column', column: 'cache_ttl_seconds', echarts: '@none',
     showIf: (o) => o.refreshMode === 'ttl', choices: TTL_CHOICES,
   },
   {
     key: 'refreshNow', zone: 'common', section: '데이터 갱신', label: '지금 갱신',
-    control: 'button', appliesTo: ['bar', 'line', 'pie', 'scatter'], tier: 'T2',
+    control: 'button', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], tier: 'T2',
     storage: 'none', echarts: '@none',
     help: 'POST /charts/{id}/refresh (2차). "마지막 계산 {시각}" 표시',
   },
   {
     key: 'showComputedAt', zone: 'common', section: '데이터 갱신', label: '데이터 기준 시각 표시',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: true,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: true,
     showIf: (o) => o.refreshMode !== 'live',
     echarts: '@none',
     help: 'S4 "데이터 기준 {시각}" 캡션 (캐시 모드일 때만)',
@@ -312,13 +332,13 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── 여백 ──
   {
     key: 'grid.containLabel', zone: 'axis', section: '여백', label: '라벨 잘림 방지',
-    control: 'toggle', appliesTo: ['bar', 'line', 'scatter'], default: true,
+    control: 'toggle', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: true,
     echarts: 'grid.containLabel',
     help: 'T1 — 긴 축 라벨이 플롯 밖으로 잘리는 것 방지',
   },
   {
     key: 'grid.preset', zone: 'axis', section: '여백', label: '여백 프리셋',
-    control: 'select', appliesTo: ['bar', 'line', 'scatter'], default: 'normal',
+    control: 'select', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 'normal',
     echarts: '@grid.preset',
     choices: [{ value: 'compact', label: '좁게' }, { value: 'normal', label: '보통' }, { value: 'loose', label: '넓게' }],
   },
@@ -326,12 +346,12 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── X축 ──
   {
     key: 'xAxis.title', zone: 'axis', section: 'X축', label: '제목',
-    control: 'text', appliesTo: ['bar', 'line', 'scatter'], default: '',
+    control: 'text', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: '',
     echarts: 'xAxis.name',
   },
   {
     key: 'xAxis.rotate', zone: 'axis', section: 'X축', label: '라벨 회전',
-    control: 'slider', appliesTo: ['bar', 'line', 'scatter'], default: 0,
+    control: 'slider', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 0,
     min: 0, max: 90, step: 5, unit: '°', echarts: 'xAxis.axisLabel.rotate',
   },
   {
@@ -361,45 +381,45 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── Y축 ──
   {
     key: 'yAxis.title', zone: 'axis', section: 'Y축', label: '제목',
-    control: 'text', appliesTo: ['bar', 'line', 'scatter'], default: '',
+    control: 'text', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: '',
     echarts: 'yAxis.name',
   },
   {
     key: 'yAxis.unit', zone: 'axis', section: 'Y축', label: '단위 표기',
-    control: 'text', appliesTo: ['bar', 'line', 'scatter'], default: '',
+    control: 'text', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: '',
     echarts: '@yAxis.unit', help: '예: 원, %, 건. format과 결합되어 axisLabel.formatter 생성',
   },
   {
     key: 'yAxis.format', zone: 'axis', section: 'Y축', label: '라벨 포맷',
-    control: 'select', appliesTo: ['bar', 'line', 'scatter'], default: 'raw',
+    control: 'select', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: 'raw',
     echarts: '@yAxis.formatter', choices: FORMAT_CHOICES,
     help: 'T1 — 천단위 콤마/소수점. unit과 합쳐 최종 포맷터 구성',
   },
   {
     key: 'yAxis.rangeMode', zone: 'axis', section: 'Y축', label: '범위',
-    control: 'segment', appliesTo: ['bar', 'line', 'scatter'], default: 'auto',
+    control: 'segment', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: 'auto',
     echarts: '@yAxis.range',
     choices: [{ value: 'auto', label: '자동' }, { value: 'manual', label: '수동' }],
   },
   {
     key: 'yAxis.min', zone: 'axis', section: 'Y축', label: '최솟값',
-    control: 'number', appliesTo: ['bar', 'line', 'scatter'], default: null,
+    control: 'number', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: null,
     showIf: (o) => o.yAxis?.rangeMode === 'manual', echarts: 'yAxis.min',
   },
   {
     key: 'yAxis.max', zone: 'axis', section: 'Y축', label: '최댓값',
-    control: 'number', appliesTo: ['bar', 'line', 'scatter'], default: null,
+    control: 'number', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: null,
     showIf: (o) => o.yAxis?.rangeMode === 'manual', echarts: 'yAxis.max',
   },
   {
     key: 'yAxis.scale', zone: 'axis', section: 'Y축', label: '스케일',
-    control: 'segment', appliesTo: ['bar', 'line', 'scatter'], default: 'value',
+    control: 'segment', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: 'value',
     echarts: '@yAxis.type',
     choices: [{ value: 'value', label: '선형' }, { value: 'log', label: '로그' }],
   },
   {
     key: 'yAxis.splitLine', zone: 'axis', section: 'Y축', label: '가로 격자선',
-    control: 'toggle', appliesTo: ['bar', 'line', 'scatter'], default: true,
+    control: 'toggle', appliesTo: ['bar', 'line', 'scatter', 'boxplot'], default: true,
     echarts: 'yAxis.splitLine.show',
   },
   {
@@ -535,6 +555,28 @@ export const OPTION_REGISTRY: OptionDef[] = [
     showIf: (o) => o.variant === 'bubble',
     echarts: '@scatter.bubble', help: '실행 후 결과 컬럼에서 선택. symbolSize 를 값에 비례 인코딩',
   },
+
+  // ── 지도 (map=코로플레스 · geoscatter=위경도 포인트 공용) ──
+  {
+    key: 'map.name', zone: 'type', section: '지도', label: '지도 단위',
+    control: 'segment', appliesTo: ['map', 'geoscatter'], default: 'kr-sido',
+    echarts: '@map.name',
+    choices: [{ value: 'kr-sido', label: '시도' }, { value: 'kr-sigungu', label: '시군구' }],
+    help: '시군구 지도는 지역명이 "시도명 시군구명"(예: 부산광역시 중구) 정식 표기여야 매칭된다',
+  },
+  {
+    key: 'map.roam', zone: 'type', section: '지도', label: '확대·이동',
+    control: 'toggle', appliesTo: ['map', 'geoscatter'], default: false,
+    echarts: 'series.roam',
+    help: '켜면 마우스 휠 확대·드래그 이동 허용',
+  },
+  {
+    key: 'geoscatter.symbolSize', zone: 'type', section: '지도', label: '점 크기',
+    control: 'slider', appliesTo: ['geoscatter'], default: 10,
+    min: 2, max: 40, step: 1, unit: 'px', echarts: 'series.symbolSize',
+    help: '크기 값 컬럼(두 번째 Y)을 추가하면 값에 비례한 크기로 대체된다',
+  },
+  // boxplot·heatmap 은 MVP 기본형이라 대분류 전용 옵션 없음(공통+축 zone 으로 구성).
 ];
 
 // ── 경로 유틸 (중첩 JSONB get/set) ────────────────────────────────

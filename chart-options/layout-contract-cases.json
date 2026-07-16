@@ -1,0 +1,79 @@
+[
+  {
+    "name": "title-top-legend-top",
+    "chartType": "bar",
+    "options": {
+      "title": "상단 제목",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" }
+    },
+    "expected": {
+      "legend.top": 26,
+      "legend.type": "scroll",
+      "grid.top": 78
+    }
+  },
+  {
+    "name": "title-bottom-legend-bottom",
+    "chartType": "bar",
+    "options": {
+      "title": "하단 제목",
+      "titleV": "bottom",
+      "legend": { "show": true, "position": "bottom" }
+    },
+    "expected": {
+      "legend.bottom": 26,
+      "legend.type": "scroll",
+      "grid.bottom": 74
+    }
+  },
+  {
+    "name": "legend-top-without-title",
+    "chartType": "bar",
+    "options": {
+      "legend": { "show": true, "position": "top" }
+    },
+    "expected": {
+      "legend.top": 0,
+      "legend.type": "scroll",
+      "grid.top": 52
+    }
+  },
+  {
+    "name": "heatmap-bottom-title",
+    "chartType": "heatmap",
+    "options": {
+      "title": "히트맵 제목",
+      "titleV": "bottom"
+    },
+    "expected": {
+      "visualMap.bottom": 26,
+      "grid.bottom": 86
+    }
+  },
+  {
+    "name": "map-bottom-title-and-label-layout",
+    "chartType": "map",
+    "options": {
+      "title": "지도 제목",
+      "titleV": "bottom",
+      "dataLabel": true
+    },
+    "expected": {
+      "visualMap.bottom": 26,
+      "series.0.label.show": true,
+      "series.0.labelLayout.hideOverlap": true
+    }
+  },
+  {
+    "name": "map-label-layout-disabled",
+    "chartType": "map",
+    "options": {
+      "dataLabel": false
+    },
+    "expected": {
+      "series.0.label.show": false
+    },
+    "absent": ["series.0.labelLayout"]
+  }
+]
