@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v2.1 — v2.0 + **동명 테이블 크로스소스 조인**(핸들). builderConfig 의 테이블 참조가 소스 한정 `{datasourceId, schema, name, handle?}`. 실행 라우팅: 참조 소스 1개 → PG 직접(`"schema"."table"`), 2개+ → DuckDB 페더레이션(`"ds{id}"."schema"."table"`). 컬럼 참조는 `"핸들.컬럼"`(핸들 기본=테이블 이름, 동명 충돌 시만 `users_2`). 상세: docs/다중데이터소스_페더레이션_설계.md
-**관련 문서:** PRD v2.0 (7.3·7.7), API 계약서 v2.0 (builderConfig 구조화 참조), 화면설계서 v2.5 (S2 노코드 탭)
+**문서 버전:** v2.6 — 표본 계약 v5(SUM·COUNT 표본값·통계 추정 구간 분리) (2026-07-15)
+**관련 문서:** PRD v2.5 (7.3·7.7), API 계약서 v2.6 (builderConfig 구조화 참조), 화면설계서 v3.0 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -47,7 +47,7 @@
 | where | — | 조건 배열. 전부 AND 결합 (MVP: OR 미지원) |
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
-| sample | — | `{ rate }` 표본 비율(%, 1~100). 지정 시 FROM에 TABLESAMPLE SYSTEM 주입 (3C장). **집계 모드 전용** — rows 모드는 무시. **JOIN·원본값 튜플(`agg:"none"`)과 동시 사용 불가** (11.4) |
+| sample | — | `{ mode:"auto"\|"manual", size?, method?:"auto"\|"system", rate?, seed }`. 무편향 표본은 **갯수(size, 1,000~50,000행)** 기반 — auto는 서버가 방식(INDEX_RANDOM/SYSTEM/FULL_SCAN)·크기를 결정, manual은 size 지정. `rate`(0.1~100%)·`method:"system"`은 레거시 SYSTEM 핀 전용. **집계 모드 전용**이며 JOIN·`agg:"none"`과 동시 사용 불가 (3C·11.4장) |
 
 ## 3. 집계(agg) 템플릿
 
@@ -56,6 +56,7 @@
 | sum | SUM("col") | 숫자 |
 | avg | AVG("col") | 숫자 |
 | stddev | STDDEV("col") | 숫자 |
+| variance | VARIANCE("col") | 숫자 |
 | count | COUNT("col") | 모든 타입 |
 | count_distinct | COUNT(DISTINCT "col") | 모든 타입 |
 | min | MIN("col") | 숫자·날짜·문자 |
@@ -102,22 +103,53 @@ LIMIT 1000
 
 ## 3C. 표본 추출 (sample) — 대용량 근사 집계, MVP 포함
 
-몇 GB 테이블 전체를 스캔하지 않고 일부 표본만 읽어 평균·표준편차 등을 **근사**한다. `builderConfig.sample = { rate }`(비율 %, 1~100) 지정 시 FROM 뒤에 `TABLESAMPLE`을 주입한다.
+몇 GB 테이블 전체를 스캔하지 않고 일부 표본만 읽어 집계값으로 전체를 추정하는 기능이다. 기본 설정은 `builderConfig.sample = { mode, size, seed }`이며 수동 모드는 1,000~50,000행을 지정하고 자동 모드는 기본 10,000행을 목표로 한다. 서버는 `pg_class.reltuples`·PK·키 밀도를 조사해 INDEX_RANDOM/SYSTEM/FULL_SCAN 중 하나를 선택하며, 이 판단을 위해 정확한 `COUNT(*)` 전체 스캔을 실행하지 않는다. `rate`(0.1~100%)와 `method:"system"`은 기존 SYSTEM 경로 호환용이다.
 
 ```sql
 SELECT "category", AVG("amount") AS "avg_amount"
-FROM "sales" TABLESAMPLE SYSTEM (10)
+FROM "sales" TABLESAMPLE SYSTEM (10) REPEATABLE (48291)
 GROUP BY "category"
 LIMIT 1000
 ```
 
-- **방식은 SYSTEM 고정** — 디스크 블록 단위로 랜덤 선택해 **선택된 블록만 읽는다**(전체 스캔 회피 = 기능 목적). 행 단위 균일 표본(BERNOULLI)은 전체를 읽어야 해 목적과 충돌하므로 제공하지 않는다.
-- **크기 = 비율(%)만.** TABLESAMPLE이 퍼센트를 인자로 받기 때문. 절대 행 수 지정은 확장(tsm_system_rows) 의존이거나 `ORDER BY random()` 풀스캔이라 비채택.
+위 SQL은 SYSTEM을 강제한 호환 경로의 예시다. 기본 INDEX_RANDOM은 무작위 PK 배열을 `unnest(?)`한 뒤 base 테이블과 등가 조인하는 CTE를 사용한다.
+
+SUM·COUNT는 선택된 표본에서 관측한 합계와 개수를 그대로 계산한다. 모집단 추정 행수나 표본 비율을 곱하지 않는다. 예를 들어 SYSTEM 10% 표본은 다음과 같다.
+
+```sql
+SELECT "category",
+       SUM("amount") AS "sum_amount",
+       COUNT("amount") AS "count_amount"
+FROM "sales" TABLESAMPLE SYSTEM (10) REPEATABLE (48291)
+GROUP BY "category"
+LIMIT 1000
+```
+
+- **방식 결정(서버, v3):** `SamplingPlanner`가 base 테이블의 PK·행수(reltuples)·키 밀도를 즉답성 카탈로그 쿼리로 조사해 방식을 고른다.
+  - **INDEX_RANDOM(기본):** 단일 정수형 PK가 있고 키가 촘촘하면(밀도 ≥ 0.5), seed 기반 RNG로 `[min_pk,max_pk]` 무작위 좌표를 뽑아 `unnest(?) JOIN base ON base.pk = 좌표` **등가 조인**으로 행을 집는다. 존재하지 않는 키는 미스일 뿐이라 **모든 행이 균일 확률(무편향)**. 밀도만큼 오버샘플(K′=⌈K/밀도⌉)해 목표 표본수 K를 채우고, 뽑힌 행만 인덱스로 읽어 **전체 스캔을 회피**한다. 실측 표본수는 결과 설명과 통계 추정 구간의 유효 표본 수에 사용한다.
+  - **SYSTEM(폴백):** 정수형 PK 없음·통계 없음·키 희소(밀도 < 0.5)·프로브 예산 초과 시 기존 `TABLESAMPLE SYSTEM (rate) REPEATABLE (seed)`(디스크 블록 랜덤)로 폴백. 군집 편향 위험이 있어 `BLOCK_SAMPLE_CLUSTERING` 경고를 붙인다. `sample.method:"system"`으로 강제 핀 가능.
+  - **FULL_SCAN(작은 테이블):** 추정 행수 ≤ 100,000이면 표본이 무의미하므로 전량 정확 계산. `rate=100`도 동일하게 정확 실행이다.
+  - 행 단위 균일 표본(BERNOULLI)은 전체를 읽어야 해 "적게 읽기" 목적과 충돌하므로 제공하지 않는다. INDEX_RANDOM은 무편향과 스캔 절감을 동시에 만족하는 유일한 경로다.
+- **100%·FULL_SCAN은 표본이 아니다.** `TABLESAMPLE`·표본 CTE·숨은 표본 열을 모두 생략하고 `sampling.approximate=false`, `method="FULL_SCAN"`, `valueMode="exact"`로 반환한다.
+- **seed 고정(결정성):** INDEX_RANDOM 좌표와 SYSTEM `REPEATABLE(seed)` 모두 seed에서 결정적으로 재생성된다. 동일 데이터·동일 seed는 같은 표본을 재사용한다. Admin의 [다시 뽑기]는 새 seed를 만들고, seed는 `builder_config.sample`과 캐시 판정에 보존된다.
+- **크기 = 절대 갯수(size).** 무편향 표본의 정확도는 `±z·s/√n`으로 **표본 갯수 n**이 결정하지 전체의 몇 %인지와 무관하다. 따라서 수동 지정은 **갯수(`size`, 1,000~50,000행)**로 받고, 자동 모드는 서버가 적정 갯수(기본 10,000행)를 정한다. 레거시 `rate`(%)는 SYSTEM 핀 전용으로만 유지한다.
 - **집계 모드 전용.** rows(3B)·schema preview·원본값 튜플 모드(`agg:"none"`)에는 적용하지 않는다.
 - **JOIN과 동시 사용 금지.** 조인 결과 표본이 필요한 경우에도 앱은 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다. 고객이 직접 관리하는 읽기 전용 VIEW/테이블을 별도 데이터소스로 등록해야 한다.
-- **집계별 정확도(서버 변환기 책임):** avg·stddev는 표본값 그대로, sum·count는 비율로 **외삽(`÷ rate%`)**. min·max·count_distinct는 표본에서 부정확하며 단순 외삽이 무의미하므로 근사 결과임을 명시(UI "근사치" 배지). 응답 `approximate: true`, `sampleRate` 동봉.
-- **랜덤성:** REPEATABLE 미지정 시 실행마다 다른 표본 → 값이 흔들린다. 결과 캐싱(PRD 7.7)과 결합하면 캐시 수명 동안 고정된다. (씨드 고정은 후속.)
-- 검증: rate가 1~100 범위 밖이면 400 INVALID_REQUEST (9장). `joins[]` 또는 `agg:"none"` 과 `sample` 이 함께 들어오면 SQL 생성 전에 400 INVALID_REQUEST 로 차단하며, 생성기가 `TABLESAMPLE`을 조용히 생략해서는 안 된다.
+- **집계별 계산·표시 계약:** 아래 표는 “값을 어떻게 계산하는가”와 “사용자에게 무엇이라고 부르는가”를 함께 고정한다.
+
+| 집계 | 100% 미만 계산 | treatment | 사용자 안내 |
+|---|---|---|---|
+| SUM·COUNT | 선택된 표본의 집계값 그대로(외삽 없음) | `SAMPLE_AGGREGATE` | 각각 `표본 합계`·`표본 개수`; 전체값이 아님을 경고 |
+| AVG·STDDEV·VARIANCE | 표본 통계량을 모집단 통계의 추정값으로 사용 | `SAMPLE_ESTIMATE` | INDEX_RANDOM이면 가능한 그룹에 95% 추정 구간 표시 |
+| MIN·MAX | 표본에서 관측된 극값 그대로 | `OBSERVED_EXTREME` | 전체의 진짜 극값을 보장하지 않는다는 경고 |
+| COUNT DISTINCT | 표본 고유 개수 그대로(단순 외삽 금지) | `OBSERVED_DISTINCT` | 전체 고유 개수보다 작을 수 있다는 경고 |
+
+- **실제 표본 수:** 집계 SQL 끝에 그룹 행 수 `__chartsdk_sample_count`, 전체 실측 표본수 `__chartsdk_sample_total`을 붙인다. INDEX_RANDOM은 여기에 시리즈별 비NULL 수 `__chartsdk_sample_n_{i}`와 필요한 평균·표본표준편차를 숨은 열로 추가한다. 실행 라우터는 숨은 열을 차트 rows에서 제거하고 메타데이터로 옮긴다. 신뢰구간의 `n`은 그룹 전체 행 수가 아니라 **해당 시리즈의 비NULL 유효 표본 수**다.
+- **응답 계약 v5(스펙/실행 분리):** `sampling`은 **스펙 필드**(캐시 판정 대상 — `mode, requestedMethod, rate?, sizeTarget?, seed?`)와 **실행 필드**(표시용 — `approximate, method(INDEX_RANDOM|SYSTEM|FULL_SCAN), valueMode, populationEstimate?, sampleSize?, sampledRowCount?, confidenceLevel?, groups?, estimates?, warnings?`)를 함께 가진다. 표본 실행의 `valueMode`는 `sample`이며, SUM·COUNT는 `SAMPLE_AGGREGATE`와 `SAMPLE_AGGREGATE_ONLY` 경고를 사용한다. `estimates[].intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 형태의 그룹별 구간이다. warnings에는 `INDEX_RANDOM_SAMPLE`/`BLOCK_SAMPLE_CLUSTERING`, `SAMPLE_AGGREGATE_ONLY`, `SMALL_SAMPLE_GROUPS`, `STDDEV_CI_NORMALITY_ASSUMED`, MIN/MAX·COUNT DISTINCT 경고가 들어간다. `approximate`·`sampleRate`는 하위 호환 별칭이다. 저장 차트는 실행 결과 전체를 캐시·미리보기·임베드 API·SDK까지 전달한다.
+- **기존 캐시 호환:** builder 차트 재계산은 저장 문자열 SQL이 아니라 `builder_config`로 현재 생성기를 다시 실행한다. `matchesDefinition`은 **스펙 필드만** 비교하므로 auto 해석이 INDEX_RANDOM/SYSTEM/FULL_SCAN 중 무엇으로 갈려도 캐시가 영구 미스되지 않는다. 값의 의미가 다른 v4 이하 캐시는 미스로 처리해 v5 실행 통계를 다시 만든다.
+- **95% 추정 구간(INDEX_RANDOM 한정):** AVG는 `z·s/√n`의 대칭 구간을 사용한다. STDDEV·VARIANCE는 각 그룹 값이 정규분포에 가깝다는 가정 아래 자유도 `n−1`의 카이제곱 분포로 비대칭 `[lower95, upper95]`를 계산해 `estimates[].intervals[]`에 싣고 `STDDEV_CI_NORMALITY_ASSUMED`를 표시한다. 시리즈 배지의 ±X%는 그룹별 상대오차 최댓값을 보수적으로 사용한다. 유효 `n<30` 그룹은 구간을 생략하되 다른 유효 그룹의 구간은 유지하고 `SMALL_SAMPLE_GROUPS`를 함께 붙인다. SUM·COUNT는 표본값 자체이므로 모집단 추정 구간을 제공하지 않고, MIN/MAX/COUNT DISTINCT도 오차범위를 제공하지 않는다. **SYSTEM 폴백**은 블록 내 상관 때문에 독립행 공식을 적용하지 않는다.
+- **전체 구성 비율:** SUM·COUNT로 전체의 구성만 비교할 때는 절대값 외삽 대신 명시적인 `% 점유율` 표시 모드를 사용한다. 현재 버전은 이를 자동 적용하지 않으며, 향후 `전체 추정값 보기` 옵션을 켠 경우에만 외삽과 그에 맞는 오차구간을 별도 계약으로 제공한다.
+- 검증: `rate`가 있으면 0.1~100(소수 한 자리), `size`가 있으면 1,000~50,000 정수, `method`는 auto/system, `mode`는 auto/manual, `seed`는 0~2147483647 정수만 허용하며 벗어나면 400 INVALID_REQUEST. `joins[]` 또는 `agg:"none"`과 `sample`이 함께 들어오면 SQL 생성 전에 차단한다.
 
 ## 4. WHERE 연산자(op) 목록
 
@@ -175,7 +207,9 @@ generate(config, datasourceId):
 
   sql = "SELECT " + join(select)
       + " FROM " + qualify(table)   # "schema"."table" (스키마 미지정 → public). 예시는 public 생략 표기
-      + (!allNone && config.sample ? " TABLESAMPLE SYSTEM (" + clamp(config.sample.rate, 1, 100) + ")" : "")  # 표본 추출(3C)
+      + (!allNone && config.sample?.rate < 100
+          ? " TABLESAMPLE SYSTEM (" + config.sample.rate + ") REPEATABLE (" + config.sample.seed + ")"
+          : "")  # 100은 정확 전체 실행(3C)
       + (whereSql ? " WHERE " + whereSql : "")
       + (!allNone ? " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis)) : "")
       + (orderSql ? " ORDER BY " + orderSql : "")
@@ -284,7 +318,7 @@ LIMIT 1000
 | scatter에서 agg가 none 아님 | 400 AGG_TYPE_MISMATCH |
 | none과 집계가 한 builderConfig 안에 섞임 | 400 AGG_TYPE_MISMATCH |
 | none 원본값 튜플 모드에서 sample 지정 | 400 INVALID_REQUEST |
-| 표본 비율 범위(sample.rate 1~100 밖) | 400 INVALID_REQUEST (생성기는 클램프도 적용) |
+| 표본 설정 오류(rate 0.1~100 밖·소수 2자리 이상, mode/seed 오류) | 400 INVALID_REQUEST (서버는 조용히 클램프하지 않음) |
 
 모두 SQL 생성 전에 차단한다. 노코드 사용자는 DB 에러를 보지 않는 것이 목표다(SQL 모드는 반대로 DB 에러를 그대로 노출 — 사용자층이 다르다).
 

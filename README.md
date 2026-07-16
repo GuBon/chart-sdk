@@ -24,7 +24,7 @@
 
 - 백엔드는 `web` 컨트롤러, `chart` 서비스/저장소, `query` SQL 생성/실행, `converter` 옵션 변환으로 분리되어 있다.
 - 공통 에러 envelope은 `ApiExceptionHandler`, 임베드 JWT 검증은 `EmbedTokenInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
-- 검증 기준 문서는 PRD v1.8, API 계약서 v1.6, 노코드 SQL 생성규칙 v1.5, 화면설계서 v2.5를 따른다.
+- 검증 기준은 [`docs/PRD_차트솔루션.md`](docs/PRD_차트솔루션.md), [`docs/API계약서_차트솔루션.md`](docs/API계약서_차트솔루션.md), [`docs/노코드_SQL생성규칙.md`](docs/노코드_SQL생성규칙.md), [`docs/화면설계서_차트솔루션.md`](docs/화면설계서_차트솔루션.md)의 최신 문서 버전을 따른다.
 
 ## 개발
 
@@ -44,7 +44,8 @@ cd server && gradle bootRun   # 또는 IntelliJ 임포트
 ```bash
 npm run test:unit             # 워크스페이스 단위 테스트(admin + sdk)
 npm run test:e2e              # 프론트 E2E (Playwright + MSW, 자체 dev 서버 :3100)
-cd server && ./gradlew test   # 서버 단위·통합 (통합은 실 DB 필요)
+cd server && ./gradlew test              # 서버 단위(DB 불요)
+cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 ```
 
 계층·수치·라이브 스위프 절차는 [`docs/테스트_전략.md`](docs/테스트_전략.md)가 단일 관리한다.

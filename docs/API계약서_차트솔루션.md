@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v2.1 — v2.0 + **동명 테이블 크로스소스 조인**(핸들). `builderConfig.table`/`joins[].table` 을 구조화 참조 `{datasourceId, schema, name, handle?}` 로(레거시 문자열은 primary 소스로 승격). `handle` 은 동명 테이블 구분용(없으면 이름) — 컬럼 참조는 `"핸들.컬럼"`. 다중 소스는 저장 스냅샷(`refresh_mode=manual`), 임베드는 캐시-온리. 상세: `docs/다중데이터소스_페더레이션_설계.md`
-**관련 문서:** PRD v2.0, 화면설계서 v2.5, 노코드 SQL 생성규칙 v2.0, 다중데이터소스_페더레이션_설계
+**문서 버전:** v2.6 — sampling v5(SUM·COUNT 표본값·통계 추정 구간 분리) (2026-07-15)
+**관련 문서:** PRD v2.5, 화면설계서 v3.0, 노코드 SQL 생성규칙 v2.6, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -69,6 +69,21 @@ JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } —
 {
   "chartId": 12,
   "computedAt": "2026-06-12T09:00:00Z",
+  "sampling": {
+    "version": 5,
+    "approximate": true,
+    "method": "SYSTEM",
+    "mode": "manual",
+    "rate": 10,
+    "seed": 48291,
+    "valueMode": "sample",
+    "sampledRowCount": 2850,
+    "groups": [{ "key": "의류", "sampleCount": 500 }],
+    "estimates": [{ "series": "sum_amount", "aggregate": "sum", "treatment": "SAMPLE_AGGREGATE" }],
+    "warnings": ["BLOCK_SAMPLE_CLUSTERING", "SAMPLE_AGGREGATE_ONLY"]
+  },
+  "approximate": true,
+  "sampleRate": 10,
   "option": {
     "xAxis": { "type": "category", "data": ["의류", "식품", "전자"], "name": "카테고리" },
     "yAxis": { "type": "value", "name": "매출" },
@@ -82,6 +97,9 @@ JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } —
 
 - sdk.js는 `option`을 그대로 `chart.setOption(res.option)` 한다. 클라이언트는 차트 모양을 결정하지 않는다.
 - `chart_type`과 `options`(JSONB)의 값이 서버에서 option 조립 시 반영된다.
+- `builderConfig.sample`을 사용한 차트는 sampling v5를 포함한다. 서버가 실행 방법을 `INDEX_RANDOM|SYSTEM|FULL_SCAN` 중 결정하며 100% 또는 작은 테이블의 FULL_SCAN은 `{approximate:false,method:"FULL_SCAN",valueMode:"exact"}`이다. 표본 실행의 `valueMode`는 `sample`이다. `sampledRowCount`는 표본에 들어온 실제 입력 행 수이고 API의 `rowCount`는 결과 그룹 수다. `groups`는 화면에 표시된 그룹별 표본 수다.
+- `estimates`는 시리즈별 계산 해석을 제공한다: SUM/COUNT=`SAMPLE_AGGREGATE`, AVG/STDDEV/VARIANCE=`SAMPLE_ESTIMATE`, MIN/MAX=`OBSERVED_EXTREME`, COUNT DISTINCT=`OBSERVED_DISTINCT`, 정확 실행은 모두 `EXACT`. SUM·COUNT는 외삽하지 않은 `표본 합계`·`표본 개수`이며 `SAMPLE_AGGREGATE_ONLY` 경고를 함께 보낸다. INDEX_RANDOM의 AVG에는 95% 오차 요약을 제공하고, STDDEV/VARIANCE의 `intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 그룹별 구간이다. 분산 계열 구간에는 `STDDEV_CI_NORMALITY_ASSUMED` 경고가 항상 따라간다.
+- `sampling`이 정식 계약이며 `approximate`·`sampleRate`는 구버전 클라이언트를 위한 하위 호환 별칭이다. Admin과 SDK는 정확/추정을 구분하고 경고를 표시한다.
 
 ### 토큰 검증 구현 위치
 
@@ -142,7 +160,7 @@ POST /api/v1/query/run-builder
 `builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 분포는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
 
 `mode` (선택, 기본 `"aggregate"`):
-- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. `builderConfig.sample`(표본 추출, 3C) 지정 시 FROM에 TABLESAMPLE 주입 + 응답에 `approximate: true`·`sampleRate` 동봉(합계·개수는 외삽 보정). 표본은 **aggregate에서만** 적용.
+- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 기본 count 기반 표본은 INDEX_RANDOM 등가 조인을 사용하고, 레거시 `method:"system"`/`rate`는 `TABLESAMPLE SYSTEM`을 사용한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v5와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
 - `"rows"` — 집계·GROUP BY 없이 `SELECT * + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. 자동 호출 허용(단순 조회). 표본 추출은 무시한다.
 검증 실패는 400(INVALID_IDENTIFIER / AGG_TYPE_MISMATCH / OP_TYPE_MISMATCH / VALUE_PARSE_ERROR / BUCKET_TYPE_MISMATCH) — DB 에러를 노코드 사용자에게 노출하지 않는다.
 2번(raw SQL 실행)은 2차 SQL 탭에서 사용한다.
@@ -168,7 +186,7 @@ POST /api/v1/query/run-builder
 POST /api/v1/charts/preview
 { "chartType": "bar", "options": { ... }, "rows": { "columns": [...], "rows": [...] } }
 ```
-응답 200: `{ "option": { ... } }` — 받은 `rows`에 `chartType`·`options`만 다시 적용해 ECharts option을 조립한다(**SQL 미실행**, 1·2A와 동일한 단일 Java 변환기). S2에서 **데이터에 영향 없는 옵션 변경**(색·범례·라벨·축 등) 시 호출 — 옵션 변경마다 집계 SQL을 재실행해 운영 DB를 때리지 않기 위함(PRD 7.7). `rows`는 직전 `run-builder` 결과를 클라이언트가 보관했다가 그대로 전달(≤1000행, 수십 KB). 클라이언트는 디바운스(약 150~250ms) 후 호출해 응답을 `setOption` 한다.
+응답 200: `{ "option": { ... } }` — 받은 `rows`에 `chartType`·`options`만 다시 적용해 ECharts option을 조립한다(**SQL 미실행**, 1·2A와 동일한 운영 Java 변환기). S2에서 **데이터에 영향 없는 옵션 변경**(색·범례·라벨·축 등) 시 호출 — 옵션 변경마다 집계 SQL을 재실행해 운영 DB를 때리지 않기 위함(PRD 7.7). `rows`는 직전 `run-builder` 결과를 클라이언트가 보관했다가 그대로 전달(≤1000행, 수십 KB). 클라이언트는 디바운스(약 150~250ms) 후 호출해 응답을 `setOption` 한다. MSW의 TypeScript 변환기는 프론트 테스트 전용 미러이며 운영 API 계약에는 포함되지 않는다.
 - 데이터 구성(테이블·축·조건·정렬·묶기)이 바뀌면 2B가 아니라 **2A `run-builder` 재호출**(rows 갱신 + option 재조립). `options.sortOrder`(표시 정렬)는 rows 재정렬만이라 2B로 충분하다.
 
 ---
@@ -345,6 +363,7 @@ GET /api/v1/schema/tables?datasourceId={id}
     {
       "schema": "public",
       "name": "sales",
+      "estimatedRowCount": 500000000,
       "columns": [
         { "name": "id", "type": "bigint" },
         { "name": "category", "type": "varchar" },
@@ -359,6 +378,7 @@ GET /api/v1/schema/tables?datasourceId={id}
 ```
 
 - 서버는 현재 사용자 소유 데이터소스에 연결해 `information_schema`를 조회한다. 시스템 스키마(`pg_catalog`·`information_schema`·`pg_toast` 등)와 `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
+- `estimatedRowCount`는 PostgreSQL `pg_class.reltuples`의 계획용 추정치다. 정확한 행 수가 아니며 표본 계획(INDEX_RANDOM/FULL_SCAN/SYSTEM 폴백), 직접 지정 UI의 "전체 약 N행 중" 안내에만 사용한다. 이 필드를 만들기 위해 대용량 테이블에 `COUNT(*)`를 실행하지 않으며, INDEX_RANDOM의 정확도는 비율이 아니라 실행 후 실제 표본 수와 집계별 유효 표본 수로 계산한다.
 - `schema` 는 테이블의 소속 스키마다. `public` 외 사용자 스키마(예: `tandanji`)의 업무 테이블도 노출된다. 클라이언트는 식별자를 비-public 일 때만 `"schema.table"` 로 한정해 `builderConfig.table`/`joins[].table` 에 담는다(미지정 → public).
 
 ### 5.2 테이블 원본 데이터 조회 (최대 1,000행)
@@ -377,7 +397,7 @@ GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}
 ## 6. 구현 메모
 
 - 1번(임베드 데이터)과 2번(SQL 실행)은 같은 "SQL 실행 엔진"(읽기 전용, 타임아웃, 행 제한, SELECT 검증)을 공유한다. 한 곳에 구현한다.
-- ECharts option 조립(방식 A)은 서버의 단일 변환기에 둔다: (rows, chartType, options) → option JSON. 차트 종류 추가 시 이 변환기만 확장.
+- ECharts option 조립(방식 A)의 운영 권위는 서버 Java 변환기다: (rows, chartType, options) → option JSON. MSW 테스트 미러와 서버의 레이아웃 결과는 `chart-options/layout-contract-cases.json` 공용 fixture를 양쪽 테스트가 소비해 일치시킨다.
 - CORS: sdk.js가 외부 사내 페이지에서 호출하므로, 임베드 데이터 엔드포인트(1번)는 사내 도메인 범위에서 CORS 허용이 필요하다.
  
 ---

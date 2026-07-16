@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v1.5 (2026-07-01 갱신: 1차트=N데이터소스 페더레이션 — `mc_chart_datasource`(V3) junction 으로 차트↔소스 N:M 기록, 다중 소스 차트 식별·삭제가드에 사용)
-**관련:** Flyway `V1~V3` · PRD v2.0(9장) · API v2.0 · 화면설계서 v2.5 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
+**문서 버전:** v2.0 (2026-07-15 갱신: sampling v5 표본 집계·통계 추정 구간 분리)
+**관련:** Flyway `V1~V4` · PRD v2.5(9장) · API v2.6 · 화면설계서 v3.0 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -108,9 +108,9 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
-| 표본 추출(토글+비율%) | 🧩 | `builder_config.sample` (rate) — 집계 모드 TABLESAMPLE (생성규칙 3C). `builder_config.joins[]`·`agg="none"` 과 동시 저장/실행 금지. JSONB라 마이그레이션 0 |
+| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 기본은 INDEX_RANDOM, 불가 시 SYSTEM, 작은 테이블/레거시 100%는 FULL_SCAN. sampling v5 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `joins[]`·`agg="none"`과 동시 저장/실행 금지. JSONB라 스키마 마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
-| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result` |
+| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v5(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
 | [원본 데이터] 탭(raw) | ⏳ | run-builder `mode:rows` / schema preview — 저장 안 함 |
 | 실행 메타 "N행·Nms" | 🔁 | `mc_chart_cache.row_count`·`elapsed_ms` (또는 ⏳ 미리보기) |
 
@@ -126,7 +126,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 공통 | 제목·가로/세로 위치 | 🧩 | `options.title`·`titleH`·`titleV` |
 | 공통 | 설명 | 📦 | `mc_chart.description` (option 미반영) |
 | 공통 | 색 모드·팔레트·개별색 | 🧩 | `options.colorMode`·`palette`·`colorMap` |
-| 공통 | 범례 표시·위치·스크롤 | 🧩 | `options.legend.{show,position,scroll}` |
+| 공통 | 범례 표시·위치·스크롤 | 🧩 | `options.legend.{show,position,scroll}` (`scroll`은 좌·우 전용, 상·하는 변환기가 한 줄 scroll 자동 적용) |
 | 공통 | 툴팁 트리거·값포맷·축지시선 | 🧩 | `options.tooltip.{trigger,valueFormat,axisPointer}` |
 | 공통 | 데이터 라벨·라벨위치·정렬 | 🧩 | `options.dataLabel`·`labelPosition`·`sortOrder` |
 | 공통 | 갱신 모드 | 📦 | `mc_chart.refresh_mode` |
