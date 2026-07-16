@@ -67,11 +67,12 @@ export const handlers = [
         errors[String(id)] = 'Preview unavailable.';
         continue;
       }
-      const result = buildAggregateRows(chart.builderConfig);
+      const result = buildAggregateRows(chart.builderConfig, chart.chartType);
       previews[String(id)] = {
         chartId: id,
         rowCount: result.rowCount,
         truncated: result.truncated,
+        ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
         computedAt: new Date().toISOString(),
         option: assembleOption(result, chart.chartType, chart.options ?? {}),
       };
@@ -86,11 +87,12 @@ export const handlers = [
     const summary = chartList.find((c) => c.id === id);
     const chart = saved ?? (summary ? chartDetail(summary) : null);
     if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
-    const result = buildAggregateRows(chart.builderConfig);
+    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
     return HttpResponse.json({
       chartId: id,
       rowCount: result.rowCount,
       truncated: result.truncated,
+      ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: new Date().toISOString(),
       option: assembleOption(result, chart.chartType, chart.options ?? {}),
     });
@@ -186,7 +188,7 @@ export const handlers = [
     const validationIssue = builderValidationIssue(body.builderConfig, body.chartType, schemaTables);
     if (validationIssue) return err(400, 'INVALID_BUILDER_CONFIG', validationIssue);
     if (body.mode === 'rows') return HttpResponse.json(buildRawRows(body.builderConfig));
-    const result = buildAggregateRows(body.builderConfig);
+    const result = buildAggregateRows(body.builderConfig, body.chartType);
     const option = assembleOption(result, body.chartType, body.options);
     return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig), option });
   }),

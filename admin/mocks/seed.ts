@@ -36,6 +36,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'sales',
+    estimatedRowCount: 500_000_000,
     columns: [
       { name: 'id', type: 'int' },
       { name: 'category', type: 'text' },
@@ -49,6 +50,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'users',
+    estimatedRowCount: 2_500_000,
     columns: [
       { name: 'id', type: 'int' },
       { name: 'name', type: 'text' },
@@ -59,6 +61,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'visits',
+    estimatedRowCount: 80_000_000,
     columns: [
       { name: 'id', type: 'int' },
       { name: 'path', type: 'text' },
@@ -121,6 +124,28 @@ export const schemaTables: SchemaTable[] = [
       { name: 'id', type: 'int' },
       { name: 'region', type: 'text' },
       { name: 'tier', type: 'text' },
+    ],
+  },
+  // 대형 스키마 페이지네이션·정렬 검증용 — legacy-dw(ds3)에 bulk 테이블 60개(50/페이지 → 2페이지). name 은 zero-pad 라 정렬이 결정적(bulk_table_60 = 이름 내림차순 첫 항목).
+  ...Array.from({ length: 60 }, (_, i) => ({
+    datasourceId: 3,
+    schema: 'public',
+    name: `bulk_table_${String(i + 1).padStart(2, '0')}`,
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'amount', type: 'numeric' },
+      { name: 'created_at', type: 'date' },
+    ],
+  })),
+  // 스키마 필터 검증용 — legacy-dw(ds3)의 비-public 스키마(archive). 사이드바 스키마 필터 섹션은 스키마 2개 이상일 때만 노출.
+  {
+    datasourceId: 3,
+    schema: 'archive',
+    name: 'events',
+    columns: [
+      { name: 'id', type: 'int' },
+      { name: 'kind', type: 'text' },
+      { name: 'occurred_at', type: 'date' },
     ],
   },
 ];
