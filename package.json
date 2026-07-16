@@ -17,8 +17,8 @@
     "build:sdk": "npm run build -w @chartsdk/sdk",
     "build:admin": "npm run build -w @chartsdk/admin",
     "build": "npm run gen:defaults && npm run build -w @chartsdk/sdk && npm run build -w @chartsdk/admin",
-    "typecheck": "npm run typecheck -w @chartsdk/admin",
-    "test:unit": "npm run test:unit -ws --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspaces --if-present",
     "test:e2e": "npm run test:e2e -w @chartsdk/admin"
   }
 }
