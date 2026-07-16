@@ -5,7 +5,6 @@ import { ChevronDown, ChevronRight, Play, X } from 'lucide-react';
 import type { BuilderConfig, ChartType, Datasource, JoinSpec, SchemaTable, TableRef, WhereCond, YAxisField } from '@/lib/api';
 import {
   BUCKET_CHOICES,
-  DEFAULT_SAMPLE_RATE,
   JOIN_TYPE_CHOICES,
   MAX_JOINS,
   OP_CHOICES,
@@ -15,18 +14,29 @@ import {
   builderValidationIssue,
   builderWarning,
   columnsForBuilder,
+  createSampleConfig,
+  createSampleSeed,
   emptyJoin,
   isDateType,
   orderTargets,
   tableHandle,
   tableRefKey,
   tableRefLabel,
+  updateSampleMode,
   withUniqueHandle,
 } from '@/lib/builder';
+import { DEFAULT_SAMPLE_SEED, DEFAULT_SAMPLE_SIZE, MAX_SAMPLE_SIZE, MIN_SAMPLE_SIZE, isFullScanTable } from '@chartsdk/chart-options/sampling';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
+
+// 표본 크기 입력 옆 안내 — 전체 추정 행수(reltuples)는 정확치가 아니라 "약 N행"으로 표기. 작으면 전량 정확 계산.
+function sampleTotalHint(estimatedRowCount?: number): string {
+  if (!estimatedRowCount || estimatedRowCount <= 0) return '전체 크기 미상 · 실행 후 실제 표본 수와 가능한 통계 구간을 표시합니다';
+  const total = `전체 약 ${estimatedRowCount.toLocaleString()}행`;
+  return isFullScanTable(estimatedRowCount) ? `${total} — 작아서 전량 정확 계산됩니다` : `${total} 중 무작위 표본`;
+}
 
 // S2 중앙 노코드 구성 폼(259:191). builderConfig 를 편집하고 [실행]을 트리거한다.
 interface Props {
@@ -49,6 +59,16 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
   const isScatter = chartType === 'scatter';
   const isPie = chartType === 'pie';
+  const isBoxplot = chartType === 'boxplot';
+  const isMap = chartType === 'map';
+  const isGeoScatter = chartType === 'geoscatter';
+  // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]). 버킷·표본은 원본값 모드에서 숨김.
+  const maxSeries = isPie || isMap || isBoxplot ? 1 : isGeoScatter ? 2 : Infinity;
+  const hideBucket = isScatter || isBoxplot || isGeoScatter;
+  const hideSampleRow = isScatter || isBoxplot || isGeoScatter;
+  const rawY = isScatter || isBoxplot || isGeoScatter; // Y 기본 집계 없음
+  const xLabel = isMap ? '지역' : isBoxplot ? '카테고리' : isGeoScatter ? '경도' : 'X축';
+  const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 · 집계';
   const yAggChoices = aggChoicesForChart(chartType);
   const validationIssue = builderValidationIssue(config, chartType, tables);
   const warning = builderWarning(config);
@@ -76,22 +96,24 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
     return opts;
   };
   const tableOptions = tableOptionsFor(config.table ? tableRefKey(config.table) : null, new Set());
+  const baseSchemaTable = config.table ? findByKey(tableRefKey(config.table)) : undefined;
 
   // 테이블 변경 시 컬럼·조인 참조가 모두 무효 → 구성 초기화 (드롭다운 직접 선택은 의도적 변경이라 모달 없음)
   const changeTable = (key: string) => {
     const t = findByKey(key);
     if (!t) return;
+    // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
     onChange({ table: refOf(t), joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null });
   };
 
   const changeXAxis = (xAxis: string) => {
     const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
-    patch({ xAxis, xAxisBucket: isDate && !isScatter ? 'month' : null });
+    patch({ xAxis, xAxisBucket: isDate && !hideBucket ? 'month' : null });
   };
 
   const setY = (i: number, p: Partial<YAxisField>) =>
     patch({ yAxis: config.yAxis.map((y, idx) => (idx === i ? { ...y, ...p } : y)) });
-  const addY = () => patch({ yAxis: [...config.yAxis, { column: firstCol, agg: isScatter ? 'none' : 'sum' }] });
+  const addY = () => patch({ yAxis: [...config.yAxis, { column: firstCol, agg: rawY ? 'none' : 'sum' }] });
   const removeY = (i: number) => patch({ yAxis: config.yAxis.filter((_, idx) => idx !== i) });
 
   const setW = (i: number, p: Partial<WhereCond>) =>
@@ -209,11 +231,13 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           </Row>
         )}
 
-        <Row label="X축">
+        <Row label={xLabel}>
           <div className="w-60">
-            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder="컬럼 선택" />
+            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder={isMap ? '지역명 컬럼' : '컬럼 선택'} />
           </div>
-          {isDateType(xType) && !isScatter && (
+          {isMap && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시 / 시군구 지도는 부산광역시 중구)</span>}
+          {isGeoScatter && <span className="text-[13px] text-text-tertiary">경도(숫자) 컬럼 — 위도는 아래 첫 번째, 점 크기값은 두 번째(선택)</span>}
+          {isDateType(xType) && !hideBucket && (
             <div className="flex items-center gap-2">
               <span className="text-[13px] text-text-secondary">묶기</span>
               <div className="w-28">
@@ -228,7 +252,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           )}
         </Row>
 
-        <Row label="Y축 · 집계">
+        <Row label={yLabel}>
           <div className="flex flex-col gap-2">
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -248,7 +272,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               </div>
             ))}
             <div className="flex items-center gap-3">
-              <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || (isPie && config.yAxis.length >= 1)}>
+              <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || config.yAxis.length >= maxSeries}>
                 + 시리즈 추가
               </Button>
               <span className="flex items-center gap-1.5 text-[13px] text-text-tertiary">
@@ -303,14 +327,14 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           )}
         </Row>
 
-        {!isScatter && (
+        {!hideSampleRow && (
         <Row label="표본 추출">
           <Switch
             aria-label="표본 추출"
             checked={!!config.sample && !sampleDisabled}
             disabled={sampleDisabled}
             onChange={(on) => {
-              if (!sampleDisabled) patch({ sample: on ? { rate: config.sample?.rate ?? DEFAULT_SAMPLE_RATE } : null });
+              if (!sampleDisabled) patch({ sample: on ? createSampleConfig() : null });
             }}
           />
           {rawValueMode ? (
@@ -319,27 +343,52 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
             <span className="text-[13px] text-text-tertiary">조인 사용 중에는 표본 추출을 사용할 수 없습니다.</span>
           ) : config.sample ? (
             <>
-              <div className="flex w-20 items-center gap-1">
-                <Input
-                  size="sm"
-                  type="number"
-                  min={1}
-                  max={100}
-                  aria-label="표본 비율"
-                  placeholder={String(DEFAULT_SAMPLE_RATE)}
-                  // 입력 중엔 빈칸·1자리 중간 상태를 허용한다(0=빈칸). 하한 1 보정은 실행 시 clampRate 가 담당 → "1이 안 지워지는" 문제 해소.
-                  value={config.sample.rate ? String(config.sample.rate) : ''}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    patch({ sample: { rate: v === '' ? 0 : Math.min(100, Math.max(0, Math.floor(Number(v) || 0))) } });
-                  }}
+              <div className="w-32">
+                <Select
+                  aria-label="표본 방식"
+                  value={config.sample.mode === 'manual' ? 'manual' : 'auto'}
+                  onChange={(e) => patch({ sample: updateSampleMode(config.sample, e.target.value === 'manual' ? 'manual' : 'auto') })}
+                  options={[
+                    { value: 'auto', label: '자동 (서버 결정)' },
+                    { value: 'manual', label: '직접 지정' },
+                  ]}
                 />
-                <span className="text-[13px] text-text-secondary">%</span>
               </div>
-              <span className="text-[13px] text-text-tertiary">일부만 빠르게 스캔 — 근사값(합계·개수 보정)</span>
+              {config.sample.mode === 'manual' && (
+                <div className="flex items-center gap-1">
+                  <div className="w-24">
+                    <Input
+                      size="sm"
+                      type="number"
+                      min={MIN_SAMPLE_SIZE}
+                      max={MAX_SAMPLE_SIZE}
+                      aria-label="표본 크기"
+                      placeholder={String(DEFAULT_SAMPLE_SIZE)}
+                      value={config.sample.size ? String(config.sample.size) : ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        patch({ sample: { ...config.sample!, size: v === '' ? undefined : Math.max(0, Math.floor(Number(v) || 0)) } });
+                      }}
+                    />
+                  </div>
+                  <span className="text-[13px] text-text-secondary">행</span>
+                </div>
+              )}
+              <span className="text-[13px] text-text-tertiary" data-testid="sample-total-hint">
+                {sampleTotalHint(baseSchemaTable?.estimatedRowCount)}
+              </span>
+              <button
+                type="button"
+                className="text-xs text-text-secondary underline-offset-2 hover:underline"
+                aria-label="표본 다시 뽑기"
+                title={`현재 seed ${config.sample.seed ?? DEFAULT_SAMPLE_SEED}`}
+                onClick={() => patch({ sample: { ...config.sample!, seed: createSampleSeed() } })}
+              >
+                다시 뽑기
+              </button>
             </>
           ) : (
-            <span className="text-[13px] text-text-tertiary">대용량 테이블 일부만 스캔해 근사 집계</span>
+            <span className="text-[13px] text-text-tertiary">무작위 표본으로 빠르게 확인 — SUM·COUNT는 표본값, AVG·표준편차·분산은 가능한 경우 95% 추정 구간을 표시합니다.</span>
           )}
         </Row>
         )}

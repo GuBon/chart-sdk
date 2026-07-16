@@ -1,7 +1,10 @@
 import type { QueryResult } from '@/lib/api';
+import type { SamplingGroupCount } from '@chartsdk/chart-options/sampling';
 
 // 결과/원본 데이터 공통 표(258:232). 세로 스크롤, 1,000행 초과 시 안내.
-export function DataTable({ data }: { data: QueryResult }) {
+export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGroups?: SamplingGroupCount[] }) {
+  const sampleCountByKey = new Map(sampleGroups?.map((group) => [String(group.key ?? ''), group.sampleCount]));
+  const showSampleCount = sampleCountByKey.size > 0;
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
@@ -13,6 +16,11 @@ export function DataTable({ data }: { data: QueryResult }) {
                   {c.name}
                 </th>
               ))}
+              {showSampleCount && (
+                <th className="border-b border-border px-4 py-2 text-left font-medium text-text-secondary">
+                  표본 입력 행
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -23,6 +31,11 @@ export function DataTable({ data }: { data: QueryResult }) {
                     {String(cell)}
                   </td>
                 ))}
+                {showSampleCount && (
+                  <td className="px-4 py-2 text-text-secondary">
+                    {sampleCountByKey.get(String(row[0] ?? ''))?.toLocaleString() ?? '—'}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

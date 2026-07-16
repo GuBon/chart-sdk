@@ -131,25 +131,59 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
-  test('표본 추출을 켜면 생성 SQL에 TABLESAMPLE이 주입되고 근사치 배지가 뜬다', async ({ page }) => {
+  test('표본 SUM은 외삽하지 않고 표본 합계로 명확히 표시한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.locator('#builder-y-column-0').selectOption('amount');
+
+    // 표본 추출 토글 ON + 10,000행 직접 지정
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
+    await page.getByRole('spinbutton', { name: '표본 크기' }).fill('10000');
+
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await expect(page.getByTestId('sample-badge')).toContainText('무작위 행 표본 10,000행 · 표본 결과');
+    await expect(page.getByText(/sum_amount: 표본 합계/)).toBeVisible();
+    await expect(page.getByText(/전체 데이터의 합계·개수가 아닙니다/)).toBeVisible();
+
+    // 표시용 SQL에서도 SUM에 외삽 배율을 붙이지 않는다.
+    await page.getByText('생성된 SQL 보기').click();
+    await expect(page.locator('pre')).toContainText(/SUM\("[^"]+"\)/);
+    await expect(page.locator('pre')).not.toContainText(/100\.0 \/|500000000\.0 \/|EXTRAPOLAT/);
+  });
+
+  test('자동 표본은 전체 추정 행 수 안내와 실제 표본 수를 표시한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
     await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
 
-    // 표본 추출 토글 ON + 비율 25%
     await page.getByRole('switch', { name: '표본 추출' }).click();
-    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('25');
-
+    await expect(page.getByRole('combobox', { name: '표본 방식' })).toHaveValue('auto');
+    await expect(page.getByTestId('sample-total-hint')).toContainText('전체 약 500,000,000행 중 무작위 표본');
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
-    // 실행 결과 메타에 근사치 배지
-    await expect(page.getByText(/근사치 · 표본 25%/)).toBeVisible();
+    await expect(page.getByTestId('sample-badge')).toContainText('무작위 행 표본 10,000행 · 표본 결과');
+  });
 
-    // 생성된 SQL 에 TABLESAMPLE SYSTEM (25)
-    await page.getByText('생성된 SQL 보기').click();
-    await expect(page.getByText(/TABLESAMPLE SYSTEM \(25\)/)).toBeVisible();
+  test('직접 지정 표본 크기는 최대 50,000행까지 실행 결과에 반영된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
+    await page.getByRole('spinbutton', { name: '표본 크기' }).fill('50000');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await expect(page.getByTestId('sample-badge')).toContainText('무작위 행 표본 50,000행 · 표본 결과');
   });
 
   test('표본 추출 컨트롤은 기존 S2 편집 화면에서도 동일하게 노출되고 테이블 변경 시 유지된다', async ({ page }) => {
@@ -157,12 +191,14 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByRole('switch', { name: '표본 추출' })).toBeVisible();
 
     await page.getByRole('switch', { name: '표본 추출' }).click();
-    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('30');
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
+    await page.getByRole('spinbutton', { name: '표본 크기' }).fill('25000');
 
     // 차트 12 base=sales-db(ds2) → 테이블 드롭다운은 ds2 테이블만. ds2 의 users 로 변경해도 표본 설정 유지.
     await page.getByRole('combobox', { name: '테이블' }).selectOption('2.public.users');
     await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
-    await expect(page.getByRole('spinbutton', { name: '표본 비율' })).toHaveValue('30');
+    await expect(page.getByRole('combobox', { name: '표본 방식' })).toHaveValue('manual');
+    await expect(page.getByRole('spinbutton', { name: '표본 크기' })).toHaveValue('25000');
   });
 
   test('조인을 추가하면 표본 추출이 자동 해제되고 다시 켤 수 없다', async ({ page }) => {
@@ -171,7 +207,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
 
     await page.getByRole('switch', { name: '표본 추출' }).click();
-    await page.getByRole('spinbutton', { name: '표본 비율' }).fill('25');
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
+    await page.getByRole('spinbutton', { name: '표본 크기' }).fill('25000');
     await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveAttribute('aria-checked', 'true');
 
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
@@ -551,6 +588,152 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
     // 실행 후 '시리즈 종류' 컨트롤 노출 → sum_id 시리즈를 선으로
     await expect(page.getByText('시리즈 종류')).toBeVisible();
     await page.getByTestId('series-type-sum_id').getByRole('button', { name: '선', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+});
+
+// 대형 스키마(legacy-dw = bulk_table 60개) — 사이드바 클라이언트 페이지네이션·정렬.
+test.describe('S2 스키마 탐색기 — 페이지네이션·정렬', () => {
+  test('테이블이 50개를 넘으면 50개씩 페이지로 나뉜다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'legacy-dw' });
+    const aside = page.locator('aside').first();
+    // 60개 → 1페이지 50개
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(50);
+    await expect(aside.getByText('1 / 2')).toBeVisible();
+    await expect(aside.getByRole('button', { name: '이전' })).toBeDisabled();
+    // 다음 → 2페이지 10개
+    await aside.getByRole('button', { name: '다음' }).click();
+    await expect(aside.getByText('2 / 2')).toBeVisible();
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(10);
+    await expect(aside.getByRole('button', { name: '다음' })).toBeDisabled();
+  });
+
+  test('이름 내림차순 정렬은 첫 테이블을 바꾼다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'legacy-dw' });
+    const aside = page.locator('aside').first();
+    // 정렬은 검색칸 우측 필터 아이콘 → 팝오버 메뉴 (화면설계 S2 사이드바)
+    await page.getByRole('button', { name: '정렬', exact: true }).click();
+    await page.getByRole('button', { name: '이름 내림차순' }).click();
+    await expect(aside.getByRole('button', { name: /bulk_table/ }).first()).toContainText('bulk_table_60');
+  });
+
+  test('검색은 전체 페이지를 대상으로 하고 1페이지로 리셋한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'legacy-dw' });
+    const aside = page.locator('aside').first();
+    // 2페이지로 이동
+    await aside.getByRole('button', { name: '다음' }).click();
+    await expect(aside.getByText('2 / 2')).toBeVisible();
+    // 1페이지 소속 테이블을 검색 → 찾아지고(전체 대상) 1페이지 리셋되어 페이저 사라짐
+    await page.locator('#schema-search').fill('bulk_table_05');
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(1);
+    await expect(aside.getByRole('button', { name: /bulk_table_05/ })).toBeVisible();
+    await expect(aside.getByRole('button', { name: '다음' })).toHaveCount(0); // 페이저 숨김
+    // 지우면 50개 복원
+    await page.locator('#schema-search').fill('');
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(50);
+  });
+
+  test('스키마 필터 — 2개 이상일 때만 노출되고 해당 스키마만 남긴다', async ({ page }) => {
+    await page.goto('/charts/new');
+    const aside = page.locator('aside').first();
+
+    // 단일 스키마 소스(sales-db: public 만): 팝오버에 스키마 섹션 없음
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
+    await page.getByRole('button', { name: '정렬', exact: true }).click();
+    await expect(page.getByText('스키마순')).toBeVisible();
+    await expect(page.getByText('스키마', { exact: true })).toHaveCount(0);
+    await page.mouse.click(700, 400); // 백드롭 클릭 → 닫힘
+
+    // 다중 스키마 소스(legacy-dw: public + archive): 섹션 노출 + 필터 적용
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'legacy-dw' });
+    await page.getByRole('button', { name: '정렬', exact: true }).click();
+    await expect(page.getByText('스키마', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'archive', exact: true }).click();
+    await expect(aside.getByRole('button', { name: /events/ })).toBeVisible();
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(0);
+    await expect(aside.getByRole('button', { name: '다음' })).toHaveCount(0); // 1건이라 페이저 숨김
+
+    // 전체로 복원
+    await page.getByRole('button', { name: '정렬', exact: true }).click();
+    await page.getByRole('button', { name: '전체', exact: true }).click();
+    await expect(aside.getByRole('button', { name: /bulk_table/ })).toHaveCount(50);
+  });
+});
+
+// 신규 3종(상자수염·히트맵·지도) — 대분류 전환 후 재실행 시 ECharts 미리보기가 렌더되는지.
+// (실행이 선행돼야 옵션 패널이 활성화되어 대분류 버튼을 누를 수 있다.)
+test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
+  async function runBar(page: import('@playwright/test').Page) {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  }
+
+  for (const label of ['상자수염', '히트맵', '지도']) {
+    test(`${label} 유형으로 전환·재실행 시 미리보기가 렌더된다`, async ({ page }) => {
+      await runBar(page);
+      // 대분류 전환 → 빌더 정규화로 결과 무효화될 수 있어 재실행
+      await page.getByRole('button', { name: label, exact: true }).click();
+      await page.getByRole('button', { name: '실행', exact: true }).click();
+      await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    });
+  }
+
+  test('표본 추출 실행 결과에 방식·집계 주의문구가 표시된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByText('주의: 전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.')).toBeVisible();
+    await expect(page.getByText('주의: SUM·COUNT는 선택된 표본의 합계·개수이며 전체 데이터의 합계·개수가 아닙니다.')).toBeVisible();
+  });
+});
+
+// 지도 포인트(geoscatter) + 시군구 지도 — geo 좌표계·registerMap(kr-sigungu) 경로 검증.
+test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
+  test('지도 포인트 유형은 숫자 경도·위도로 실행 시 미리보기가 렌더된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+
+    // 지도 포인트 전환 → 텍스트 X(category)는 거부되므로 숫자 경도 컬럼으로 교체 후 실행
+    await page.getByRole('button', { name: '지도 포인트', exact: true }).click();
+    await expect(page.getByText('지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.')).toBeVisible();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('amount');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('지도 유형에서 지도 단위를 시군구로 바꿔도 미리보기가 렌더된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: /sales/ }).click();
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+
+    // 지리 계열은 GEO 그룹 헤더 아래에 노출 (화면설계 S2 옵션 패널)
+    await expect(page.getByText('GEO', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '지도', exact: true }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    // 지도 단위 세그먼트: 시도 → 시군구 (옵션 변경은 preview 재조립 — 재실행 불필요)
+    await page.getByRole('button', { name: '시군구', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 });

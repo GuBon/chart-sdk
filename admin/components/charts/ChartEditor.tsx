@@ -124,6 +124,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
+    // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
     setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
     resetResults();
     setDirty(true);
@@ -370,7 +371,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             </>
           }
         >
-          <p className="text-[13px] text-text-secondary">기준 테이블을 바꾸면 현재 구성(조인·축·조건)이 초기화됩니다. 다른 데이터소스의 테이블과 조인하려면 사이드바에서 소스만 바꾼 뒤 우측 "조인" 행에서 추가하세요.</p>
+          <p className="text-[13px] text-text-secondary">기준 테이블을 바꾸면 현재 구성(조인·축·조건)이 초기화됩니다. 다른 데이터소스의 테이블과 조인하려면 사이드바에서 소스만 바꾼 뒤 우측 &quot;조인&quot; 행에서 추가하세요.</p>
         </Modal>
       )}
 
