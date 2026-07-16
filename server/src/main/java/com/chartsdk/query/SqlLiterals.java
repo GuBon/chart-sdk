@@ -26,6 +26,7 @@ public final class SqlLiterals {
 
     private static String literal(Object value) {
         if (value == null) return "NULL";
+        if (value instanceof long[] keys) return "ARRAY[/* " + keys.length + " sampled keys */]"; // 인덱스 표본 좌표(표시용 요약)
         if (value instanceof Number || value instanceof Boolean) return String.valueOf(value);
         if (value instanceof Date || value instanceof Timestamp || value instanceof TemporalAccessor) {
             return quote(String.valueOf(value));

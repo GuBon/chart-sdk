@@ -1,10 +1,14 @@
 package com.chartsdk.federation;
 
+import com.chartsdk.cache.SamplingMetadata;
+import com.chartsdk.cache.SamplingQueryRows;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.FederatedCatalog;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.RefRenderer;
+import com.chartsdk.query.SamplePlan;
+import com.chartsdk.query.SamplingPlanner;
 import com.chartsdk.query.SchemaCatalog;
 import org.springframework.stereotype.Service;
 
@@ -24,14 +28,20 @@ public class FederatedQueryRunner {
 
     private final QueryExecutor queries;
     private final DuckDbFederation federation;
+    private final SamplingPlanner planner;
 
-    public FederatedQueryRunner(QueryExecutor queries, DuckDbFederation federation) {
+    public FederatedQueryRunner(QueryExecutor queries, DuckDbFederation federation, SamplingPlanner planner) {
         this.queries = queries;
         this.federation = federation;
+        this.planner = planner;
     }
 
     /** 계산 결과 + 생성 SQL(표시·저장용) + 참조 소스 집합(junction 영속화용). */
-    public record BuiltResult(QueryRows rows, BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds) {
+    public record BuiltResult(QueryRows rows, BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds,
+                              SamplingMetadata sampling) {
+        public BuiltResult(QueryRows rows, BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds) {
+            this(rows, sql, datasourceIds, sql == null ? null : sql.sampling());
+        }
     }
 
     /** builderConfig 로부터 SQL 생성 + 실행(미리보기·저장 시드·수동 새로고침의 재생성 경로). */
@@ -40,14 +50,17 @@ public class FederatedQueryRunner {
         if (refs.size() >= 2) {
             FederatedCatalog catalog = federation.catalog(refs);
             BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode);
-            QueryRows rows = federation.execute(refs, sql.text(), sql.params());
-            return new BuiltResult(rows, sql, refs);
+            SamplingQueryRows.Result result = SamplingQueryRows.extract(
+                    federation.execute(refs, sql.text(), sql.params()), sql.sampling());
+            return new BuiltResult(result.rows(), sql, refs, result.sampling());
         }
         long dsId = refs.isEmpty() ? primaryDatasourceId : refs.iterator().next();
         SchemaCatalog catalog = queries.catalog(dsId);
-        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode);
-        QueryRows rows = queries.execute(dsId, sql.text(), sql.params());
-        return new BuiltResult(rows, sql, Set.of(dsId));
+        SamplePlan plan = planner.plan(dsId, cfg, rawMode); // PK·행수·밀도로 표본 방식 결정(INDEX_RANDOM/SYSTEM/FULL_SCAN)
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
+        SamplingQueryRows.Result result = SamplingQueryRows.extract(
+                queries.execute(dsId, sql.text(), sql.params()), sql.sampling());
+        return new BuiltResult(result.rows(), sql, Set.of(dsId), result.sampling());
     }
 
     /** 저장된 리터럴 SQL 실행(저장 시드·수동 새로고침의 재실행 경로). 소스 수로 라우팅. */

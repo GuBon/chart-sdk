@@ -39,7 +39,17 @@ public class QueryExecutor {
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
             ps.setMaxRows(MAX_ROWS);
-            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            for (int i = 0; i < params.size(); i++) {
+                Object p = params.get(i);
+                if (p instanceof long[] keys) {
+                    // 인덱스 표본 좌표 배열 — unnest(?) 로 바인딩(setObject 미지원, §표본추출).
+                    Long[] boxed = new Long[keys.length];
+                    for (int k = 0; k < keys.length; k++) boxed[k] = keys[k];
+                    ps.setArray(i + 1, conn.createArrayOf("bigint", boxed));
+                } else {
+                    ps.setObject(i + 1, p);
+                }
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 return QueryRows.from(rs, start);
             }
@@ -81,5 +91,37 @@ public class QueryExecutor {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
         }
         return new SchemaCatalog(tables);
+    }
+
+    /**
+     * PostgreSQL planner 통계(pg_class.reltuples) 기반 테이블 행 수 추정치.
+     * 정확한 COUNT(*)를 실행하지 않아 스키마 탐색·표본 계획·UI 안내가 대용량 테이블을 다시 스캔하지 않는다.
+     */
+    public Map<SchemaCatalog.Key, Long> estimatedRowCounts(long datasourceId) {
+        Map<SchemaCatalog.Key, Long> estimates = new LinkedHashMap<>();
+        try (Connection conn = pools.connection(datasourceId);
+             PreparedStatement ps = conn.prepareStatement("""
+                     SELECT n.nspname AS table_schema,
+                            c.relname AS table_name,
+                            GREATEST(c.reltuples, 0)::bigint AS estimated_rows
+                       FROM pg_catalog.pg_class c
+                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                      WHERE c.relkind IN ('r', 'p', 'm')
+                        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                        AND n.nspname NOT LIKE 'pg_temp%'
+                        AND n.nspname NOT LIKE 'pg_toast_temp%'
+                        AND c.relname NOT LIKE 'mc\\_%' ESCAPE '\\'
+                     """);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                estimates.put(new SchemaCatalog.Key(rs.getString("table_schema"), rs.getString("table_name")),
+                        rs.getLong("estimated_rows"));
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
+        }
+        return estimates;
     }
 }

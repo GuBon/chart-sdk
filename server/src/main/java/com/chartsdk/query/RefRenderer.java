@@ -24,4 +24,9 @@ public interface RefRenderer {
 
     /** 다중 소스(DuckDB 페더레이션): {@code "ds{id}"."schema"."table"}. */
     RefRenderer FEDERATED = (ds, schema, table) -> SqlIdentifier.qualify(attachAlias(ds), schema, table);
+
+    /** CTE 별칭 참조: datasourceId·schema·table 무시, {@code "alias"}. 인덱스 표본 CTE(단일 base — 조인 금지)에서만 쓴다. */
+    static RefRenderer alias(String name) {
+        return (ds, schema, table) -> SqlIdentifier.quote(name);
+    }
 }

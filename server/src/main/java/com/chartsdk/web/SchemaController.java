@@ -28,11 +28,17 @@ public class SchemaController {
     @GetMapping("/tables")
     public Map<String, Object> tables(@RequestParam long datasourceId) {
         SchemaCatalog catalog = queries.catalog(datasourceId);
+        Map<SchemaCatalog.Key, Long> estimates = queries.estimatedRowCounts(datasourceId);
         List<Map<String, Object>> tables = new ArrayList<>();
         catalog.byTable().forEach((key, cols) -> {
             List<Map<String, Object>> columns = new ArrayList<>();
             cols.forEach((name, type) -> columns.add(Map.of("name", name, "type", type)));
-            tables.add(Map.of("schema", key.schema(), "name", key.table(), "columns", columns));
+            Map<String, Object> table = new LinkedHashMap<>();
+            table.put("schema", key.schema());
+            table.put("name", key.table());
+            table.put("estimatedRowCount", estimates.getOrDefault(key, 0L));
+            table.put("columns", columns);
+            tables.add(table);
         });
         return Map.of("tables", tables);
     }

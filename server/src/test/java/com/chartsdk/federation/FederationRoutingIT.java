@@ -4,6 +4,7 @@ import com.chartsdk.crypto.DatasourcePasswordCodec;
 import com.chartsdk.datasource.DatasourcePoolRegistry;
 import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.QueryExecutor;
+import com.chartsdk.query.SamplingPlanner;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
@@ -45,7 +46,7 @@ class FederationRoutingIT {
 
         DatasourceService dss = new DatasourceService(meta, codec);
         QueryExecutor qe = new QueryExecutor(new DatasourcePoolRegistry(dss));
-        runner = new FederatedQueryRunner(qe, new DuckDbFederation(dss, qe));
+        runner = new FederatedQueryRunner(qe, new DuckDbFederation(dss, qe), new SamplingPlanner(qe));
     }
 
     @Test

@@ -1,9 +1,11 @@
 package com.chartsdk.query;
 
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.web.ApiException;
 import org.springframework.http.HttpStatus;
 
 import java.sql.Timestamp;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -25,39 +27,56 @@ import java.util.Set;
  */
 public final class BuilderSqlBuilder {
 
-    public record Sql(String text, List<Object> params) {
+    public record Sql(String text, List<Object> params, SamplingMetadata sampling) {
+        public Sql(String text, List<Object> params) {
+            this(text, params, null);
+        }
     }
 
     private final Catalog catalog;
-    private final RefRenderer renderer;
+    private RefRenderer renderer; // INDEX_RANDOM 경로에서 CTE 별칭 렌더러로 교체(그 외 불변)
     private final Map<String, Object> cfg;
     private final String chartType;
     private final boolean rawMode;
+    private final SamplePlan plan; // 표본 실행 계획(null = 무플랜 레거시/비표본)
     private final TableRef baseRef;
     private final List<Map<String, Object>> joins;
     private final boolean hasJoins;
     /** 이 쿼리에 등장한 테이블(핸들 → 한정 참조). 컬럼 참조의 소스·스키마 해석에 쓴다(동명 테이블은 서로 다른 핸들). */
     private final Map<String, TableRef> knownTables = new LinkedHashMap<>();
 
-    private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
+    // 인덱스 표본 CTE 식별자(예약 접두 __chartsdk_ — alias 가드와 일치).
+    private static final String SAMPLE_CTE = "__chartsdk_sample";
+    private static final String N_CTE = "__chartsdk_n";
+    private static final String BASE_ALIAS = "__chartsdk_base";
+    private static final String KEYS_ALIAS = "__chartsdk_keys";
+
+    private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
+                             String chartType, boolean rawMode, SamplePlan plan) {
         this.catalog = catalog;
         this.renderer = renderer;
         this.cfg = cfg;
         this.chartType = chartType;
         this.rawMode = rawMode;
+        this.plan = plan;
         this.baseRef = parseTableRef(cfg.get("table"));
         this.joins = asMapList(cfg.get("joins"));
         this.hasJoins = !joins.isEmpty();
     }
 
-    /** 단일 소스 경로(PG 직접 실행). 기존 시그니처 — 출력·동작 불변. */
+    /** 단일 소스 경로(PG 직접 실행). 무플랜 — 레거시 SYSTEM/비표본. */
     public static Sql generate(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode).build();
+        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, null).build();
     }
 
-    /** 일반 경로 — 카탈로그·렌더러 주입(다중 소스 페더레이션 등). */
+    /** 단일 소스 + 표본 실행 계획(INDEX_RANDOM/SYSTEM/FULL_SCAN). */
+    public static Sql generate(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode, SamplePlan plan) {
+        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, plan).build();
+    }
+
+    /** 일반 경로 — 카탈로그·렌더러 주입(다중 소스 페더레이션 등). 표본 미지원(단일 소스 전용). */
     public static Sql generate(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode).build();
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode, null).build();
     }
 
     /** builderConfig 가 참조하는 datasourceId 집합(명시된 것만). 실행 라우팅(단일 vs 페더레이션) 판정에 쓴다. */
@@ -82,8 +101,7 @@ public final class BuilderSqlBuilder {
         }
 
         String joins = buildJoins(); // 조인 검증 + 절 생성 (knownTables 확장 — select/where 해석 전에 선행)
-        String sample = rawMode ? "" : sampleSql(); // 표본은 집계 경로 전용 (rows 모드는 무시 — §3B/§3C)
-        String from = " FROM " + render(baseRef) + sample + joins;
+        SamplingMetadata sampling = rawMode ? null : resolveSampling(); // rows 탭은 표본 집계와 별도 원본 미리보기
 
         String xAxis = str(cfg.get("xAxis"));
         List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
@@ -91,16 +109,46 @@ public final class BuilderSqlBuilder {
             // 원본 데이터 모드: SELECT * + WHERE + LIMIT (집계·정렬·버킷·표본 무시 — 생성규칙 §3B)
             List<Object> params = new ArrayList<>();
             String where = buildWhere(params);
-            return new Sql("SELECT *" + from + where + " LIMIT " + QueryExecutor.MAX_ROWS, params);
+            return new Sql("SELECT *" + " FROM " + render(baseRef) + joins + where
+                    + " LIMIT " + QueryExecutor.MAX_ROWS, params, null);
         }
 
         if (xAxis == null) throw invalidReq("xAxis is required.");
         if (yAxis.isEmpty()) throw invalidReq("At least one yAxis is required.");
         Ref x = resolveRef(xAxis);
 
-        // 차트 종류별 검증 (생성규칙 §9)
+        // 차트 종류별 검증 (생성규칙 §9) — 표본 형태 결정·렌더러 교체보다 먼저(표본+원본값 등 오류 조기 차단).
         boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
         validateChartShape(x, yAxis, allNone);
+
+        // 표본 SQL 형태 — INDEX_RANDOM: CTE 래핑 + 별칭 렌더러 / SYSTEM: TABLESAMPLE / 그 외: 평이.
+        boolean approximate = sampling != null && sampling.approximate();
+        boolean indexRandom = approximate && "INDEX_RANDOM".equals(sampling.method());
+        if (indexRandom && (plan == null || plan.method() != SamplePlan.Method.INDEX_RANDOM)) {
+            throw invalidReq("Index sampling requires an execution plan.");
+        }
+        String cteHead = "";
+        List<Object> leadingParams = new ArrayList<>();
+        String fromBase;
+        if (indexRandom) {
+            String physicalBase = RefRenderer.SINGLE.table(baseRef.datasourceId(), baseRef.schema(), baseRef.table());
+            String pk = SqlIdentifier.quote(plan.pkColumn());
+            String sampleCte = SqlIdentifier.quote(SAMPLE_CTE), nCte = SqlIdentifier.quote(N_CTE);
+            String baseAlias = SqlIdentifier.quote(BASE_ALIAS), keysAlias = SqlIdentifier.quote(KEYS_ALIAS);
+            String v = SqlIdentifier.quote("v"), sampled = SqlIdentifier.quote("sampled");
+            cteHead = "WITH " + sampleCte + " AS (SELECT " + baseAlias + ".* FROM unnest(?) AS " + keysAlias + "(" + v + ") "
+                    + "JOIN " + physicalBase + " " + baseAlias + " ON " + baseAlias + "." + pk + " = " + keysAlias + "." + v + "), "
+                    + nCte + " AS (SELECT COUNT(*) AS " + sampled + " FROM " + sampleCte + ") ";
+            leadingParams.add(plan.keys());
+            renderer = RefRenderer.alias(SAMPLE_CTE); // 이후 모든 외부 참조를 CTE 별칭으로 렌더
+            fromBase = sampleCte;
+        } else if (approximate && "SYSTEM".equals(sampling.method())) {
+            double blockRate = plan != null ? plan.blockRate() : sampling.rate();
+            fromBase = render(baseRef) + " TABLESAMPLE SYSTEM (" + number(blockRate) + ") REPEATABLE (" + sampling.seed() + ")";
+        } else {
+            fromBase = render(baseRef); // FULL_SCAN 또는 표본 없음
+        }
+        String from = " FROM " + fromBase + joins;
 
         String bucket = str(cfg.get("xAxisBucket"));
         String xSql;
@@ -124,10 +172,14 @@ public final class BuilderSqlBuilder {
             assertAggCompatible(agg, col);
             String alias = str(y.get("alias"));
             if (alias == null) alias = "none".equals(agg) ? col.column() : (agg == null ? "val" : agg) + "_" + col.column();
+            if (alias.startsWith("__chartsdk_")) throw invalidReq("Alias cannot start with reserved prefix __chartsdk_.");
             selects.add(aggSql(agg, col) + " AS " + SqlIdentifier.quote(alias));
         }
+        // 표본 입력 수는 결과 행 수(그룹 수)와 다르다. 그룹별 n·전체 n(+INDEX_RANDOM 은 그룹별 mean/sd)을 숨은 열로 수집하고
+        // 실행 라우터가 API/변환기 전달 전에 제거한다(오차범위 계산용 — §표본추출).
+        if (approximate) selects.addAll(hiddenSampleColumns(yAxis, indexRandom));
 
-        List<Object> params = new ArrayList<>();
+        List<Object> params = new ArrayList<>(leadingParams);
         String where = buildWhere(params);
         String order = buildOrder(yAxis.size());
 
@@ -138,9 +190,47 @@ public final class BuilderSqlBuilder {
             groupBy = " GROUP BY " + (bucket == null ? render(x) : "1");
         }
 
-        String sql = "SELECT " + String.join(", ", selects) + from + where + groupBy + order
+        String sql = cteHead + "SELECT " + String.join(", ", selects) + from + where + groupBy + order
                 + " LIMIT " + QueryExecutor.MAX_ROWS;
-        return new Sql(sql, params);
+        return new Sql(sql, params, sampling);
+    }
+
+    /** 표본 스펙(sampling())을 실행 계획으로 해석 — 무플랜은 레거시(SYSTEM/exact) 해석 그대로. */
+    private SamplingMetadata resolveSampling() {
+        SamplingMetadata spec = sampling();
+        if (spec == null || plan == null) return spec;
+        return switch (plan.method()) {
+            case FULL_SCAN -> spec.asExact();
+            case SYSTEM -> spec.asSystem(plan.populationEstimate(), plan.sampleSize());
+            case INDEX_RANDOM -> spec.asIndexRandom(plan.populationEstimate(), plan.sampleSize());
+            case NONE -> spec;
+        };
+    }
+
+    /** 오차범위 계산용 숨은 열 — 그룹별 COUNT + 전체 표본수(+INDEX_RANDOM 은 시리즈별 유효 n·필요 시 mean/sd). */
+    private List<String> hiddenSampleColumns(List<Map<String, Object>> yAxis, boolean indexRandom) {
+        List<String> cols = new ArrayList<>();
+        cols.add("COUNT(*) AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_GROUP_COUNT));
+        if (indexRandom) {
+            cols.add("(SELECT " + SqlIdentifier.quote("sampled") + " FROM " + SqlIdentifier.quote(N_CTE)
+                    + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_TOTAL_COUNT));
+            for (int i = 0; i < yAxis.size(); i++) {
+                String agg = str(yAxis.get(i).get("agg"));
+                if (!Set.of("avg", "stddev", "variance").contains(agg)) continue;
+                Ref col = resolveRef(str(yAxis.get(i).get("column")));
+                String q = render(col);
+                // COUNT(*)가 아니라 집계 대상 열의 비NULL 개수여야 AVG·분산 계열의 실제 n과 일치한다.
+                cols.add("COUNT(" + q + ") AS "
+                        + SqlIdentifier.quote(SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX + i));
+                if (!isNumeric(typeOf(col))) continue;
+                cols.add("AVG(" + q + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_MEAN_PREFIX + i));
+                cols.add("STDDEV_SAMP(" + q + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_SD_PREFIX + i));
+            }
+        } else {
+            // SYSTEM: window 로 LIMIT 전 모든 그룹의 COUNT 합(전체 표본수)을 계산.
+            cols.add("SUM(COUNT(*)) OVER () AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_TOTAL_COUNT));
+        }
+        return cols;
     }
 
     // ── 참조 렌더링(전략 위임) ─────────────────────────────
@@ -256,14 +346,39 @@ public final class BuilderSqlBuilder {
         return " ORDER BY " + pos + (asc ? " ASC" : " DESC");
     }
 
-    // ── 표본 ─────────────────────────────────────────────
-    private String sampleSql() {
+    // ── 표본 (스펙 검증 → SamplingMetadata) ────────────────
+    private SamplingMetadata sampling() {
         Object raw = cfg.get("sample");
-        if (!(raw instanceof Map<?, ?> sample)) return "";
-        Object rawRate = sample.get("rate");
-        int rate = rawRate instanceof Number n ? n.intValue() : -1;
-        if (rate < 1 || rate > 100) throw invalidReq("sample.rate must be between 1 and 100.");
-        return " TABLESAMPLE SYSTEM (" + rate + ")";
+        if (!(raw instanceof Map<?, ?> sample)) return null;
+        Object rawRate = sample.get("rate"); // 레거시/SYSTEM 핀 전용(선택). 무편향 표본은 size(갯수) 기반.
+        if (rawRate != null) {
+            double rate = rawRate instanceof Number n ? n.doubleValue() : -1;
+            if (!Double.isFinite(rate) || rate < SamplingMetadata.MIN_RATE || rate > SamplingMetadata.MAX_RATE
+                    || Math.abs(rate * 10 - Math.rint(rate * 10)) > 0.0000001) {
+                throw invalidReq("sample.rate must be between 0.1 and 100 with at most one decimal place.");
+            }
+        }
+        Object rawSize = sample.get("size");
+        if (rawSize != null && (!(rawSize instanceof Number n) || n.intValue() < SamplingMetadata.MIN_SIZE
+                || n.intValue() > SamplingMetadata.MAX_SIZE)) {
+            throw invalidReq("sample.size must be between " + SamplingMetadata.MIN_SIZE
+                    + " and " + SamplingMetadata.MAX_SIZE + ".");
+        }
+        Object rawMethod = sample.get("method");
+        if (rawMethod != null && !Set.of("auto", "system").contains(String.valueOf(rawMethod))) {
+            throw invalidReq("sample.method must be auto or system.");
+        }
+        Object rawMode = sample.get("mode");
+        if (rawMode != null && !Set.of("auto", "manual").contains(String.valueOf(rawMode))) {
+            throw invalidReq("sample.mode must be auto or manual.");
+        }
+        Object rawSeed = sample.get("seed");
+        if (rawSeed != null && (!(rawSeed instanceof Number n) || n.longValue() < 0 || n.longValue() > Integer.MAX_VALUE)) {
+            throw invalidReq("sample.seed must be between 0 and 2147483647.");
+        }
+        SamplingMetadata metadata = SamplingMetadata.fromBuilderConfig(cfg);
+        if (metadata == null) throw invalidReq("Invalid sample configuration.");
+        return metadata;
     }
 
     // ── 검증 헬퍼 ────────────────────────────────────────
@@ -275,11 +390,21 @@ public final class BuilderSqlBuilder {
         if ("scatter".equals(chartType)) {
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter requires agg 'none' on all yAxis.");
             if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter xAxis must be numeric.");
+        } else if ("boxplot".equals(chartType)) {
+            // 상자수염: 카테고리별 원본값 분포 → 집계 없음(allNone) + 단일 값 컬럼. (표본은 위 allNone 검사에서 이미 차단)
+            if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "boxplot requires agg 'none' on the value field.");
+            if (yAxis.size() != 1) throw invalidReq("boxplot requires exactly one value field.");
+        } else if ("geoscatter".equals(chartType)) {
+            // 지도 포인트: X=경도(숫자)·Y=위도(+선택 크기값) 원본 좌표 → 집계 없음 + 최대 2컬럼.
+            if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "geoscatter requires agg 'none' on coordinate fields.");
+            if (yAxis.isEmpty() || yAxis.size() > 2) throw invalidReq("geoscatter requires latitude (and optional size) — one or two yAxis fields.");
+            if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "geoscatter xAxis (longitude) must be numeric.");
         } else {
             if (anyNone && !allNone) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "raw values cannot be mixed with aggregate yAxis fields.");
             }
             if ("pie".equals(chartType) && yAxis.size() != 1) throw invalidReq("pie requires exactly one yAxis.");
+            if ("map".equals(chartType) && yAxis.size() != 1) throw invalidReq("map requires exactly one yAxis.");
         }
     }
 
@@ -306,7 +431,7 @@ public final class BuilderSqlBuilder {
         String type = typeOf(col);
         if (agg == null) agg = "sum";
         switch (agg) {
-            case "sum", "avg", "stddev" -> {
+            case "sum", "avg", "stddev", "variance" -> {
                 if (!isNumeric(type)) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", agg + " requires a numeric column.");
             }
             case "count", "count_distinct", "min", "max", "none" -> { /* 모든 타입 허용 */ }
@@ -429,9 +554,11 @@ public final class BuilderSqlBuilder {
 
     private String aggSql(String agg, Ref col) {
         String q = render(col);
-        return switch (agg == null ? "sum" : agg) {
+        String resolvedAgg = agg == null ? "sum" : agg;
+        return switch (resolvedAgg) {
             case "avg" -> "AVG(" + q + ")";
             case "stddev" -> "STDDEV(" + q + ")";
+            case "variance" -> "VARIANCE(" + q + ")";
             case "count" -> "COUNT(" + q + ")";
             case "count_distinct" -> "COUNT(DISTINCT " + q + ")";
             case "min" -> "MIN(" + q + ")";
@@ -473,6 +600,10 @@ public final class BuilderSqlBuilder {
     // ── 일반 헬퍼 ─────────────────────────────────────────
     private static ApiException invalidReq(String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", message);
+    }
+
+    private static String number(double value) {
+        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
     private static String str(Object value) {

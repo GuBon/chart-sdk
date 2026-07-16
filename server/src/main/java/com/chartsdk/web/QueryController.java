@@ -1,6 +1,7 @@
 package com.chartsdk.web;
 
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
@@ -59,10 +60,8 @@ public class QueryController {
         if (!rawMode) {
             result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
             result.put("option", converter.convert(rows, chartType, options(body)));
-            if (cfg.get("sample") instanceof Map<?, ?> sample) {
-                result.put("approximate", true);
-                result.put("sampleRate", sample.get("rate"));
-            }
+            SamplingMetadata sampling = built.sampling();
+            if (sampling != null) sampling.putInto(result);
         }
         return result;
     }
