@@ -1,5 +1,6 @@
 package com.chartsdk.chart;
 
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.web.ApiException;
 import com.chartsdk.web.dto.ChartSaveRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -188,7 +189,8 @@ public class ChartRepository {
 
     public ChartDefinition previewDefinition(Long ownerId, long id) {
         StringBuilder sql = new StringBuilder("""
-                SELECT id, datasource_id, sql_query, chart_type, options::text, refresh_mode, cache_ttl_seconds, version
+                SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
+                       refresh_mode, cache_ttl_seconds, version
                   FROM mc_chart
                  WHERE id=?
                 """);
@@ -205,7 +207,8 @@ public class ChartRepository {
                     readJson(rs.getString("options")),
                     rs.getString("refresh_mode"),
                     rs.getInt("cache_ttl_seconds"),
-                    rs.getInt("version")
+                    rs.getInt("version"),
+                    SamplingMetadata.fromBuilderConfig(readJson(rs.getString("builder_config")))
             );
         }, params.toArray());
     }

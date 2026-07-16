@@ -3,80 +3,85 @@ package com.chartsdk.cache;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.ApiException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 /**
  * 차트 결과 재계산 + 캐시 시드의 단일 진입점. 저장 시드(S2 [저장])·수동 갱신(S2 [지금 갱신])·임베드 재계산이 공유한다.
- * stored SQL 실행은 {@link FederatedQueryRunner} 로 라우팅한다 — 단일 소스는 PG 직접, 다중 소스는 DuckDB 페더레이션(설계 §2).
+ * builder 차트는 저장된 builderConfig를 현재 SQL 생성기로 다시 실행하고, raw SQL 차트만 저장 SQL을 직접 실행한다.
  */
 @Service
 public class ChartComputeService {
     private final JdbcTemplate jdbc;
     private final FederatedQueryRunner runner;
     private final ChartCacheService cache;
+    private final ObjectMapper mapper;
 
-    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache) {
+    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.runner = runner;
         this.cache = cache;
+        this.mapper = mapper;
     }
 
     /** 차트를 즉시 재계산해 캐시에 반영. 차트 없으면 404. */
     public CachedChartRows recompute(long chartId) {
-        Chart chart = jdbc.query("SELECT datasource_id, sql_query, version FROM mc_chart WHERE id=?", rs -> {
-            if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
-            return new Chart(rs.getLong("datasource_id"), rs.getString("sql_query"), rs.getInt("version"));
-        }, chartId);
-        QueryRows rows = runner.runStored(datasources(chartId), chart.datasourceId(), chart.sqlQuery());
-        return cache.upsert(chartId, rows, chart.version()); // 캐시에 정의 버전 스탬프(G2)
+        Chart chart = definition(chartId);
+        Computed computed = execute(chartId, chart);
+        return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
     }
 
     /**
      * 임베드 핫패스의 단일 비행(single-flight) 재계산 — 캐시 미스/만료 시 호출.
-     * pg_try_advisory_xact_lock 으로 동시 재계산을 한 요청으로 합치고(G1), 경쟁에서 진 요청은
-     * allowStale 이면 기존 stale 캐시를 즉시 반환한다(SWR, G4). stale 이 없으면 승자 완료를 기다린 뒤 결과를 읽는다.
-     * advisory_xact_lock 은 트랜잭션 종료 시 자동 해제되므로 @Transactional 필수.
+     * pg_try_advisory_xact_lock 으로 동시 재계산을 한 요청으로 합치고, 경쟁에서 진 요청은
+     * allowStale 이면 기존 stale 캐시를 즉시 반환한다. advisory lock은 트랜잭션 종료 시 자동 해제된다.
      */
     @Transactional
-    public CachedChartRows refreshSingleFlight(long chartId, long datasourceId, String sql, int definitionVersion, boolean allowStale) {
-        Set<Long> dsSet = datasources(chartId);
+    public CachedChartRows refreshSingleFlight(long chartId, boolean allowStale, SamplingMetadata sampling) {
         Boolean won = jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class, chartId);
         if (Boolean.TRUE.equals(won)) {
-            return cache.upsert(chartId, runner.runStored(dsSet, datasourceId, sql), definitionVersion);
+            Chart chart = definition(chartId);
+            Computed computed = execute(chartId, chart);
+            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
         }
-        // 경쟁에서 짐 — 다른 요청이 재계산 중.
         if (allowStale) {
-            Optional<CachedChartRows> stale = cache.find(chartId);
-            if (stale.isPresent()) return stale.get(); // stale 즉시 반환(블로킹 회피)
+            Optional<CachedChartRows> stale = matchingSampling(cache.find(chartId), sampling);
+            if (stale.isPresent()) return stale.get();
         }
-        // stale 이 없거나 live 모드 → 승자가 끝날 때까지 대기 후 신선한 결과를 읽는다.
         jdbc.query("SELECT pg_advisory_xact_lock(?)", rs -> null, chartId);
-        return cache.find(chartId).orElseGet(() -> cache.upsert(chartId, runner.runStored(dsSet, datasourceId, sql), definitionVersion));
+        return matchingSampling(cache.find(chartId), sampling).orElseGet(() -> {
+            Chart chart = definition(chartId);
+            Computed computed = execute(chartId, chart);
+            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
+        });
     }
 
     /**
-     * 서빙 경로 불변식(설계 §8)의 단일 진입점 — 임베드 hot-path·목록/미리보기가 공유한다.
-     * 다중 소스 차트는 페더레이션을 절대 호출하지 않고 캐시 스냅샷만 반환하고(부재 시 명시적 오류,
-     * 고트래픽에서 N개 고객 DB 두들김 방지), 단일 소스는 기존대로 캐시 미스/만료 시 단일 비행 재계산(G1/G4).
+     * 서빙 경로의 단일 진입점. 다중 소스 차트는 캐시 스냅샷만 반환하고,
+     * 단일 소스는 캐시 미스/만료 시 단일 비행으로 재계산한다.
      */
-    public CachedChartRows serve(long chartId, long datasourceId, String sql, String refreshMode, int cacheTtlSeconds, int definitionVersion) {
+    public CachedChartRows serve(long chartId, String refreshMode, int cacheTtlSeconds,
+                                 int definitionVersion, SamplingMetadata sampling) {
         if (isMultiSource(chartId)) {
-            return cache.find(chartId).orElseThrow(() -> new ApiException(
-                    HttpStatus.SERVICE_UNAVAILABLE, "SNAPSHOT_NOT_READY",
-                    "Multi-source chart snapshot is not ready; refresh the chart to compute it."));
+            return matchingSampling(cache.find(chartId), sampling)
+                    .orElseThrow(() -> new ApiException(
+                            HttpStatus.SERVICE_UNAVAILABLE, "SNAPSHOT_NOT_READY",
+                            "Multi-source chart snapshot is not ready; refresh the chart to compute it."));
         }
-        return cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion)
-                .orElseGet(() -> refreshSingleFlight(chartId, datasourceId, sql, definitionVersion, !"live".equals(refreshMode)));
+        return matchingSampling(cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion), sampling)
+                .orElseGet(() -> refreshSingleFlight(chartId, !"live".equals(refreshMode), sampling));
     }
 
-    /** 차트가 2개 이상 데이터소스를 참조하는가 — 서빙 캐시-온리 판정(설계 §8)의 단일 진실원. */
+    /** 차트가 2개 이상 데이터소스를 참조하는가 — 임베드 캐시-온리 판정의 단일 진실원. */
     public boolean isMultiSource(long chartId) {
         Integer n = jdbc.queryForObject("SELECT count(*) FROM mc_chart_datasource WHERE chart_id=?", Integer.class, chartId);
         return n != null && n >= 2;
@@ -87,16 +92,64 @@ public class ChartComputeService {
         try {
             recompute(chartId);
         } catch (RuntimeException ignored) {
-            // 시드는 self-heal 로 대체 가능 — 저장 트랜잭션을 깨지 않는다.
+            // 시드는 self-heal로 대체 가능 — 저장 트랜잭션을 깨지 않는다.
         }
     }
 
-    /** 차트가 참조하는 데이터소스 집합(junction). stored SQL 실행 라우팅에 쓴다. */
+    /** 기존 builder 차트도 현재 생성 규칙(sampling v5의 표본 SUM/COUNT 포함)을 즉시 사용한다. */
+    private Computed execute(long chartId, Chart chart) {
+        if ("builder".equals(chart.defineMode()) && !chart.builderConfig().isEmpty()) {
+            FederatedQueryRunner.BuiltResult built =
+                    runner.runBuilder(chart.datasourceId(), chart.builderConfig(), chart.chartType(), false);
+            return new Computed(built.rows(), built.sampling());
+        }
+        return new Computed(runner.runStored(datasources(chartId), chart.datasourceId(), chart.sqlQuery()), null);
+    }
+
+    Chart definition(long chartId) {
+        return jdbc.query("""
+                SELECT datasource_id, define_mode, sql_query, builder_config::text, chart_type, version
+                  FROM mc_chart
+                 WHERE id=?
+                """, rs -> {
+            if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
+            Map<String, Object> builderConfig = readJson(rs.getString("builder_config"));
+            return new Chart(
+                    rs.getLong("datasource_id"),
+                    rs.getString("define_mode"),
+                    rs.getString("sql_query"),
+                    builderConfig,
+                    rs.getString("chart_type"),
+                    rs.getInt("version"),
+                    SamplingMetadata.fromBuilderConfig(builderConfig)
+            );
+        }, chartId);
+    }
+
+    private Map<String, Object> readJson(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            return mapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    /** sampling 계약이 없는 구 캐시는 표본 차트에서 미스로 처리해 현재 생성기로 자동 재계산한다. */
+    private Optional<CachedChartRows> matchingSampling(Optional<CachedChartRows> cached, SamplingMetadata sampling) {
+        if (sampling == null) return cached.filter(rows -> rows.sampling() == null);
+        return cached.filter(rows -> rows.sampling() != null && rows.sampling().matchesDefinition(sampling));
+    }
+
     private Set<Long> datasources(long chartId) {
         return new LinkedHashSet<>(
                 jdbc.queryForList("SELECT datasource_id FROM mc_chart_datasource WHERE chart_id=?", Long.class, chartId));
     }
 
-    private record Chart(long datasourceId, String sqlQuery, int version) {
+    record Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,
+                 String chartType, int version, SamplingMetadata sampling) {
+    }
+
+    record Computed(QueryRows rows, SamplingMetadata sampling) {
     }
 }

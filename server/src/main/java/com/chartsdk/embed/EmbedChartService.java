@@ -2,6 +2,7 @@ package com.chartsdk.embed;
 
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartComputeService;
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.token.EmbedPrincipal;
 import com.chartsdk.web.ApiException;
@@ -34,20 +35,22 @@ public class EmbedChartService {
     public Map<String, Object> data(long chartId, EmbedPrincipal principal) {
         ChartDefinition chart = findChart(chartId, principal.userId());
         // 서빙 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
-        CachedChartRows rows = compute.serve(chart.id(), chart.datasourceId(), chart.sqlQuery(),
-                chart.refreshMode(), chart.cacheTtlSeconds(), chart.version());
+        CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
+                chart.version(), chart.sampling());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
         response.put("rowCount", rows.rows().rowCount());
         response.put("truncated", rows.rows().truncated()); // 1000행 절단 노출(G5) — 임베드도 "상위 N개" 안내 가능
         response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
+        if (rows.sampling() != null) rows.sampling().putInto(response);
         return response;
     }
 
     private ChartDefinition findChart(long chartId, long userId) {
         return jdbc.query("""
-                SELECT id, datasource_id, sql_query, chart_type, options::text, refresh_mode, cache_ttl_seconds, version
+                SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
+                       refresh_mode, cache_ttl_seconds, version
                   FROM mc_chart
                  WHERE id=?
                    AND (owner_id=? OR owner_id IS NULL)
@@ -66,7 +69,8 @@ public class EmbedChartService {
                 readJson(rs.getString("options")),
                 rs.getString("refresh_mode"),
                 rs.getInt("cache_ttl_seconds"),
-                rs.getInt("version")
+                rs.getInt("version"),
+                SamplingMetadata.fromBuilderConfig(readJson(rs.getString("builder_config")))
         );
     }
 
@@ -80,6 +84,7 @@ public class EmbedChartService {
     }
 
     record ChartDefinition(long id, long datasourceId, String sqlQuery, String chartType,
-                           Map<String, Object> options, String refreshMode, int cacheTtlSeconds, int version) {
+                           Map<String, Object> options, String refreshMode, int cacheTtlSeconds, int version,
+                           SamplingMetadata sampling) {
     }
 }

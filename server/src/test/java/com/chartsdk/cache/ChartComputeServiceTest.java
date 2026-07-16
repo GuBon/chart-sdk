@@ -1,23 +1,27 @@
 package com.chartsdk.cache;
 
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.ApiException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -36,7 +40,7 @@ class ChartComputeServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
     private final ChartCacheService cache = mock(ChartCacheService.class);
-    private final ChartComputeService compute = spy(new ChartComputeService(jdbc, runner, cache));
+    private final ChartComputeService compute = spy(new ChartComputeService(jdbc, runner, cache, new ObjectMapper()));
 
     private static CachedChartRows snapshot() {
         return new CachedChartRows(new QueryRows(List.of(), List.of(), 0, false, 1), Instant.now());
@@ -47,10 +51,10 @@ class ChartComputeServiceTest {
         doReturn(true).when(compute).isMultiSource(1L);
         when(cache.find(1L)).thenReturn(Optional.of(snapshot()));
 
-        assertThat(compute.serve(1L, 2L, "SELECT 1", "manual", 3600, 0)).isNotNull();
+        assertThat(compute.serve(1L, "manual", 3600, 0, null)).isNotNull();
 
         // 핵심 불변식: 다중 소스 서빙은 재계산(페더레이션)을 절대 호출하지 않는다.
-        verify(compute, never()).refreshSingleFlight(anyLong(), anyLong(), anyString(), anyInt(), anyBoolean());
+        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
     }
 
     @Test
@@ -58,22 +62,82 @@ class ChartComputeServiceTest {
         doReturn(true).when(compute).isMultiSource(1L);
         when(cache.find(1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> compute.serve(1L, 2L, "SELECT 1", "manual", 3600, 0))
+        assertThatThrownBy(() -> compute.serve(1L, "manual", 3600, 0, null))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("snapshot is not ready");
 
-        verify(compute, never()).refreshSingleFlight(anyLong(), anyLong(), anyString(), anyInt(), anyBoolean());
+        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
     }
 
     @Test
     void singleSourceRecomputesOnCacheMiss() {
         doReturn(false).when(compute).isMultiSource(1L);
         when(cache.findUsable(1L, "ttl", 3600, 0)).thenReturn(Optional.empty());
-        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, 2L, "SELECT 1", 0, true);
+        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, true, null);
 
-        assertThat(compute.serve(1L, 2L, "SELECT 1", "ttl", 3600, 0)).isNotNull();
+        assertThat(compute.serve(1L, "ttl", 3600, 0, null)).isNotNull();
 
-        verify(compute, times(1)).refreshSingleFlight(1L, 2L, "SELECT 1", 0, true);
+        verify(compute, times(1)).refreshSingleFlight(1L, true, null);
+    }
+
+    @Test
+    void legacySampleCacheWithoutMetadataIsRecomputed() {
+        doReturn(false).when(compute).isMultiSource(1L);
+        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(snapshot()));
+        SamplingMetadata executed = SamplingMetadata.system(10).withExecution(
+                25, List.of(new SamplingMetadata.GroupSampleCount("A", 25)), List.of(), List.of());
+        CachedChartRows refreshed = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
+        doReturn(refreshed).when(compute).refreshSingleFlight(1L, true, SamplingMetadata.system(10));
+
+        CachedChartRows rows = compute.serve(1L, "manual", 3600, 0, SamplingMetadata.system(10));
+
+        assertThat(rows.sampling()).isEqualTo(executed);
+        verify(compute).refreshSingleFlight(1L, true, SamplingMetadata.system(10));
+    }
+
+    @Test
+    void matchingCachePreservesRuntimeSampleCountsInsteadOfOverwritingThem() {
+        doReturn(false).when(compute).isMultiSource(1L);
+        SamplingMetadata definition = SamplingMetadata.system(10);
+        SamplingMetadata executed = definition.withExecution(
+                42, List.of(new SamplingMetadata.GroupSampleCount("A", 42)), definition.estimates(), List.of());
+        CachedChartRows cached = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
+        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(cached));
+
+        CachedChartRows served = compute.serve(1L, "manual", 3600, 0, definition);
+
+        assertThat(served).isSameAs(cached);
+        assertThat(served.sampling().sampledRowCount()).isEqualTo(42L);
+        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
+    }
+
+    @Test
+    void recomputeRegeneratesBuilderSqlSoExistingChartsUseCurrentSamplingRules() {
+        Map<String, Object> builderConfig = Map.of(
+                "table", "sales",
+                "xAxis", "category",
+                "yAxis", List.of(Map.of("column", "amount", "agg", "sum")),
+                "sample", Map.of("rate", 10)
+        );
+        SamplingMetadata sampling = SamplingMetadata.system(10);
+        SamplingMetadata executed = sampling.withExecution(
+                17, List.of(new SamplingMetadata.GroupSampleCount("A", 17)), sampling.estimates(), List.of());
+        ChartComputeService.Chart definition = new ChartComputeService.Chart(
+                2L, "builder", "SELECT old_unscaled_sum", builderConfig, "bar", 3, sampling);
+        QueryRows freshRows = new QueryRows(List.of(), List.of(), 0, false, 2);
+        doReturn(definition).when(compute).definition(1L);
+        when(runner.runBuilder(2L, builderConfig, "bar", false)).thenReturn(
+                new FederatedQueryRunner.BuiltResult(
+                        freshRows,
+                        new BuilderSqlBuilder.Sql("SELECT current_scaled_sum", List.of(), sampling),
+                        Set.of(2L), executed));
+        CachedChartRows cached = new CachedChartRows(freshRows, Instant.now(), executed);
+        when(cache.upsert(1L, freshRows, 3, executed)).thenReturn(cached);
+
+        assertThat(compute.recompute(1L)).isEqualTo(cached);
+
+        verify(runner).runBuilder(2L, builderConfig, "bar", false);
+        verify(runner, never()).runStored(any(), anyLong(), anyString());
     }
 
     @Test
