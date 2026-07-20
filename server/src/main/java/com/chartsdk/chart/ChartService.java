@@ -47,7 +47,9 @@ public class ChartService {
     }
 
     public Map<String, Object> preview(long id) {
-        return previewPayload(id);
+        // 편집 진입은 서빙 캐시의 차트와 집계 결과표를 함께 복원한다. 편집기가 run-builder를 자동 호출하지 않고
+        // 사용자가 [실행]을 누르기 전부터 마지막 저장 상태를 보여주기 위한 단건 전용 계약이다.
+        return previewPayload(id, true);
     }
 
     public Map<String, Object> previews(String ids) {
@@ -55,7 +57,8 @@ public class ChartService {
         Map<String, Object> errors = new LinkedHashMap<>();
         parseIds(ids).stream().limit(60).forEach((id) -> {
             try {
-                previews.put(String.valueOf(id), previewPayload(id));
+                // 목록 카드는 option만 필요하다. 최대 60개 카드 응답에 rows를 중복 싣지 않는다.
+                previews.put(String.valueOf(id), previewPayload(id, false));
             } catch (ApiException e) {
                 errors.put(String.valueOf(id), e.getMessage());
             } catch (RuntimeException e) {
@@ -110,7 +113,7 @@ public class ChartService {
         return charts.get(ownerId, newId);
     }
 
-    private Map<String, Object> previewPayload(long id) {
+    private Map<String, Object> previewPayload(long id, boolean includeRows) {
         ChartDefinition chart = charts.previewDefinition(ownerId(), id);
         // 서빙 경로 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
         CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
@@ -121,6 +124,11 @@ public class ChartService {
         response.put("rowCount", rows.rows().rowCount());
         response.put("truncated", rows.rows().truncated());
         response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
+        if (includeRows) {
+            response.put("columns", rows.rows().columns());
+            response.put("rows", rows.rows().rows());
+            response.put("elapsedMs", rows.rows().elapsedMs());
+        }
         if (rows.sampling() != null) rows.sampling().putInto(response);
         return response;
     }
