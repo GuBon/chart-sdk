@@ -7,6 +7,8 @@ admin/.next/
 admin/.next-e2e/
 admin/out/
 sdk/dist/
+admin/public/sdk.js
+admin/public/sdk.js.map
 
 # generated SSOT artifact (run `npm run gen:defaults`)
 chart-options/defaults.json
