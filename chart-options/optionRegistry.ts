@@ -122,7 +122,7 @@ export const VARIANTS: Record<MajorType, VariantDef[]> = {
   ],
   // 신규 3종은 MVP 기본형 1개씩 (중분류 없음).
   boxplot: [
-    { value: 'basic', label: '기본', help: '카테고리별 5수 요약(min·Q1·중앙값·Q3·max) 상자수염' },
+    { value: 'basic', label: '기본', help: '카테고리별 5수 요약(min·Q1·중앙값·Q3·max) 박스 플롯' },
   ],
   heatmap: [
     { value: 'basic', label: '기본', help: 'X·Y 카테고리 매트릭스를 색 강도로 인코딩(visualMap)' },
@@ -165,7 +165,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     choices: [
       { value: 'bar', label: '막대' }, { value: 'line', label: '선' },
       { value: 'pie', label: '원형' }, { value: 'scatter', label: '분포' },
-      { value: 'boxplot', label: '상자수염' }, { value: 'heatmap', label: '히트맵' },
+      { value: 'boxplot', label: '박스 플롯' }, { value: 'heatmap', label: '히트맵' },
       { value: 'map', label: '지도', group: 'GEO' }, { value: 'geoscatter', label: '지도 포인트', group: 'GEO' },
     ],
     help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 옵션 패널). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',

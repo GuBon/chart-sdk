@@ -34,7 +34,7 @@ interface Props {
 const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 축', type: '대분류 전용' };
 const ZONE_ORDER = ['common', 'axis', 'type'];
 const TYPE_ICONS: Record<string, typeof BarChart3> = { bar: BarChart3, line: LineChart, pie: PieChart, scatter: ScatterChart, boxplot: CandlestickChart, heatmap: Grid3x3, map: MapIcon, geoscatter: MapPin };
-const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포', boxplot: '상자수염', heatmap: '히트맵', map: '지도', geoscatter: '지도 포인트' };
+const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포', boxplot: '박스 플롯', heatmap: '히트맵', map: '지도', geoscatter: '지도 포인트' };
 const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
 export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions }: Props) {

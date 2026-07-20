@@ -13,7 +13,7 @@ const TYPE_META: Record<ChartType, { label: string; Icon: typeof BarChart3 }> = 
   line: { label: '선', Icon: LineChart },
   pie: { label: '원형', Icon: PieChart },
   scatter: { label: '분포', Icon: ScatterChart },
-  boxplot: { label: '상자수염', Icon: CandlestickChart },
+  boxplot: { label: '박스 플롯', Icon: CandlestickChart },
   heatmap: { label: '히트맵', Icon: Grid3x3 },
   map: { label: '지도', Icon: MapIcon },
   geoscatter: { label: '지도 포인트', Icon: MapPin },
