@@ -1,6 +1,6 @@
 # Embed Chart Data API Specification
 
-**Version:** v1.6 (2026-07-15 — sampling v5·SUM/COUNT 표본값·통계 추정 구간 분리)
+**Version:** v1.8 (2026-07-16 — paste-ready SDK delivery·explicit API base)
 **Endpoint:** `GET /api/v1/charts/data`  
 **Caller:** `sdk.js` running in a customer-owned web page  
 **Purpose:** Return a server-built Apache ECharts option JSON for one saved chart.
@@ -121,17 +121,19 @@ Execution guardrails:
   "chartId": 12,
   "computedAt": "2026-06-24T01:25:30Z",
   "sampling": {
-    "version": 5,
+    "version": 6,
     "approximate": true,
-    "method": "SYSTEM",
+    "method": "RESULT_RANDOM",
     "mode": "manual",
-    "rate": 10,
+    "requestedMethod": "auto",
+    "sizeTarget": 10000,
     "seed": 48291,
     "valueMode": "sample",
-    "sampledRowCount": 2850,
+    "sampleSize": 10000,
+    "sampledRowCount": 9998,
     "groups": [{ "key": "food", "sampleCount": 500 }],
     "estimates": [{ "series": "sum_amount", "aggregate": "sum", "treatment": "SAMPLE_AGGREGATE" }],
-    "warnings": ["BLOCK_SAMPLE_CLUSTERING", "SAMPLE_AGGREGATE_ONLY"]
+    "warnings": ["RESULT_RANDOM_SAMPLE", "SAMPLE_AGGREGATE_ONLY"]
   },
   "approximate": true,
   "sampleRate": 10,
@@ -154,7 +156,7 @@ Execution guardrails:
 | `computedAt` | ISO-8601 UTC | Time of the row result used to build `option`. |
 | `rowCount` | integer | Number of rows used to build the option. |
 | `truncated` | boolean | `true` when the row cap was reached and the result may be partial. |
-| `sampling` | object, optional | Sampling execution metadata v5. Includes INDEX_RANDOM/SYSTEM/FULL_SCAN, requested size/rate/seed, actual sampled input count, per-group counts, per-series treatment/error summary, optional statistical `intervals[]`, and warnings. Sampled SUM/COUNT use `SAMPLE_AGGREGATE`; AVG/STDDEV/VARIANCE use `SAMPLE_ESTIMATE`. Persisted with the cached result. |
+| `sampling` | object, optional | Sampling execution metadata v6. Includes INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN, requested size/rate/seed, actual sampled input count, per-group counts, per-series treatment/error summary, optional statistical `intervals[]`, and warnings. RESULT_RANDOM means rows were selected from a VIEW or JOIN+WHERE result before aggregation. Sampled SUM/COUNT use `SAMPLE_AGGREGATE`; AVG/STDDEV/VARIANCE use `SAMPLE_ESTIMATE`. Persisted with the cached result. |
 | `approximate` / `sampleRate` | boolean / number, optional | Backward-compatible aliases for older clients. New clients use `sampling`. |
 | `option` | object | Complete Apache ECharts option. SDK must pass it to `chart.setOption(option)` without rebuilding. |
 
@@ -198,8 +200,15 @@ The supported embed markup is:
 ```html
 <div data-chart-id="12"
      data-auth-token="{user-jwt-token}"></div>
-<script src="https://cdn.example.com/sdk.js"></script>
+<script src="https://charts.example.internal/sdk.js"
+        data-api-base="https://api.example.internal"></script>
 ```
+
+This is a **paste-ready contract**: no additional JavaScript global or initialization call is required. The Admin S3 modal fills all three runtime values (`chartId`, token, and API base). Admin `dev`/`build` first builds `sdk/dist/sdk.js` and publishes it as `admin/public/sdk.js`; `NEXT_PUBLIC_SDK_SRC` may override the script URL for a CDN, while `NEXT_PUBLIC_API_BASE` supplies `data-api-base` independently.
+
+For manual local verification, run the backend and Admin, paste the S3 markup between the markers in `admin/public/embed-host.html`, and open `http://localhost:3000/embed-host.html`. No second static server is required. The host file intentionally contains no chart id, token, or embed script so the tester performs the real copy/paste flow.
+
+API base resolution priority is `window.CHARTSDK_API_BASE` (imperative override) → the loading script's `data-api-base` → the `sdk.js` origin → the host page origin. Trailing slashes in `data-api-base` are removed. This separation is required when Admin/CDN and Spring API use different origins (for example, local `:3000` and `:8080`). The embedding page's origin must still be in the backend CORS allow-list.
 
 SDK behavior:
 
@@ -208,7 +217,7 @@ SDK behavior:
 3. Fetch `GET /api/v1/charts/data?chartId={id}` with Bearer token.
 4. Replace the slot content with an internal chart host and create an ECharts instance with `echarts.init(chartHost)`.
 5. If a title exists, merge its responsive width (`chartHost.clientWidth - 32`) and `overflow:'truncate'`, then call `chart.setOption(response.option)`.
-6. If `sampling` exists, show `{samplingMethodLabel} {sampledRowCount}행 · 표본 결과` or `전체 데이터 · 정확한 결과`. Label sampled SUM/COUNT as `표본 합계`/`표본 개수` and state that they are not whole-population totals. If an AVG/STDDEV/VARIANCE confidence summary exists, append `95% 신뢰수준 · 오차 약 ±X%`. Render every `sampling.warnings` entry visibly; STDDEV/VARIANCE intervals require the normality-assumption warning and SYSTEM requires the block-clustering warning.
+6. If `sampling` exists, show `{samplingMethodLabel} {sampledRowCount}행 · 표본 결과` or `전체 데이터 · 정확한 결과`. RESULT_RANDOM is labeled `결과 무작위 행 표본`. Label sampled SUM/COUNT as `표본 합계`/`표본 개수` and state that they are not whole-population totals. If an AVG/STDDEV/VARIANCE confidence summary exists, append `95% 신뢰수준 · 오차 약 ±X%`. Render every `sampling.warnings` entry visibly; STDDEV/VARIANCE intervals require the normality-assumption warning and SYSTEM requires the block-clustering warning.
 7. Observe the host size; on resize call `chart.resize()` and refresh the title width patch.
 8. On failure, render an isolated error state inside the chart container only.
 
@@ -244,7 +253,7 @@ Geo charts need a GeoJSON registered with `echarts.registerMap(name, geoJson)` b
 
 1. After fetching the chart option, the SDK scans it for map names — both `series[].map` (choropleth `type:'map'`) and `option.geo.map` (geo-scatter point charts).
 2. For each not-yet-registered name it fetches `GET {apiBase}/maps/{name}.json` **once** (cached module-side; re-renders do not re-fetch), then calls `registerMap`.
-3. `apiBase` is the same origin the chart data came from (`sdk.js` script origin or `window.CHARTSDK_API_BASE`).
+3. `apiBase` is resolved with the same priority as chart data (`window.CHARTSDK_API_BASE` → `script[data-api-base]` → `sdk.js` origin → host origin).
 
 The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). Bundled maps (KOSTAT open data — see `chart-options/maps/LICENSE.md`):
 
