@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v2.6 — sampling v5(SUM·COUNT 표본값·통계 추정 구간 분리) (2026-07-15)
-**관련 문서:** PRD v2.5, 화면설계서 v3.0, 노코드 SQL 생성규칙 v2.6, 다중데이터소스_페더레이션_설계
+**문서 버전:** v2.7 — 관계 원본(TABLE·VIEW·MATERIALIZED VIEW) + 조인·뷰 결과 표본(sampling v6) (2026-07-16)
+**관련 문서:** PRD v2.6, 화면설계서 v3.1, 노코드 SQL 생성규칙 v2.7, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -35,6 +35,7 @@
 | 401 | TOKEN_EXPIRED | 토큰 만료 |
 | 401 | TOKEN_REVOKED | 회수된 토큰 (is_active=false) |
 | 404 | CHART_NOT_FOUND | 존재하지 않거나 현재 사용자 범위 밖의 chartId |
+| 409 | MATERIALIZED_VIEW_NOT_POPULATED | 아직 갱신되지 않은 물리화 뷰를 조회 |
 | 408 | QUERY_TIMEOUT | SQL 실행 타임아웃 |
 | 422 | SQL_ERROR | SQL 실행 에러 (DB 에러 메시지 동봉) |
 | 500 | INTERNAL_ERROR | 서버 오류 |
@@ -70,20 +71,21 @@ JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } —
   "chartId": 12,
   "computedAt": "2026-06-12T09:00:00Z",
   "sampling": {
-    "version": 5,
+    "version": 6,
     "approximate": true,
-    "method": "SYSTEM",
+    "method": "RESULT_RANDOM",
     "mode": "manual",
-    "rate": 10,
+    "requestedMethod": "auto",
+    "sizeTarget": 10000,
     "seed": 48291,
     "valueMode": "sample",
-    "sampledRowCount": 2850,
+    "sampleSize": 10000,
+    "sampledRowCount": 9998,
     "groups": [{ "key": "의류", "sampleCount": 500 }],
     "estimates": [{ "series": "sum_amount", "aggregate": "sum", "treatment": "SAMPLE_AGGREGATE" }],
-    "warnings": ["BLOCK_SAMPLE_CLUSTERING", "SAMPLE_AGGREGATE_ONLY"]
+    "warnings": ["RESULT_RANDOM_SAMPLE", "SAMPLE_AGGREGATE_ONLY"]
   },
   "approximate": true,
-  "sampleRate": 10,
   "option": {
     "xAxis": { "type": "category", "data": ["의류", "식품", "전자"], "name": "카테고리" },
     "yAxis": { "type": "value", "name": "매출" },
@@ -97,8 +99,8 @@ JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } —
 
 - sdk.js는 `option`을 그대로 `chart.setOption(res.option)` 한다. 클라이언트는 차트 모양을 결정하지 않는다.
 - `chart_type`과 `options`(JSONB)의 값이 서버에서 option 조립 시 반영된다.
-- `builderConfig.sample`을 사용한 차트는 sampling v5를 포함한다. 서버가 실행 방법을 `INDEX_RANDOM|SYSTEM|FULL_SCAN` 중 결정하며 100% 또는 작은 테이블의 FULL_SCAN은 `{approximate:false,method:"FULL_SCAN",valueMode:"exact"}`이다. 표본 실행의 `valueMode`는 `sample`이다. `sampledRowCount`는 표본에 들어온 실제 입력 행 수이고 API의 `rowCount`는 결과 그룹 수다. `groups`는 화면에 표시된 그룹별 표본 수다.
-- `estimates`는 시리즈별 계산 해석을 제공한다: SUM/COUNT=`SAMPLE_AGGREGATE`, AVG/STDDEV/VARIANCE=`SAMPLE_ESTIMATE`, MIN/MAX=`OBSERVED_EXTREME`, COUNT DISTINCT=`OBSERVED_DISTINCT`, 정확 실행은 모두 `EXACT`. SUM·COUNT는 외삽하지 않은 `표본 합계`·`표본 개수`이며 `SAMPLE_AGGREGATE_ONLY` 경고를 함께 보낸다. INDEX_RANDOM의 AVG에는 95% 오차 요약을 제공하고, STDDEV/VARIANCE의 `intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 그룹별 구간이다. 분산 계열 구간에는 `STDDEV_CI_NORMALITY_ASSUMED` 경고가 항상 따라간다.
+- `builderConfig.sample`을 사용한 차트는 sampling v6를 포함한다. 서버가 실행 방법을 `INDEX_RANDOM|RESULT_RANDOM|SYSTEM|FULL_SCAN` 중 결정한다. `RESULT_RANDOM`은 VIEW 또는 JOIN+WHERE 조회 결과에서 행을 뽑는 방식이다. 100% 또는 작은 물리 테이블의 FULL_SCAN은 `{approximate:false,method:"FULL_SCAN",valueMode:"exact"}`이다. 표본 실행의 `valueMode`는 `sample`이다. `sampledRowCount`는 표본에 들어온 실제 입력 행 수이고 API의 `rowCount`는 결과 그룹 수다. `groups`는 화면에 표시된 그룹별 표본 수다.
+- `estimates`는 시리즈별 계산 해석을 제공한다: SUM/COUNT=`SAMPLE_AGGREGATE`, AVG/STDDEV/VARIANCE=`SAMPLE_ESTIMATE`, MIN/MAX=`OBSERVED_EXTREME`, COUNT DISTINCT=`OBSERVED_DISTINCT`, 정확 실행은 모두 `EXACT`. SUM·COUNT는 외삽하지 않은 `표본 합계`·`표본 개수`이며 `SAMPLE_AGGREGATE_ONLY` 경고를 함께 보낸다. 독립행 무작위 표본인 INDEX_RANDOM·RESULT_RANDOM의 AVG에는 가능한 그룹에 95% 오차 요약을 제공하고, STDDEV/VARIANCE의 `intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 그룹별 구간이다. 분산 계열 구간에는 `STDDEV_CI_NORMALITY_ASSUMED` 경고가 항상 따라간다.
 - `sampling`이 정식 계약이며 `approximate`·`sampleRate`는 구버전 클라이언트를 위한 하위 호환 별칭이다. Admin과 SDK는 정확/추정을 구분하고 경고를 표시한다.
 
 ### 토큰 검증 구현 위치
@@ -155,13 +157,13 @@ POST /api/v1/query/run-builder
 ```
 서버가 builderConfig를 검증(노코드 SQL 생성규칙 9·11장) → SQL+바인딩 생성 → 실행. 응답은 2번과 동일 형태 + "generatedSql" 필드(표시용 리터럴 사본) 포함.
 
-`builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample` 과는 동시 사용 불가(11.4)이며, aggregate/rows 모드 모두 실행 전에 400 `INVALID_REQUEST` 로 거부한다. 앱은 조인 표본을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
+`builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample`을 함께 지정하면 JOIN과 WHERE를 적용한 행 집합을 모집단 CTE로 만들고, 그 결과에서 `RESULT_RANDOM` 표본을 뽑은 뒤 집계한다. 앱은 이 기능을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
 `builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 분포는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
 
 `mode` (선택, 기본 `"aggregate"`):
-- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 기본 count 기반 표본은 INDEX_RANDOM 등가 조인을 사용하고, 레거시 `method:"system"`/`rate`는 `TABLESAMPLE SYSTEM`을 사용한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v5와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
-- `"rows"` — 집계·GROUP BY 없이 `SELECT * + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. 자동 호출 허용(단순 조회). 표본 추출은 무시한다.
+- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
+- `"rows"` — 집계·GROUP BY 없이 `SELECT * + JOIN + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. [실행] 때 중복 호출하지 않고 사용자가 탭을 처음 열 때 지연 호출한다. 표본 추출은 무시한다.
 검증 실패는 400(INVALID_IDENTIFIER / AGG_TYPE_MISMATCH / OP_TYPE_MISMATCH / VALUE_PARSE_ERROR / BUCKET_TYPE_MISMATCH) — DB 에러를 노코드 사용자에게 노출하지 않는다.
 2번(raw SQL 실행)은 2차 SQL 탭에서 사용한다.
 
@@ -249,6 +251,16 @@ GET /api/v1/charts/{id}
 
 - S2 진입 시 이 응답으로 노코드 상태를 복원한다: `datasourceId`(소스 선택) + `builderConfig`(폼) + `chartType`/`options`(우측 패널). `description`은 nullable.
 - `options` 키는 단일 레지스트리 `chart-options/optionRegistry.ts`(= PRD 9.2)를 따른다 — 중첩 점경로(`xAxis.title`·`yAxis.title`·`legend.show`·`legend.position` 등). 위 예시는 대표 키만 표기한 것이며, 누락 키는 레지스트리 기본값으로 채워진다(변환기 매핑 스펙 참조).
+
+S2는 정의 조회와 함께 저장 결과 단건 미리보기를 요청한다.
+
+```
+GET /api/v1/charts/{id}/preview
+```
+
+응답은 `{ chartId, computedAt, columns, rows, rowCount, truncated, elapsedMs, option, sampling? }`이다. `columns/rows`는 마지막 저장 캐시의 집계 결과이며 편집기의 [실행 결과]와 옵션 재조립에 사용한다. 따라서 저장된 차트는 진입 직후 별도 `POST /query/run-builder` 없이 결과 표와 우측 차트를 복원한다. 캐시 조회·갱신 정책은 임베드와 같은 `ChartComputeService.serve()`를 따른다.
+
+목록용 `GET /charts/previews?ids=...`는 최대 60개 카드 응답이므로 `option`과 표시 메타데이터만 반환하고 `columns/rows/elapsedMs`는 포함하지 않는다.
 
 ### 3.3 생성/수정 — S2 [저장]
 
@@ -349,7 +361,7 @@ POST   /api/v1/datasources/test             → 연결 테스트 { host, port, .
 
 ## 5. 스키마 탐색 (S2 좌측 패널)
 
-### 5.1 테이블/컬럼 목록
+### 5.1 관계(TABLE·VIEW·MATERIALIZED VIEW)/컬럼 목록
 
 ```
 GET /api/v1/schema/tables?datasourceId={id}
@@ -363,6 +375,7 @@ GET /api/v1/schema/tables?datasourceId={id}
     {
       "schema": "public",
       "name": "sales",
+      "relationType": "TABLE",
       "estimatedRowCount": 500000000,
       "columns": [
         { "name": "id", "type": "bigint" },
@@ -371,17 +384,18 @@ GET /api/v1/schema/tables?datasourceId={id}
         { "name": "date", "type": "date" }
       ]
     },
-    { "schema": "public", "name": "users", "columns": [ { "name": "id", "type": "bigint" }, { "name": "name", "type": "varchar" } ] },
-    { "schema": "tandanji", "name": "events", "columns": [ { "name": "id", "type": "bigint" }, { "name": "kind", "type": "varchar" } ] }
+    { "schema": "analytics", "name": "sales_summary", "relationType": "VIEW", "columns": [ { "name": "category", "type": "varchar" }, { "name": "amount", "type": "numeric" } ] },
+    { "schema": "analytics", "name": "monthly_sales_mv", "relationType": "MATERIALIZED_VIEW", "populated": true, "estimatedRowCount": 120, "columns": [ { "name": "month", "type": "date" }, { "name": "amount", "type": "numeric" } ] }
   ]
 }
 ```
 
-- 서버는 현재 사용자 소유 데이터소스에 연결해 `information_schema`를 조회한다. 시스템 스키마(`pg_catalog`·`information_schema`·`pg_toast` 등)와 `mc_` 접두사 테이블(솔루션 메타 테이블)은 목록에서 제외한다.
-- `estimatedRowCount`는 PostgreSQL `pg_class.reltuples`의 계획용 추정치다. 정확한 행 수가 아니며 표본 계획(INDEX_RANDOM/FULL_SCAN/SYSTEM 폴백), 직접 지정 UI의 "전체 약 N행 중" 안내에만 사용한다. 이 필드를 만들기 위해 대용량 테이블에 `COUNT(*)`를 실행하지 않으며, INDEX_RANDOM의 정확도는 비율이 아니라 실행 후 실제 표본 수와 집계별 유효 표본 수로 계산한다.
-- `schema` 는 테이블의 소속 스키마다. `public` 외 사용자 스키마(예: `tandanji`)의 업무 테이블도 노출된다. 클라이언트는 식별자를 비-public 일 때만 `"schema.table"` 로 한정해 `builderConfig.table`/`joins[].table` 에 담는다(미지정 → public).
+- 서버는 현재 사용자 소유 데이터소스에 연결해 `pg_catalog.pg_class/pg_attribute`를 조회한다. 읽기 권한이 있는 일반 테이블·파티션 테이블·VIEW·MATERIALIZED VIEW를 모두 반환하고, 시스템 스키마(`pg_catalog`·`information_schema`·`pg_toast` 등)와 `mc_` 접두사 관계(솔루션 메타 테이블)는 제외한다. 카탈로그 조회와 차트 실행은 모두 읽기 전용이며 고객 DB 객체를 생성·갱신하지 않는다.
+- `relationType`은 `TABLE|VIEW|MATERIALIZED_VIEW`다. 물리화 뷰의 `populated:false`는 `REFRESH MATERIALIZED VIEW`가 필요한 상태이므로 선택 UI에서 비활성화하고, 직접 미리보기 요청도 409 `MATERIALIZED_VIEW_NOT_POPULATED`로 거부한다.
+- `estimatedRowCount`는 PostgreSQL `pg_class.reltuples`의 계획용 추정치로 TABLE·MATERIALIZED VIEW에만 제공될 수 있다. 정확한 행 수가 아니며 표본 계획과 직접 지정 UI의 "전체 약 N행 중" 안내에만 사용한다. VIEW·조인 결과 크기는 미리 전체 COUNT하지 않으며 실행 후 실제 표본 수와 집계별 유효 표본 수를 정확도 계산에 사용한다.
+- `schema`는 관계의 소속 스키마다. `public` 외 사용자 스키마(예: `analytics`)의 업무 관계도 노출된다. 클라이언트는 식별자를 비-public 일 때만 `"schema.name"`으로 한정해 `builderConfig.table`/`joins[].table`에 담는다(미지정 → public).
 
-### 5.2 테이블 원본 데이터 조회 (최대 1,000행)
+### 5.2 관계 원본 데이터 조회 (최대 1,000행)
 
 ```
 GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}
@@ -389,8 +403,8 @@ GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}
 
 응답 200: 2번(query/run)과 동일 형태 (`columns` + `rows`, 최대 1,000행 + `truncated`).
 
-- 서버 내부적으로 `SELECT * FROM "{schema}"."{tableName}" LIMIT 1000`을 읽기 전용으로 실행(시스템 행 제한과 동일). `schema` 미지정 시 `public`. 테이블명·스키마는 `information_schema` 존재 여부로 검증(임의 문자열 주입 차단).
-- S2 좌측 패널에서 테이블 클릭 시 [원본 데이터] 탭에 표시 — UI는 세로 스크롤, 초과 시 "1,000행까지 표시" 안내. 조건이 구성된 뒤에는 2A의 `mode:"rows"`가 이 역할을 대신한다(조건 적용 원본).
+- 서버 내부적으로 `SELECT * FROM "{schema}"."{tableName}" LIMIT 1000`을 읽기 전용으로 실행(시스템 행 제한과 동일). `schema` 미지정 시 `public`. 관계명·스키마는 위 카탈로그 존재 여부로 검증한다(임의 문자열 주입 차단).
+- S2 좌측 패널에서 TABLE·VIEW·갱신 완료 MATERIALIZED VIEW를 클릭하면 [원본 데이터] 탭에 표시한다. UI는 세로 스크롤하고, 초과 시 "1,000행까지 표시"를 안내한다. 조건이 구성된 뒤에는 2A의 `mode:"rows"`가 이 역할을 대신한다(조건 적용 원본).
 
 ---
 
@@ -430,4 +444,4 @@ GET /api/v1/charts?q={검색어}&type={bar|line|pie|scatter}&datasourceId={id}&s
 GET /api/v1/charts/previews?ids=1,2,3
 ```
 
-응답은 `{ "previews": {}, "errors": {} }` 형태이며, 각 preview의 `option`은 서버 변환기가 조립한 ECharts option이다. Admin 카드와 편집 미리보기는 이 option을 그대로 `setOption()` 하고, 클라이언트는 목록 카드용 더미 데이터를 만들지 않는다.
+응답은 `{ "previews": {}, "errors": {} }` 형태이며, 각 preview의 `option`은 서버 변환기가 조립한 ECharts option이다. Admin 목록 카드는 이 option을 그대로 `setOption()` 하고, 클라이언트는 목록 카드용 더미 데이터를 만들지 않는다. 편집 화면은 rows까지 포함하는 단건 `/charts/{id}/preview` 계약을 사용한다.

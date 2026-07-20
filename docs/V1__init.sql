@@ -16,7 +16,8 @@
 --   ④ pg_trgm GIN 검색 인덱스 활성화 — S1 이름·설명 ILIKE 검색 최적화
 --   ※ owner_id 는 로그인 구현 전까지 NULL 허용(인증 컨텍스트에서 자동 주입). 노코드 신기능(표본추출 sample·stddev·none 원본값 모드)은
 --     builder_config JSONB 가 그대로 수용하므로 스키마 변경 없음. chart_type 4종(bar/line/pie/scatter)이 원형·분포 대분류를 커버.
---     joins[] + sample, none + sample, none + 집계 혼합 금지는 앱/서버 검증 책임이다. 앱은 조인 표본 처리를 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
+--     none + sample, none + 집계 혼합 금지는 앱/서버 검증 책임이다. joins[] + sample은 sampling v6 RESULT_RANDOM으로 실행한다.
+--     기존 고객 DB의 TABLE/VIEW/MATERIALIZED VIEW를 읽기 원본으로 지원하되, 앱은 고객 DB 객체를 생성·수정·갱신하지 않는다.
 -- ============================================
 
 -- 표본·검색 최적화용 표준 contrib. Type B(기존 운영 DB)에서는 설치 전 CREATE EXTENSION 권한을 확인한다(PRD 7장).

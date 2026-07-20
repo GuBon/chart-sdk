@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v2.0 (2026-07-15 갱신: sampling v5 표본 집계·통계 추정 구간 분리)
-**관련:** Flyway `V1~V4` · PRD v2.5(9장) · API v2.6 · 화면설계서 v3.0 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
+**문서 버전:** v2.1 (2026-07-16 갱신: 관계 원본 + sampling v6 결과 표본)
+**관련:** Flyway `V1~V4` · PRD v2.6(9장) · API v2.7 · 화면설계서 v3.1 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -92,14 +92,14 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
 | 데이터소스 셀렉트 | 📦 | `mc_chart.datasource_id` (목록=🔁 현재 사용자 소유 `mc_datasource`) |
-| 스키마 트리(테이블·컬럼·타입) | ⏳ | `information_schema` 라이브 조회 — **저장 안 함**. 시스템 스키마·`mc_` 제외, `public` 외 사용자 스키마는 배지로 구분(식별자 `"schema.table"` 한정) |
+| 스키마 트리(관계·컬럼·타입) | ⏳ | `pg_catalog` 라이브 조회 — **저장 안 함**. TABLE·VIEW·MATERIALIZED VIEW의 `relationType`, 물리화 뷰 `populated`, 물리 관계 `estimatedRowCount`를 API에서 파생한다. 시스템 스키마·`mc_` 제외, `public` 외 사용자 스키마는 배지로 구분(식별자 `"schema.name"` 한정) |
 | 테이블/컬럼 검색 | ⏳ | 클라 필터 |
 | 소스변경확인 모달 | ⏳ | 클라 상태 |
 
 ### S2 중앙 · 노코드 구성 → `builder_config` (🧩)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
-| 테이블(base) | 🧩 | `builder_config.table` |
+| 원본 관계(base) | 🧩 | `builder_config.table` — TABLE·VIEW·MATERIALIZED VIEW를 같은 구조로 저장. 관계 종류·갱신 상태는 실행 시 카탈로그에서 다시 확인 |
 | 테이블 조인(복수) | 🧩 | `builder_config.joins[]` (table, type=inner/left, on) — 생성규칙 11장. 조인 시 컬럼은 qualified |
 | X축 컬럼 | 🧩 | `builder_config.xAxis` (조인 시 `"테이블.컬럼"`) |
 | 묶기(일/주/월) | 🧩 | `builder_config.xAxisBucket` |
@@ -108,10 +108,10 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
-| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 기본은 INDEX_RANDOM, 불가 시 SYSTEM, 작은 테이블/레거시 100%는 FULL_SCAN. sampling v5 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `joins[]`·`agg="none"`과 동시 저장/실행 금지. JSONB라 스키마 마이그레이션 없음 |
+| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`과 동시 저장/실행만 금지하며 JOIN과는 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
-| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v5(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
-| [원본 데이터] 탭(raw) | ⏳ | run-builder `mode:rows` / schema preview — 저장 안 함 |
+| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v6(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
+| [원본 데이터] 탭(raw) | ⏳ | 기준 관계 클릭=schema preview, 구성 변경 후 탭 열기=run-builder `mode:rows` 지연 호출. [실행]과 동시 중복 조회하지 않으며 저장 안 함 |
 | 실행 메타 "N행·Nms" | 🔁 | `mc_chart_cache.row_count`·`elapsed_ms` (또는 ⏳ 미리보기) |
 
 > **정렬 2종 구분**: `builder_config.orderBy`(SQL ORDER BY, 데이터 정렬) ≠ `options.sortOrder`(변환기 시리즈 표시 정렬). 둘 다 보존.
@@ -146,7 +146,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
 | 사용자 토큰 셀렉트(활성) | 🔁 | `mc_user_token` where is_active·미만료 (표시: 사용자·expires_at). 1인 1활성이라 사실상 단일 |
-| 스니펫(chart-id + token) | 🔁 | `mc_chart.id` + `mc_user_token.token` 조립 |
+| 스니펫(chart-id + token + API base) | 🔁 | `mc_chart.id` + `mc_user_token.token` + 배포 환경의 `NEXT_PUBLIC_API_BASE` 조립. SDK 자산은 `NEXT_PUBLIC_SDK_SRC` 또는 Admin `/sdk.js` |
 | 복사 | ⚙️ | 클립보드 |
 | 토큰 없음 상태 | 🔁 | 활성 토큰 count=0 |
 
@@ -194,7 +194,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 ## 3. 의도적 미저장(⏳) 목록 — "누락 아님"
 
 다음은 설계상 **저장하지 않는다**(영속화하면 오히려 정합성 깨짐):
-- 스키마 트리(테이블·컬럼) — `information_schema` 라이브가 진실. 캐시하면 운영 DB 스키마 변경과 어긋남.
+- 스키마 트리(관계·컬럼) — `pg_catalog` 라이브가 진실. 캐시하면 운영 DB 스키마·물리화 뷰 갱신 상태 변경과 어긋남.
 - 미리보기 실행 결과/원본 데이터 — 저장 대상은 "저장된 차트의 캐시"(`mc_chart_cache`)뿐. 빌더 실험 실행은 휘발.
 - 로그인 세션 — JWT(무상태). 토큰 검증은 `mc_user_token` PK 조회로 충분.
 - 모든 모달·탭·dirty·로딩 상태 — 클라이언트 UI 상태.
@@ -207,7 +207,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 JSONB라도 키는 코드 레지스트리로 고정된다 — 임의 키가 아니다.
 - `mc_chart.options` ↔ `chart-options/optionRegistry.ts` (`OptionDef.key`) ↔ PRD 9.2. 변환 규칙은 `docs/변환기_매핑스펙_차트옵션.md`.
 - `mc_chart.builder_config` ↔ `docs/노코드_SQL생성규칙.md` 2장 스키마. 검증은 생성규칙 9장.
-- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `joins[] + sample`, `agg="none" + sample`, `agg="none" + 집계 혼합` 금지도 DB CHECK가 아니라 애플리케이션 계층 책임(JSONB라 DB CHECK 부적합).
+- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `agg="none" + sample`, `agg="none" + 집계 혼합` 금지는 DB CHECK가 아니라 애플리케이션 계층 책임(JSONB라 DB CHECK 부적합). `joins[] + sample`은 sampling v6 RESULT_RANDOM의 정상 조합이다.
 
 ## 5. 인덱스 (실제 쿼리 패턴 기준)
 
