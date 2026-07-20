@@ -114,7 +114,7 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
       </div>
 
       <div className="px-4 pb-2 pt-4">
-        <p className="text-sm font-medium text-text-primary">테이블·컬럼</p>
+        <p className="text-sm font-medium text-text-primary">테이블·View·컬럼</p>
         <p className="mt-1 text-xs text-text-tertiary">읽기 전용 조회</p>
       </div>
 
@@ -178,13 +178,19 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
             const key = tableRefKey(t);
             const open = expanded.has(key);
             const active = selectedTable === key;
+            const unavailable = t.relationType === 'MATERIALIZED_VIEW' && t.populated === false;
+            const relationLabel = t.relationType === 'VIEW'
+              ? 'View'
+              : t.relationType === 'MATERIALIZED_VIEW' ? 'Materialized View' : null;
             return (
               <div key={key}>
                 <button
                   type="button"
                   onClick={() => selectTable(t)}
+                  disabled={unavailable}
+                  title={unavailable ? 'REFRESH가 필요한 Materialized View입니다.' : undefined}
                   className={cn(
-                    'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted',
+                    'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
                     active ? 'bg-muted font-medium text-text-primary' : 'text-text-primary',
                   )}
                 >
@@ -199,9 +205,16 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
                   </span>
                   <Table2 className="size-3.5 shrink-0 text-text-secondary" />
                   <span className="min-w-0 truncate" title={t.name}>{t.name}</span>
-                  {t.schema !== 'public' && (
-                    <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-text-tertiary">{t.schema}</span>
-                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-1">
+                    {relationLabel && (
+                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">
+                        {relationLabel}{unavailable ? ' · 갱신 필요' : ''}
+                      </span>
+                    )}
+                    {t.schema && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-text-tertiary">{t.schema}</span>
+                    )}
+                  </span>
                 </button>
                 {open &&
                   t.columns.map((c) => (

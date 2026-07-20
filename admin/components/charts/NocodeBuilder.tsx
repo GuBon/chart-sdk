@@ -84,9 +84,10 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const sourceLabel = (t: SchemaTable) => `${dsName(t.datasourceId)} · ${tableRefLabel(t)}`;
   // 탐색 소스의 테이블만 드롭다운 옵션으로. 사이드바가 소스를 정하고, 드롭다운은 그 소스의 테이블만 노출.
   const browseTables = tables.filter((t) => t.datasourceId === browseDatasourceId);
+  const selectableBrowseTables = browseTables.filter((t) => t.relationType !== 'MATERIALIZED_VIEW' || t.populated !== false);
   // browse 소스 테이블 − exclude. 현재 선택값이 목록 밖(타 소스 base/조인)이면 선택 유지용으로 앞에 추가(출처 표기).
   const tableOptionsFor = (currentKey: string | null, exclude: Set<string>) => {
-    const opts = browseTables
+    const opts = selectableBrowseTables
       .filter((t) => !exclude.has(tableRefKey(t)))
       .map((t) => ({ value: tableRefKey(t), label: tableRefLabel(t) }));
     if (currentKey && !opts.some((o) => o.value === currentKey)) {
@@ -128,8 +129,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   // ── 조인 (생성규칙 11장) ──
   const joins = config.joins ?? [];
   const rawValueMode = config.yAxis.some((y) => y.agg === 'none');
-  const sampleDisabledByJoin = joins.length > 0;
-  const sampleDisabled = sampleDisabledByJoin || rawValueMode;
+  const sampleDisabled = rawValueMode;
   const colsOf = (ref: TableRef) => tables.find((t) => tableRefKey(t) === tableRefKey(ref))?.columns ?? [];
   // 조인 컬럼 참조는 테이블 핸들로 qualified — 백엔드가 핸들을 소스로 해석(§11.2). 동명 테이블은 핸들이 달라 구분됨.
   const qualOpts = (refs: TableRef[]) =>
@@ -148,10 +148,15 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
   const addJoin = () => {
     const used = usedKeys();
-    const next = browseTables.find((t) => !used.has(tableRefKey(t)));
-    if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))], sample: null });
+    const next = selectableBrowseTables.find((t) => !used.has(tableRefKey(t)));
+    if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))] });
   };
-  const unusedTable = !!config.table && browseTables.some((t) => !usedKeys().has(tableRefKey(t)));
+  const unusedTable = !!config.table && selectableBrowseTables.some((t) => !usedKeys().has(tableRefKey(t)));
+  const sampleSourceHint = joins.length > 0
+    ? '조인 결과에서 무작위 행 표본'
+    : baseSchemaTable?.relationType === 'VIEW'
+      ? 'View 조회 결과에서 무작위 행 표본'
+      : sampleTotalHint(baseSchemaTable?.estimatedRowCount);
 
   return (
     <div
@@ -177,7 +182,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
 
       {/* 구성 폼 */}
       <div className="flex flex-col gap-4 p-4">
-        <Row label="테이블">
+        <Row label="원본">
           <div className="w-72">
             <Select
               id="builder-table"
@@ -185,7 +190,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               value={config.table ? tableRefKey(config.table) : ''}
               onChange={(e) => changeTable(e.target.value)}
               options={tableOptions}
-              placeholder="테이블 선택"
+              placeholder="테이블·View 선택"
             />
           </div>
         </Row>
@@ -339,8 +344,6 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           />
           {rawValueMode ? (
             <span className="text-[13px] text-text-tertiary">원본값 모드에서는 표본 추출을 사용할 수 없습니다.</span>
-          ) : sampleDisabledByJoin ? (
-            <span className="text-[13px] text-text-tertiary">조인 사용 중에는 표본 추출을 사용할 수 없습니다.</span>
           ) : config.sample ? (
             <>
               <div className="w-32">
@@ -375,7 +378,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
                 </div>
               )}
               <span className="text-[13px] text-text-tertiary" data-testid="sample-total-hint">
-                {sampleTotalHint(baseSchemaTable?.estimatedRowCount)}
+                {sampleSourceHint}
               </span>
               <button
                 type="button"
