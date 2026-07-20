@@ -49,14 +49,17 @@ public class FederatedQueryRunner {
         Set<Long> refs = BuilderSqlBuilder.referencedDatasources(cfg);
         if (refs.size() >= 2) {
             FederatedCatalog catalog = federation.catalog(refs);
-            BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode);
+            // 다중 소스 조인도 JOIN+WHERE 결과를 모집단으로 삼는다. 이 계획은 DB 카탈로그를 조회하지 않는다.
+            SamplePlan plan = planner.plan(primaryDatasourceId, cfg, rawMode);
+            BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
+                    catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
             SamplingQueryRows.Result result = SamplingQueryRows.extract(
                     federation.execute(refs, sql.text(), sql.params()), sql.sampling());
             return new BuiltResult(result.rows(), sql, refs, result.sampling());
         }
         long dsId = refs.isEmpty() ? primaryDatasourceId : refs.iterator().next();
         SchemaCatalog catalog = queries.catalog(dsId);
-        SamplePlan plan = planner.plan(dsId, cfg, rawMode); // PK·행수·밀도로 표본 방식 결정(INDEX_RANDOM/SYSTEM/FULL_SCAN)
+        SamplePlan plan = planner.plan(dsId, cfg, rawMode); // 관계 종류·조인 유무·PK·행수·밀도로 RESULT_RANDOM 포함 실행 방식 결정
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
         SamplingQueryRows.Result result = SamplingQueryRows.extract(
                 queries.execute(dsId, sql.text(), sql.params()), sql.sampling());

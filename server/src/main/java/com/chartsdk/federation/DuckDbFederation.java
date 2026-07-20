@@ -68,6 +68,7 @@ public class DuckDbFederation {
      */
     public QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
         long start = System.nanoTime();
+        boolean repeatableReservoir = federatedSql.contains("USING SAMPLE reservoir(");
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
             try (Statement st = conn.createStatement()) {
                 st.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
@@ -78,7 +79,8 @@ public class DuckDbFederation {
                     st.execute(attachSql(id, c));
                 }
                 st.execute("SET memory_limit='" + MEMORY_LIMIT + "'");
-                st.execute("SET threads TO " + THREADS);
+                // DuckDB의 REPEATABLE reservoir는 단일 스레드에서만 같은 seed 재현을 보장한다.
+                st.execute("SET threads TO " + (repeatableReservoir ? 1 : THREADS));
             }
             try (PreparedStatement ps = conn.prepareStatement(federatedSql)) {
                 ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);

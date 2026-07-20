@@ -8,7 +8,7 @@ public record SamplePlan(Method method, long[] keys, String pkColumn,
                          long populationEstimate, int sampleSize, double blockRate,
                          long seed, String fallbackReason) {
 
-    public enum Method { NONE, FULL_SCAN, SYSTEM, INDEX_RANDOM }
+    public enum Method { NONE, FULL_SCAN, SYSTEM, INDEX_RANDOM, RESULT_RANDOM }
 
     public static SamplePlan none() {
         return new SamplePlan(Method.NONE, null, null, 0, 0, 0, 0, null);
@@ -25,5 +25,10 @@ public record SamplePlan(Method method, long[] keys, String pkColumn,
 
     public static SamplePlan indexRandom(long[] keys, String pkColumn, long populationEstimate, int sampleSize, long seed) {
         return new SamplePlan(Method.INDEX_RANDOM, keys, pkColumn, populationEstimate, sampleSize, 0, seed, null);
+    }
+
+    /** VIEW 또는 JOIN+WHERE 결과에서 집계 전에 뽑는 행 단위 무작위 표본. */
+    public static SamplePlan resultRandom(long populationEstimate, int sampleSize, long seed, String reason) {
+        return new SamplePlan(Method.RESULT_RANDOM, null, null, populationEstimate, sampleSize, 0, seed, reason);
     }
 }

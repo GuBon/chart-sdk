@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class SamplingPlannerTest {
@@ -21,7 +22,7 @@ class SamplingPlannerTest {
     /** reltuples·PK·MIN/MAX 카탈로그 조사 쿼리를 SQL 내용으로 스텁. */
     private static QueryExecutor stub(long reltuples, List<List<Object>> pk, long min, long max) {
         QueryExecutor qe = mock(QueryExecutor.class);
-        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of(reltuples))));
+        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("r", reltuples))));
         when(qe.execute(anyLong(), contains("indisprimary"), any())).thenReturn(rows(pk));
         when(qe.execute(anyLong(), contains("MIN("), any())).thenReturn(rows(List.of(List.of(min, max))));
         return qe;
@@ -55,7 +56,7 @@ class SamplingPlannerTest {
     @Test
     void fallsBackToFullScanForSmallTables() {
         QueryExecutor qe = mock(QueryExecutor.class);
-        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of(40_000L))));
+        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("r", 40_000L))));
 
         SamplePlan plan = new SamplingPlanner(qe).plan(1L, autoSample(1), false);
 
@@ -65,13 +66,29 @@ class SamplingPlannerTest {
     @Test
     void fallsBackToSystemWhenNoIntegerPk() {
         QueryExecutor qe = mock(QueryExecutor.class);
-        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of(500_000_000L))));
+        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("r", 500_000_000L))));
         when(qe.execute(anyLong(), contains("indisprimary"), any())).thenReturn(rows(List.of())); // 정수형 단일 PK 없음
 
         SamplePlan plan = new SamplingPlanner(qe).plan(1L, autoSample(1), false);
 
         assertThat(plan.method()).isEqualTo(SamplePlan.Method.SYSTEM);
         assertThat(plan.fallbackReason()).isEqualTo("NO_INTEGER_PK");
+    }
+
+    @Test
+    void legacyRateKeepsSystemSamplingContractEvenWhenIntegerPkExists() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        when(qe.execute(anyLong(), contains("reltuples"), any()))
+                .thenReturn(rows(List.of(List.of("r", 500_000_000L))));
+        Map<String, Object> cfg = Map.of(
+                "table", "sales",
+                "sample", Map.of("mode", "manual", "rate", 10, "seed", 3));
+
+        SamplePlan plan = new SamplingPlanner(qe).plan(1L, cfg, false);
+
+        assertThat(plan.method()).isEqualTo(SamplePlan.Method.SYSTEM);
+        assertThat(plan.blockRate()).isEqualTo(10.0);
+        assertThat(plan.fallbackReason()).isEqualTo("SYSTEM_PINNED");
     }
 
     @Test
@@ -90,5 +107,44 @@ class SamplingPlannerTest {
         SamplingPlanner planner = new SamplingPlanner(mock(QueryExecutor.class));
         assertThat(planner.plan(1L, Map.of("table", "sales"), false).method()).isEqualTo(SamplePlan.Method.NONE);
         assertThat(planner.plan(1L, autoSample(1), true).method()).isEqualTo(SamplePlan.Method.NONE);
+    }
+
+    @Test
+    void usesResultRandomForJoinWithoutInspectingAnyBaseTable() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        Map<String, Object> cfg = Map.of(
+                "table", "sales",
+                "joins", List.of(Map.of("table", "customers")),
+                "sample", Map.of("mode", "manual", "size", 12_000, "seed", 7));
+
+        SamplePlan plan = new SamplingPlanner(qe).plan(1L, cfg, false);
+
+        assertThat(plan.method()).isEqualTo(SamplePlan.Method.RESULT_RANDOM);
+        assertThat(plan.sampleSize()).isEqualTo(12_000);
+        assertThat(plan.fallbackReason()).isEqualTo("JOIN_RESULT");
+        verifyNoInteractions(qe);
+    }
+
+    @Test
+    void usesResultRandomForOrdinaryView() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("v", 0L))));
+
+        SamplePlan plan = new SamplingPlanner(qe).plan(1L, autoSample(9), false);
+
+        assertThat(plan.method()).isEqualTo(SamplePlan.Method.RESULT_RANDOM);
+        assertThat(plan.fallbackReason()).isEqualTo("VIEW_RESULT");
+    }
+
+    @Test
+    void materializedViewKeepsPhysicalSystemSamplingFallback() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("m", 2_000_000L))));
+        when(qe.execute(anyLong(), contains("indisprimary"), any())).thenReturn(rows(List.of()));
+
+        SamplePlan plan = new SamplingPlanner(qe).plan(1L, autoSample(9), false);
+
+        assertThat(plan.method()).isEqualTo(SamplePlan.Method.SYSTEM);
+        assertThat(plan.fallbackReason()).isEqualTo("NO_INTEGER_PK");
     }
 }

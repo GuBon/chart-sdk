@@ -26,23 +26,36 @@ public class SamplingPlanner {
         this.queries = queries;
     }
 
-    /** base 테이블 표본 계획. 표본 미설정·rows 모드·조인 동반이면 NONE(빌더가 나머지 검증). */
+    /** 관계/조인 결과 표본 계획. 표본 미설정·rows 모드이면 NONE이다. */
     public SamplePlan plan(long datasourceId, Map<String, Object> cfg, boolean rawMode) {
         if (rawMode || !(cfg.get("sample") instanceof Map<?, ?> sample)) return SamplePlan.none();
-        if (cfg.get("joins") instanceof List<?> j && !j.isEmpty()) return SamplePlan.none(); // 표본+조인은 빌더가 400
         Table table = parseBaseTable(cfg.get("table"));
         if (table == null) return SamplePlan.none();
 
         String mode = "auto".equals(String.valueOf(sample.get("mode"))) ? "auto" : "manual";
-        boolean systemPinned = "system".equals(String.valueOf(sample.get("method")));
         Double rate = sample.get("rate") instanceof Number n ? n.doubleValue() : null;
+        // 레거시 rate 입력은 기존 계약대로 SYSTEM 비율 요청이다. 새 UI의 개수 기반 요청에는 rate가 없다.
+        boolean systemPinned = "system".equals(String.valueOf(sample.get("method"))) || rate != null;
         Integer size = sample.get("size") instanceof Number n ? n.intValue() : null;
         long seed = sample.get("seed") instanceof Number n ? n.longValue() : SamplingMetadata.DEFAULT_SEED;
 
         if (rate != null && rate >= SamplingMetadata.MAX_RATE) return SamplePlan.fullScan(0, seed);
 
+        // 조인 결과 자체가 모집단이다. 어떤 base 관계를 먼저 뽑지 않고 JOIN+WHERE 뒤에서 행 표본을 적용한다.
+        if (cfg.get("joins") instanceof List<?> joins && !joins.isEmpty()) {
+            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed, "JOIN_RESULT");
+        }
+
         try {
-            long pop = reltuples(datasourceId, table);
+            RelationStats stats = relationStats(datasourceId, table);
+            long pop = stats == null ? 0 : stats.populationEstimate();
+            String relkind = stats == null ? null : stats.relkind();
+
+            // 일반 VIEW와 파티션 부모에는 TABLESAMPLE을 붙일 수 없다. 관계 조회 결과를 행 단위로 뽑는다.
+            if (stats == null || "v".equals(relkind) || "p".equals(relkind)) {
+                String reason = stats == null ? "UNKNOWN_RELATION_KIND" : "v".equals(relkind) ? "VIEW_RESULT" : "PARTITIONED_RESULT";
+                return SamplePlan.resultRandom(pop, resolveSize(mode, size, rate, pop), seed, reason);
+            }
             if (systemPinned) {
                 double blockRate = rate != null ? rate : effectiveRate(DEFAULT_SIZE, pop);
                 return SamplePlan.system(pop, resolveSize(mode, size, rate, pop), blockRate, seed, "SYSTEM_PINNED");
@@ -69,8 +82,8 @@ public class SamplingPlanner {
             long[] keys = randomKeys(range[0], range[1], (int) probes, seed);
             return SamplePlan.indexRandom(keys, pk.column(), pop, k, seed);
         } catch (RuntimeException e) {
-            // 카탈로그 조사 실패(권한·통계 부재 등) → 안전하게 SYSTEM 폴백. 본 쿼리 실패 시 정식 에러로 표면화된다.
-            return systemFallback(size, rate, mode, 0, seed, "PLANNER_ERROR");
+            // 관계 종류를 모르면 VIEW에 불법 TABLESAMPLE을 붙이지 않도록 범용 결과 행 표본으로 폴백한다.
+            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed, "PLANNER_ERROR");
         }
     }
 
@@ -108,13 +121,13 @@ public class SamplingPlanner {
     }
 
     // ── 카탈로그 조사 쿼리 ─────────────────────────────────
-    private long reltuples(long datasourceId, Table t) {
+    private RelationStats relationStats(long datasourceId, Table t) {
         List<List<Object>> rows = queries.execute(datasourceId, """
-                SELECT GREATEST(c.reltuples, 0)::bigint
+                SELECT c.relkind::text, GREATEST(c.reltuples, 0)::bigint
                   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                  WHERE n.nspname = ? AND c.relname = ?
                 """, List.of(t.schema(), t.table())).rows();
-        return rows.isEmpty() ? 0 : toLong(rows.get(0).get(0));
+        return rows.isEmpty() ? null : new RelationStats(String.valueOf(rows.get(0).get(0)), toLong(rows.get(0).get(1)));
     }
 
     private Pk primaryKey(long datasourceId, Table t) {
@@ -163,4 +176,6 @@ public class SamplingPlanner {
     private record Table(String schema, String table) {}
 
     private record Pk(String column) {}
+
+    private record RelationStats(String relkind, long populationEstimate) {}
 }

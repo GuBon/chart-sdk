@@ -39,6 +39,7 @@ public final class BuilderSqlBuilder {
     private final String chartType;
     private final boolean rawMode;
     private final SamplePlan plan; // 표본 실행 계획(null = 무플랜 레거시/비표본)
+    private final boolean federated;
     private final TableRef baseRef;
     private final List<Map<String, Object>> joins;
     private final boolean hasJoins;
@@ -48,17 +49,22 @@ public final class BuilderSqlBuilder {
     // 인덱스 표본 CTE 식별자(예약 접두 __chartsdk_ — alias 가드와 일치).
     private static final String SAMPLE_CTE = "__chartsdk_sample";
     private static final String N_CTE = "__chartsdk_n";
+    private static final String POPULATION_CTE = "__chartsdk_population";
+    private static final String SEED_CTE = "__chartsdk_seed";
     private static final String BASE_ALIAS = "__chartsdk_base";
     private static final String KEYS_ALIAS = "__chartsdk_keys";
+    private static final String RESULT_X = "__chartsdk_x";
+    private static final String RESULT_Y_PREFIX = "__chartsdk_y_";
 
     private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
-                             String chartType, boolean rawMode, SamplePlan plan) {
+                             String chartType, boolean rawMode, SamplePlan plan, boolean federated) {
         this.catalog = catalog;
         this.renderer = renderer;
         this.cfg = cfg;
         this.chartType = chartType;
         this.rawMode = rawMode;
         this.plan = plan;
+        this.federated = federated;
         this.baseRef = parseTableRef(cfg.get("table"));
         this.joins = asMapList(cfg.get("joins"));
         this.hasJoins = !joins.isEmpty();
@@ -66,17 +72,24 @@ public final class BuilderSqlBuilder {
 
     /** 단일 소스 경로(PG 직접 실행). 무플랜 — 레거시 SYSTEM/비표본. */
     public static Sql generate(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, null).build();
+        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, null, false).build();
     }
 
-    /** 단일 소스 + 표본 실행 계획(INDEX_RANDOM/SYSTEM/FULL_SCAN). */
+    /** 단일 소스 + 표본 실행 계획(INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN). */
     public static Sql generate(SchemaCatalog catalog, Map<String, Object> cfg, String chartType, boolean rawMode, SamplePlan plan) {
-        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, plan).build();
+        return new BuilderSqlBuilder(catalog, RefRenderer.SINGLE, cfg, chartType, rawMode, plan, false).build();
     }
 
-    /** 일반 경로 — 카탈로그·렌더러 주입(다중 소스 페더레이션 등). 표본 미지원(단일 소스 전용). */
+    /** 일반 경로 — 카탈로그·렌더러 주입(다중 소스 페더레이션 등). */
     public static Sql generate(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode, null).build();
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode, null, renderer == RefRenderer.FEDERATED).build();
+    }
+
+    /** 다중 소스 포함 일반 경로 + 실행 표본 계획. */
+    public static Sql generate(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
+                               String chartType, boolean rawMode, SamplePlan plan) {
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode, plan,
+                renderer == RefRenderer.FEDERATED).build();
     }
 
     /** builderConfig 가 참조하는 datasourceId 집합(명시된 것만). 실행 라우팅(단일 vs 페더레이션) 판정에 쓴다. */
@@ -95,10 +108,6 @@ public final class BuilderSqlBuilder {
         if (baseRef == null) throw invalidReq("table is required.");
         assertTable(baseRef);
         registerTable(baseRef);
-
-        if (hasJoins && cfg.get("sample") != null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_BUILDER_CONFIG", "Sample cannot be used with joins.");
-        }
 
         String joins = buildJoins(); // 조인 검증 + 절 생성 (knownTables 확장 — select/where 해석 전에 선행)
         SamplingMetadata sampling = rawMode ? null : resolveSampling(); // rows 탭은 표본 집계와 별도 원본 미리보기
@@ -120,6 +129,10 @@ public final class BuilderSqlBuilder {
         // 차트 종류별 검증 (생성규칙 §9) — 표본 형태 결정·렌더러 교체보다 먼저(표본+원본값 등 오류 조기 차단).
         boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
         validateChartShape(x, yAxis, allNone);
+
+        if (sampling != null && sampling.approximate() && "RESULT_RANDOM".equals(sampling.method())) {
+            return buildResultRandom(x, yAxis, joins, sampling);
+        }
 
         // 표본 SQL 형태 — INDEX_RANDOM: CTE 래핑 + 별칭 렌더러 / SYSTEM: TABLESAMPLE / 그 외: 평이.
         boolean approximate = sampling != null && sampling.approximate();
@@ -198,13 +211,125 @@ public final class BuilderSqlBuilder {
     /** 표본 스펙(sampling())을 실행 계획으로 해석 — 무플랜은 레거시(SYSTEM/exact) 해석 그대로. */
     private SamplingMetadata resolveSampling() {
         SamplingMetadata spec = sampling();
-        if (spec == null || plan == null) return spec;
+        if (spec == null) return null;
+        if (plan == null && hasJoins) {
+            int size = spec.sizeTarget() == null ? SamplingPlanner.DEFAULT_SIZE : spec.sizeTarget();
+            return spec.asResultRandom(0, size);
+        }
+        if (plan == null) return spec;
         return switch (plan.method()) {
             case FULL_SCAN -> spec.asExact();
             case SYSTEM -> spec.asSystem(plan.populationEstimate(), plan.sampleSize());
             case INDEX_RANDOM -> spec.asIndexRandom(plan.populationEstimate(), plan.sampleSize());
+            case RESULT_RANDOM -> spec.asResultRandom(plan.populationEstimate(), plan.sampleSize());
             case NONE -> spec;
         };
+    }
+
+    /**
+     * VIEW 또는 JOIN+WHERE 결과를 모집단 CTE로 만든 뒤 고정 개수 행을 뽑고 집계한다.
+     * PostgreSQL은 seeded random top-k, DuckDB는 native reservoir를 사용하지만 API 의미는 RESULT_RANDOM으로 같다.
+     */
+    private Sql buildResultRandom(Ref x, List<Map<String, Object>> yAxis, String joins,
+                                  SamplingMetadata sampling) {
+        int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
+                : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
+        long seed = sampling.seed() == null ? SamplingMetadata.DEFAULT_SEED : sampling.seed();
+
+        List<String> projected = new ArrayList<>();
+        projected.add(render(x) + " AS " + SqlIdentifier.quote(RESULT_X));
+        List<Ref> yRefs = new ArrayList<>();
+        for (int i = 0; i < yAxis.size(); i++) {
+            Ref ref = resolveRef(str(yAxis.get(i).get("column")));
+            assertAggCompatible(str(yAxis.get(i).get("agg")), ref);
+            yRefs.add(ref);
+            projected.add(render(ref) + " AS " + SqlIdentifier.quote(RESULT_Y_PREFIX + i));
+        }
+
+        List<Object> params = new ArrayList<>();
+        StringBuilder cte = new StringBuilder("WITH ");
+        if (!federated) {
+            cte.append(SqlIdentifier.quote(SEED_CTE))
+                    .append(" AS MATERIALIZED (SELECT setseed(?) AS ")
+                    .append(SqlIdentifier.quote("seeded")).append("), ");
+            params.add(postgresSeed(seed));
+        }
+
+        String where = buildWhere(params);
+        String population = SqlIdentifier.quote(POPULATION_CTE);
+        String sample = SqlIdentifier.quote(SAMPLE_CTE);
+        String nCte = SqlIdentifier.quote(N_CTE);
+        cte.append(population).append(" AS (SELECT ")
+                .append(String.join(", ", projected))
+                .append(" FROM ").append(render(baseRef)).append(joins).append(where).append("), ")
+                .append(sample).append(" AS MATERIALIZED (");
+        if (federated) {
+            cte.append("SELECT * FROM ").append(population)
+                    .append(" USING SAMPLE reservoir(").append(sampleSize)
+                    .append(" ROWS) REPEATABLE (").append(seed).append(")");
+        } else {
+            cte.append("SELECT ").append(population).append(".* FROM ").append(population)
+                    .append(" CROSS JOIN ").append(SqlIdentifier.quote(SEED_CTE))
+                    .append(" ORDER BY random() LIMIT ").append(sampleSize);
+        }
+        cte.append("), ").append(nCte).append(" AS (SELECT COUNT(*) AS ")
+                .append(SqlIdentifier.quote("sampled")).append(" FROM ").append(sample).append(") ");
+
+        String sampledX = sampleColumn(RESULT_X);
+        String bucket = str(cfg.get("xAxisBucket"));
+        String xSql;
+        if (bucket == null) {
+            xSql = sampledX + " AS " + SqlIdentifier.quote(x.column());
+        } else {
+            if (!Set.of("day", "week", "month").contains(bucket)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Unsupported bucket: " + bucket);
+            }
+            if (!isDate(typeOf(x))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Bucket requires a date/timestamp column.");
+            }
+            xSql = "DATE_TRUNC('" + bucket + "', " + sampledX + ") AS " + SqlIdentifier.quote(x.column());
+        }
+
+        List<String> selects = new ArrayList<>();
+        selects.add(xSql);
+        for (int i = 0; i < yAxis.size(); i++) {
+            String agg = str(yAxis.get(i).get("agg"));
+            String alias = str(yAxis.get(i).get("alias"));
+            if (alias == null) alias = (agg == null ? "val" : agg) + "_" + yRefs.get(i).column();
+            if (alias.startsWith("__chartsdk_")) throw invalidReq("Alias cannot start with reserved prefix __chartsdk_.");
+            selects.add(aggSql(agg, sampleColumn(RESULT_Y_PREFIX + i)) + " AS " + SqlIdentifier.quote(alias));
+        }
+        selects.addAll(hiddenResultSampleColumns(yAxis));
+
+        String groupBy = " GROUP BY " + (bucket == null ? sampledX : "1");
+        String order = buildOrder(yAxis.size());
+        String sql = cte + "SELECT " + String.join(", ", selects) + " FROM " + sample
+                + groupBy + order + " LIMIT " + QueryExecutor.MAX_ROWS;
+        return new Sql(sql, params, sampling);
+    }
+
+    private List<String> hiddenResultSampleColumns(List<Map<String, Object>> yAxis) {
+        List<String> cols = new ArrayList<>();
+        cols.add("COUNT(*) AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_GROUP_COUNT));
+        cols.add("(SELECT " + SqlIdentifier.quote("sampled") + " FROM " + SqlIdentifier.quote(N_CTE)
+                + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_TOTAL_COUNT));
+        for (int i = 0; i < yAxis.size(); i++) {
+            String agg = str(yAxis.get(i).get("agg"));
+            if (!Set.of("avg", "stddev", "variance").contains(agg)) continue;
+            String q = sampleColumn(RESULT_Y_PREFIX + i);
+            cols.add("COUNT(" + q + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX + i));
+            cols.add("AVG(" + q + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_MEAN_PREFIX + i));
+            cols.add("STDDEV_SAMP(" + q + ") AS " + SqlIdentifier.quote(SamplingMetadata.HIDDEN_SD_PREFIX + i));
+        }
+        return cols;
+    }
+
+    private static String sampleColumn(String column) {
+        return SqlIdentifier.quote(SAMPLE_CTE) + "." + SqlIdentifier.quote(column);
+    }
+
+    private static double postgresSeed(long seed) {
+        return Math.max(-1.0, Math.min(1.0, (seed / (double) Integer.MAX_VALUE) * 2.0 - 1.0));
     }
 
     /** 오차범위 계산용 숨은 열 — 그룹별 COUNT + 전체 표본수(+INDEX_RANDOM 은 시리즈별 유효 n·필요 시 mean/sd). */
@@ -412,6 +537,10 @@ public final class BuilderSqlBuilder {
         if (!catalog.hasTable(table.datasourceId(), table.schema(), table.table())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown table: " + display(table));
         }
+        if (!catalog.isQueryable(table.datasourceId(), table.schema(), table.table())) {
+            throw new ApiException(HttpStatus.CONFLICT, "MATERIALIZED_VIEW_NOT_POPULATED",
+                    "Materialized view must be refreshed before it can be queried: " + display(table));
+        }
     }
 
     /**
@@ -553,7 +682,10 @@ public final class BuilderSqlBuilder {
     }
 
     private String aggSql(String agg, Ref col) {
-        String q = render(col);
+        return aggSql(agg, render(col));
+    }
+
+    private String aggSql(String agg, String q) {
         String resolvedAgg = agg == null ? "sum" : agg;
         return switch (resolvedAgg) {
             case "avg" -> "AVG(" + q + ")";

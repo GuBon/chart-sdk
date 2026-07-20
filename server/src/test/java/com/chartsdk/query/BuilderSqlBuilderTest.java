@@ -260,7 +260,7 @@ class BuilderSqlBuilderTest {
     }
 
     @Test
-    void joinsRequireQualifiedReferencesAndRejectSample() {
+    void samplesJoinAndFilterResultBeforeAggregation() {
         Map<String, Object> cfg = Map.of(
                 "table", "sales",
                 "joins", List.of(Map.of(
@@ -269,13 +269,26 @@ class BuilderSqlBuilderTest {
                         "on", Map.of("leftColumn", "sales.customer_id", "rightColumn", "customers.id")
                 )),
                 "xAxis", "customers.region",
-                "yAxis", List.of(Map.of("column", "sales.amount", "agg", "sum")),
-                "sample", Map.of("rate", 10)
+                "yAxis", List.of(Map.of("column", "sales.amount", "agg", "avg", "alias", "average")),
+                "where", List.of(Map.of("column", "sales.amount", "op", "gte", "value", 100)),
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77)
         );
 
-        assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, cfg, "bar", false))
-                .isInstanceOf(ApiException.class)
-                .hasMessageContaining("Sample cannot be used with joins");
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, "bar", false);
+
+        assertThat(sql.text())
+                .startsWith("WITH \"__chartsdk_seed\" AS MATERIALIZED (SELECT setseed(?)")
+                .contains("\"__chartsdk_population\" AS (SELECT")
+                .contains("FROM \"public\".\"sales\" LEFT JOIN \"public\".\"customers\"")
+                .contains("WHERE \"public\".\"sales\".\"amount\" >= ?)")
+                .contains("ORDER BY random() LIMIT 10000")
+                .contains("AVG(\"__chartsdk_sample\".\"__chartsdk_y_0\") AS \"average\"")
+                .contains("GROUP BY \"__chartsdk_sample\".\"__chartsdk_x\"");
+        assertThat(sql.params()).hasSize(2);
+        assertThat(sql.params().get(0)).isInstanceOf(Double.class);
+        assertThat(sql.params().get(1)).isEqualTo(100);
+        assertThat(sql.sampling().method()).isEqualTo("RESULT_RANDOM");
+        assertThat(sql.sampling().confidenceLevel()).isEqualTo(0.95);
     }
 
     @Test
