@@ -69,28 +69,49 @@ public class QueryExecutor {
      */
     public SchemaCatalog catalog(long datasourceId) {
         Map<SchemaCatalog.Key, Map<String, String>> tables = new LinkedHashMap<>();
+        Map<SchemaCatalog.Key, RelationType> relationTypes = new LinkedHashMap<>();
+        Map<SchemaCatalog.Key, Long> estimates = new LinkedHashMap<>();
+        Map<SchemaCatalog.Key, Boolean> populated = new LinkedHashMap<>();
         try (Connection conn = pools.connection(datasourceId);
              PreparedStatement ps = conn.prepareStatement("""
-                     SELECT table_schema, table_name, column_name, data_type
-                       FROM information_schema.columns
-                      WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-                        AND table_schema NOT LIKE 'pg_temp%'
-                        AND table_schema NOT LIKE 'pg_toast_temp%'
-                        AND table_name NOT LIKE 'mc\\_%' ESCAPE '\\'
-                      ORDER BY table_schema, table_name, ordinal_position
+                     SELECT n.nspname AS table_schema,
+                            c.relname AS table_name,
+                            c.relkind::text AS relkind,
+                            CASE WHEN c.relkind IN ('r', 'p', 'm')
+                                 THEN GREATEST(c.reltuples, 0)::bigint END AS estimated_rows,
+                            c.relispopulated,
+                            a.attname AS column_name,
+                            pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type
+                       FROM pg_catalog.pg_class c
+                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+                      WHERE c.relkind IN ('r', 'p', 'v', 'm')
+                        AND a.attnum > 0
+                        AND NOT a.attisdropped
+                        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                        AND n.nspname NOT LIKE 'pg_temp%'
+                        AND n.nspname NOT LIKE 'pg_toast_temp%'
+                        AND c.relname NOT LIKE 'mc\\_%' ESCAPE '\\'
+                        AND (has_table_privilege(c.oid, 'SELECT')
+                             OR has_column_privilege(c.oid, a.attname, 'SELECT'))
+                      ORDER BY n.nspname, c.relname, a.attnum
                      """);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 SchemaCatalog.Key key = new SchemaCatalog.Key(rs.getString("table_schema"), rs.getString("table_name"));
                 tables.computeIfAbsent(key, k -> new LinkedHashMap<>())
                         .put(rs.getString("column_name"), rs.getString("data_type"));
+                relationTypes.putIfAbsent(key, RelationType.fromRelkind(rs.getString("relkind")));
+                Object estimatedRows = rs.getObject("estimated_rows");
+                if (estimatedRows instanceof Number n) estimates.putIfAbsent(key, n.longValue());
+                populated.putIfAbsent(key, rs.getBoolean("relispopulated"));
             }
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
         }
-        return new SchemaCatalog(tables);
+        return new SchemaCatalog(tables, relationTypes, estimates, populated);
     }
 
     /**
@@ -98,30 +119,6 @@ public class QueryExecutor {
      * 정확한 COUNT(*)를 실행하지 않아 스키마 탐색·표본 계획·UI 안내가 대용량 테이블을 다시 스캔하지 않는다.
      */
     public Map<SchemaCatalog.Key, Long> estimatedRowCounts(long datasourceId) {
-        Map<SchemaCatalog.Key, Long> estimates = new LinkedHashMap<>();
-        try (Connection conn = pools.connection(datasourceId);
-             PreparedStatement ps = conn.prepareStatement("""
-                     SELECT n.nspname AS table_schema,
-                            c.relname AS table_name,
-                            GREATEST(c.reltuples, 0)::bigint AS estimated_rows
-                       FROM pg_catalog.pg_class c
-                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                      WHERE c.relkind IN ('r', 'p', 'm')
-                        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-                        AND n.nspname NOT LIKE 'pg_temp%'
-                        AND n.nspname NOT LIKE 'pg_toast_temp%'
-                        AND c.relname NOT LIKE 'mc\\_%' ESCAPE '\\'
-                     """);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                estimates.put(new SchemaCatalog.Key(rs.getString("table_schema"), rs.getString("table_name")),
-                        rs.getLong("estimated_rows"));
-            }
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
-        }
-        return estimates;
+        return catalog(datasourceId).estimatedRowCounts();
     }
 }

@@ -20,4 +20,10 @@ public record FederatedCatalog(Map<Long, SchemaCatalog> bySource) implements Cat
         SchemaCatalog c = bySource.get(datasourceId);
         return c == null ? null : c.columnType(schema, table, column);
     }
+
+    @Override
+    public boolean isQueryable(Long datasourceId, String schema, String table) {
+        SchemaCatalog c = bySource.get(datasourceId);
+        return c != null && c.isQueryable(schema, table);
+    }
 }

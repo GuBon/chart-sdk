@@ -53,4 +53,23 @@ class SchemaCatalogTest {
         assertThat(new SchemaCatalog.Key("  ", "t").schema()).isEqualTo("public");
         assertThat(new SchemaCatalog.Key("tandanji", "t").schema()).isEqualTo("tandanji");
     }
+
+    @Test
+    void preservesRelationTypeEstimateAndMaterializedViewState() {
+        SchemaCatalog.Key view = new SchemaCatalog.Key("analytics", "active_users");
+        SchemaCatalog.Key materialized = new SchemaCatalog.Key("analytics", "daily_sales");
+        SchemaCatalog catalog = new SchemaCatalog(
+                Map.of(view, Map.of("id", "bigint"), materialized, Map.of("total", "numeric")),
+                Map.of(view, RelationType.VIEW, materialized, RelationType.MATERIALIZED_VIEW),
+                Map.of(materialized, 2_000_000L),
+                Map.of(materialized, false));
+
+        assertThat(catalog.relationType("analytics", "active_users")).isEqualTo(RelationType.VIEW);
+        assertThat(catalog.estimatedRowCount("analytics", "active_users")).isNull();
+        assertThat(catalog.relationType("analytics", "daily_sales")).isEqualTo(RelationType.MATERIALIZED_VIEW);
+        assertThat(catalog.estimatedRowCount("analytics", "daily_sales")).isEqualTo(2_000_000L);
+        assertThat(catalog.isPopulated("analytics", "daily_sales")).isFalse();
+        assertThat(catalog.isQueryable("analytics", "active_users")).isTrue();
+        assertThat(catalog.isQueryable("analytics", "daily_sales")).isFalse();
+    }
 }

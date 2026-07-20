@@ -14,7 +14,12 @@ import java.util.Set;
  * 간주한다. 비한정 조회 헬퍼는 같은 이름이 여러 스키마에 있어도 {@code public} 을 우선 매칭한다 —
  * 스키마 없는 기존 차트(builder_config.table = "sales")의 무손실 하위호환을 위한 폴백이다.
  */
-public record SchemaCatalog(Map<Key, Map<String, String>> byTable) implements Catalog {
+public record SchemaCatalog(
+        Map<Key, Map<String, String>> byTable,
+        Map<Key, RelationType> relationTypes,
+        Map<Key, Long> estimatedRowCounts,
+        Map<Key, Boolean> populated
+) implements Catalog {
 
     public static final String DEFAULT_SCHEMA = "public";
 
@@ -23,6 +28,11 @@ public record SchemaCatalog(Map<Key, Map<String, String>> byTable) implements Ca
         public Key {
             schema = (schema == null || schema.isBlank()) ? DEFAULT_SCHEMA : schema;
         }
+    }
+
+    /** 기존 테스트·호출부 호환: 별도 메타데이터가 없으면 모두 일반 TABLE로 본다. */
+    public SchemaCatalog(Map<Key, Map<String, String>> byTable) {
+        this(byTable, defaultTypes(byTable), Map.of(), Map.of());
     }
 
     /** 스키마 없는 테이블 맵을 public 카탈로그로 만든다(스키마 미지정 = public, §1.2 하위호환). */
@@ -41,6 +51,11 @@ public record SchemaCatalog(Map<Key, Map<String, String>> byTable) implements Ca
     @Override
     public String columnType(Long datasourceId, String schema, String table, String column) {
         return columnType(schema, table, column);
+    }
+
+    @Override
+    public boolean isQueryable(Long datasourceId, String schema, String table) {
+        return isQueryable(schema, table);
     }
 
     // ── 스키마 한정 조회 ──────────────────────────────────────
@@ -70,7 +85,29 @@ public record SchemaCatalog(Map<Key, Map<String, String>> byTable) implements Ca
         return hasColumn(DEFAULT_SCHEMA, table, column);
     }
 
+    public RelationType relationType(String schema, String table) {
+        return relationTypes.getOrDefault(new Key(schema, table), RelationType.TABLE);
+    }
+
+    public Long estimatedRowCount(String schema, String table) {
+        return estimatedRowCounts.get(new Key(schema, table));
+    }
+
+    public boolean isPopulated(String schema, String table) {
+        return populated.getOrDefault(new Key(schema, table), true);
+    }
+
+    public boolean isQueryable(String schema, String table) {
+        return relationType(schema, table) != RelationType.MATERIALIZED_VIEW || isPopulated(schema, table);
+    }
+
     public Set<Key> tableKeys() {
         return byTable.keySet();
+    }
+
+    private static Map<Key, RelationType> defaultTypes(Map<Key, Map<String, String>> byTable) {
+        Map<Key, RelationType> result = new LinkedHashMap<>();
+        byTable.keySet().forEach(key -> result.put(key, RelationType.TABLE));
+        return result;
     }
 }

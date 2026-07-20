@@ -10,6 +10,11 @@ public interface Catalog {
 
     String columnType(Long datasourceId, String schema, String table, String column);
 
+    /** 관계가 현재 조회 가능한 상태인지 확인한다. 기본 구현은 레거시/테스트 카탈로그 호환용이다. */
+    default boolean isQueryable(Long datasourceId, String schema, String table) {
+        return true;
+    }
+
     default boolean hasColumn(Long datasourceId, String schema, String table, String column) {
         return columnType(datasourceId, schema, table, column) != null;
     }

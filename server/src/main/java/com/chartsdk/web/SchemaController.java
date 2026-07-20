@@ -2,6 +2,7 @@ package com.chartsdk.web;
 
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.query.RelationType;
 import com.chartsdk.query.SchemaCatalog;
 import com.chartsdk.query.SqlIdentifier;
 import org.springframework.http.HttpStatus;
@@ -28,7 +29,6 @@ public class SchemaController {
     @GetMapping("/tables")
     public Map<String, Object> tables(@RequestParam long datasourceId) {
         SchemaCatalog catalog = queries.catalog(datasourceId);
-        Map<SchemaCatalog.Key, Long> estimates = queries.estimatedRowCounts(datasourceId);
         List<Map<String, Object>> tables = new ArrayList<>();
         catalog.byTable().forEach((key, cols) -> {
             List<Map<String, Object>> columns = new ArrayList<>();
@@ -36,7 +36,13 @@ public class SchemaController {
             Map<String, Object> table = new LinkedHashMap<>();
             table.put("schema", key.schema());
             table.put("name", key.table());
-            table.put("estimatedRowCount", estimates.getOrDefault(key, 0L));
+            RelationType relationType = catalog.relationType(key.schema(), key.table());
+            table.put("relationType", relationType.name());
+            Long estimatedRowCount = catalog.estimatedRowCount(key.schema(), key.table());
+            if (estimatedRowCount != null) table.put("estimatedRowCount", estimatedRowCount);
+            if (relationType == RelationType.MATERIALIZED_VIEW) {
+                table.put("populated", catalog.isPopulated(key.schema(), key.table()));
+            }
             table.put("columns", columns);
             tables.add(table);
         });
@@ -51,6 +57,10 @@ public class SchemaController {
         String resolvedSchema = (schema == null || schema.isBlank()) ? SchemaCatalog.DEFAULT_SCHEMA : schema;
         if (!catalog.hasTable(resolvedSchema, tableName)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_IDENTIFIER", "Unknown table: " + tableName);
+        }
+        if (!catalog.isQueryable(resolvedSchema, tableName)) {
+            throw new ApiException(HttpStatus.CONFLICT, "MATERIALIZED_VIEW_NOT_POPULATED",
+                    "Materialized view must be refreshed before it can be queried: " + tableName);
         }
         QueryRows rows = queries.execute(datasourceId,
                 "SELECT * FROM " + SqlIdentifier.qualify(resolvedSchema, tableName) + " LIMIT " + QueryExecutor.MAX_ROWS);
