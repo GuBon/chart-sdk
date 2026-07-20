@@ -15,10 +15,12 @@ declare global {
   }
 }
 
-// API 베이스 우선순위: 명시 설정 > sdk.js 스크립트 출처 > 현재 페이지 출처
+// API 베이스 우선순위: 전역 명시 설정 > script[data-api-base] > sdk.js 출처 > 현재 페이지 출처.
+// SDK 자산과 API 서버가 서로 다른 출처여도 복사한 스니펫만으로 동작하도록 script 속성을 정식 계약으로 둔다.
 function resolveApiBase(): string {
   if (window.CHARTSDK_API_BASE) return window.CHARTSDK_API_BASE;
   const script = document.currentScript as HTMLScriptElement | null;
+  if (script?.dataset.apiBase) return script.dataset.apiBase.replace(/\/+$/, '');
   if (script?.src) return new URL(script.src).origin;
   return window.location.origin;
 }

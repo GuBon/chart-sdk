@@ -57,6 +57,24 @@ describe('scan', () => {
     expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://custom.test', '7', 'T');
   });
 
+  it('sdk script의 data-api-base를 API 출처로 사용한다', async () => {
+    const script = document.createElement('script');
+    script.src = 'http://assets.test/sdk.js';
+    script.dataset.apiBase = 'http://api.test/';
+    const original = Object.getOwnPropertyDescriptor(document, 'currentScript');
+    Object.defineProperty(document, 'currentScript', { configurable: true, value: script });
+    try {
+      const mod = await import('./index');
+      document.body.innerHTML = '<div data-chart-id="7" data-auth-token="T"></div>';
+      mod.scan();
+
+      expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://api.test', '7', 'T');
+    } finally {
+      if (original) Object.defineProperty(document, 'currentScript', original);
+      else delete (document as unknown as { currentScript?: HTMLScriptElement }).currentScript;
+    }
+  });
+
   it('로드 시 기존 [data-chart-id] 를 자동 스캔한다', async () => {
     document.body.innerHTML = '<div data-chart-id="99" data-auth-token="T"></div>';
     await import('./index'); // 로드 부수효과로 scan
@@ -134,7 +152,7 @@ describe('render', () => {
       {},
       'c',
       {
-        version: 5, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
+        version: 6, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
         valueMode: 'sample',
       },
     );

@@ -79,6 +79,32 @@ export const handlers = [
     }
     return HttpResponse.json({ previews, errors });
   }),
+  // 외부 페이지에 붙여 넣은 실제 sdk.js 선언형 스캔까지 E2E로 검증하기 위한 임베드 API 미러.
+  // 동적 /charts/:id 보다 먼저 선언해야 "data"가 차트 id로 오인되지 않는다.
+  http.get('/api/v1/charts/data', ({ request }) => {
+    const authorization = request.headers.get('Authorization');
+    const tokenValue = authorization?.match(/^Bearer\s+(.+)$/)?.[1];
+    const token = tokenList.find((item) => item.token === tokenValue && item.isActive && new Date(item.expiresAt).getTime() > Date.now());
+    if (!token) return err(401, 'TOKEN_INVALID', '유효하지 않은 임베드 토큰입니다.');
+
+    const chartId = Number(new URL(request.url).searchParams.get('chartId'));
+    const saved = savedCharts[chartId] as
+      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+      | undefined;
+    const summary = chartList.find((chart) => chart.id === chartId);
+    const chart = saved ?? (summary ? chartDetail(summary) : null);
+    if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+
+    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+    return HttpResponse.json({
+      chartId,
+      rowCount: result.rowCount,
+      truncated: result.truncated,
+      ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
+      computedAt: new Date().toISOString(),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}),
+    });
+  }),
   http.get('/api/v1/charts/:id/preview', ({ params }) => {
     const id = Number(params.id);
     const saved = savedCharts[id] as

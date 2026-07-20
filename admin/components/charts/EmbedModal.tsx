@@ -17,8 +17,18 @@ function sdkSrc() {
   return typeof window !== 'undefined' ? `${window.location.origin}/sdk.js` : '/sdk.js';
 }
 
+// SDK 파일을 Admin/CDN에서 내려도 데이터는 Spring API에서 읽어야 한다.
+// E2E의 MSW 모드는 현재 출처가 API 역할까지 하므로 실제 API 환경변수를 의도적으로 무시한다.
+function apiBase() {
+  const configured = process.env.NEXT_PUBLIC_E2E_MSW === 'true'
+    ? ''
+    : process.env.NEXT_PUBLIC_API_BASE;
+  if (configured) return configured.replace(/\/+$/, '');
+  return typeof window !== 'undefined' ? window.location.origin : '';
+}
+
 function snippet(chartId: number, token: string) {
-  return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${sdkSrc()}"></script>`;
+  return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${sdkSrc()}"\n        data-api-base="${apiBase()}"></script>`;
 }
 
 export function EmbedModal({ chart, onClose }: { chart: ChartSummary; onClose: () => void }) {
