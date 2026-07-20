@@ -72,6 +72,21 @@ describe('renderChart', () => {
     expect(cap?.getAttribute('data-chart-confidence')).toBe('95% 신뢰수준 · 오차 약 ±1.2%');
   });
 
+  it('RESULT_RANDOM은 조인·뷰 조회 결과에서 뽑은 표본임을 구분해 표시한다', () => {
+    const el = document.createElement('div');
+    renderChart(el, {}, undefined, {
+      version: 6, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'RESULT_RANDOM', seed: 321,
+      valueMode: 'sample', sampleSize: 12_000, sampledRowCount: 11_998, confidenceLevel: 0.95,
+      warnings: ['RESULT_RANDOM_SAMPLE'],
+      estimates: [{ series: 'avg_amount', aggregate: 'avg', treatment: 'SAMPLE_ESTIMATE', relativeErrorPct: 1.7 }],
+    });
+
+    expect(el.querySelector('[data-chart-caption]')?.textContent)
+      .toContain('결과 무작위 행 표본 11,998행 · 표본 결과 · 95% 신뢰수준 · 오차 약 ±1.7%');
+    expect(el.querySelector('[data-chart-sampling-warning]')?.textContent)
+      .toContain('조회 결과에서 무작위로 선택된 행');
+  });
+
   it('표본 SUM·COUNT는 전체 추정 배지 없이 표본값 주의문구를 표시한다', () => {
     const el = document.createElement('div');
     renderChart(el, {}, undefined, {

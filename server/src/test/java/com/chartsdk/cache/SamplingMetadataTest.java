@@ -19,7 +19,7 @@ class SamplingMetadataTest {
                                 Map.of("column", "customer_id", "agg", "count_distinct")
                         )));
 
-        assertThat(sampling.version()).isEqualTo(5);
+        assertThat(sampling.version()).isEqualTo(6);
         assertThat(sampling.approximate()).isTrue();
         assertThat(sampling.method()).isEqualTo("SYSTEM");
         assertThat(sampling.mode()).isEqualTo("auto");
@@ -40,7 +40,7 @@ class SamplingMetadataTest {
         SamplingMetadata.system(25).putInto(response);
 
         assertThat(response.get("sampling")).isEqualTo(Map.of(
-                "version", 5,
+                "version", 6,
                 "mode", "manual",
                 "requestedMethod", "system",
                 "rate", 25.0,
@@ -107,5 +107,20 @@ class SamplingMetadataTest {
         assertThat(restored).isEqualTo(executed);
         assertThat(restored.estimates().get(0).intervals()).containsExactly(
                 new SamplingMetadata.ConfidenceInterval("A", 100, 10.0, 8.78, 11.62, 16.2));
+    }
+
+    @Test
+    void resultRandomIsAUniformSampleWithConfidenceSupport() {
+        SamplingMetadata definition = SamplingMetadata.fromBuilderConfig(Map.of(
+                "sample", Map.of("mode", "manual", "size", 12_000, "seed", 7),
+                "yAxis", List.of(Map.of("column", "amount", "agg", "avg"))));
+
+        SamplingMetadata executed = definition.asResultRandom(0, 12_000);
+
+        assertThat(executed.method()).isEqualTo("RESULT_RANDOM");
+        assertThat(executed.sampleSize()).isEqualTo(12_000);
+        assertThat(executed.populationEstimate()).isNull();
+        assertThat(executed.confidenceLevel()).isEqualTo(0.95);
+        assertThat(executed.warnings()).contains("RESULT_RANDOM_SAMPLE");
     }
 }

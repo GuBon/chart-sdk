@@ -93,6 +93,33 @@ class SamplingQueryRowsTest {
         assertThat(result.sampling().warnings()).contains("STDDEV_CI_NORMALITY_ASSUMED");
     }
 
+    @Test
+    void resultRandomUsesTheSameUniformSampleConfidencePipeline() {
+        QueryRows source = new QueryRows(
+                List.of(
+                        column("category", "text"),
+                        column("variance_amount", "numeric"),
+                        column(SamplingMetadata.HIDDEN_GROUP_COUNT, "bigint"),
+                        column(SamplingMetadata.HIDDEN_TOTAL_COUNT, "bigint"),
+                        column(SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX + "0", "bigint"),
+                        column(SamplingMetadata.HIDDEN_MEAN_PREFIX + "0", "numeric"),
+                        column(SamplingMetadata.HIDDEN_SD_PREFIX + "0", "numeric")
+                ),
+                List.of(List.of("A", 100.0, 120L, 120L, 100L, 50.0, 10.0)),
+                1, false, 4);
+        SamplingMetadata sampling = SamplingMetadata.fromBuilderConfig(Map.of(
+                        "sample", Map.of("mode", "manual", "size", 10_000),
+                        "yAxis", List.of(Map.of("column", "amount", "agg", "variance"))))
+                .asResultRandom(0, 10_000);
+
+        SamplingQueryRows.Result result = SamplingQueryRows.extract(source, sampling);
+
+        assertThat(result.sampling().method()).isEqualTo("RESULT_RANDOM");
+        assertThat(result.sampling().estimates().get(0).intervals()).hasSize(1);
+        assertThat(result.sampling().warnings())
+                .contains("RESULT_RANDOM_SAMPLE", "STDDEV_CI_NORMALITY_ASSUMED");
+    }
+
     private static Map<String, Object> column(String name, String type) {
         return Map.of("name", name, "type", type);
     }

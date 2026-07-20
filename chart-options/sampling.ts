@@ -1,5 +1,5 @@
-/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v5 — SUM·COUNT는 표본 관측값). */
-export const SAMPLING_CONTRACT_VERSION = 5;
+/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v6 — 결과집합 행 표본 포함). */
+export const SAMPLING_CONTRACT_VERSION = 6;
 export const MIN_SAMPLE_RATE = 0.1;
 export const MAX_SAMPLE_RATE = 100;
 export const DEFAULT_SAMPLE_SEED = 48_291;
@@ -12,11 +12,12 @@ export const FULL_SCAN_ROWS = 100_000;
 
 export type SamplingMode = 'auto' | 'manual';
 export type SamplingRequestedMethod = 'auto' | 'system';
-export type SamplingMethod = 'INDEX_RANDOM' | 'SYSTEM' | 'FULL_SCAN';
+export type SamplingMethod = 'INDEX_RANDOM' | 'RESULT_RANDOM' | 'SYSTEM' | 'FULL_SCAN';
 export type SamplingValueMode = 'sample' | 'population_estimate' | 'exact'; // population_estimate는 v4 이하 읽기 호환
 export type SamplingWarningCode =
   | 'BLOCK_SAMPLE_CLUSTERING'
   | 'INDEX_RANDOM_SAMPLE'
+  | 'RESULT_RANDOM_SAMPLE'
   | 'INDEX_SAMPLE_ESTIMATED_TOTAL'
   | 'SMALL_SAMPLE_GROUPS'
   | 'STDDEV_CI_NORMALITY_ASSUMED'
@@ -120,8 +121,10 @@ export function samplingWarningMessage(code: SamplingWarningCode): string {
       return '블록 표본 결과입니다. 데이터의 물리적 정렬·군집에 따라 전체 분포와 다를 수 있습니다.';
     case 'INDEX_RANDOM_SAMPLE':
       return '전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.';
+    case 'RESULT_RANDOM_SAMPLE':
+      return '조회 결과에서 무작위로 선택된 행의 표본 결과입니다.';
     case 'INDEX_SAMPLE_ESTIMATED_TOTAL':
-      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v5로 다시 계산하는 것을 권장합니다.';
+      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v6로 다시 계산하는 것을 권장합니다.';
     case 'SMALL_SAMPLE_GROUPS':
       return '표본이 30개 미만인 항목은 오차범위를 산출하지 않았습니다. 표본 크기를 늘리면 정확도가 올라갑니다.';
     case 'STDDEV_CI_NORMALITY_ASSUMED':
@@ -140,6 +143,8 @@ export function samplingMethodLabel(method: SamplingMethod): string {
   switch (method) {
     case 'INDEX_RANDOM':
       return '무작위 행 표본';
+    case 'RESULT_RANDOM':
+      return '결과 무작위 행 표본';
     case 'SYSTEM':
       return '블록 표본';
     case 'FULL_SCAN':
@@ -166,7 +171,7 @@ export function normalizeSampling(source: SamplingSource): SamplingMetadata | un
 
   const exact = approximate === false;
   const method: SamplingMethod = (nested?.method as SamplingMethod) ?? (exact ? 'FULL_SCAN' : 'SYSTEM');
-  if (exact ? method !== 'FULL_SCAN' : method !== 'SYSTEM' && method !== 'INDEX_RANDOM') return undefined;
+  if (exact ? method !== 'FULL_SCAN' : method !== 'SYSTEM' && method !== 'INDEX_RANDOM' && method !== 'RESULT_RANDOM') return undefined;
 
   // 정식 nested 계약이 있으면 그 안의 스펙만 신뢰한다. top-level sampleRate는 nested 자체가 없는 레거시 응답에만 사용한다.
   const rateSource = nested ? nested.rate : source.sampleRate;

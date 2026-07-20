@@ -24,7 +24,7 @@ public final class SamplingQueryRows {
         int totalIndex = lastIndexOf(columns, SamplingMetadata.HIDDEN_TOTAL_COUNT);
         if (groupIndex < 0 || totalIndex < 0) return new Result(source, sampling);
 
-        boolean indexRandom = "INDEX_RANDOM".equals(sampling.method());
+        boolean uniformRandom = "INDEX_RANDOM".equals(sampling.method()) || "RESULT_RANDOM".equals(sampling.method());
         Map<Integer, Integer> seriesCountCols = prefixIndices(columns, SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX);
         Map<Integer, Integer> meanCols = prefixIndices(columns, SamplingMetadata.HIDDEN_MEAN_PREFIX); // series → col
         Map<Integer, Integer> sdCols = prefixIndices(columns, SamplingMetadata.HIDDEN_SD_PREFIX);
@@ -50,7 +50,7 @@ public final class SamplingQueryRows {
             for (int i = 0; i < raw.size(); i++) if (!hidden.contains(i)) visible.add(raw.get(i));
             visibleRows.add(visible);
             groups.add(new GroupSampleCount(visible.isEmpty() ? null : visible.get(0), n));
-            if (indexRandom) {
+            if (uniformRandom) {
                 List<SamplingConfidence.SeriesPoint> series = new ArrayList<>();
                 for (int s = 0; s < seriesCount; s++) {
                     double value = toDouble(visible.get(1 + s));
@@ -67,7 +67,7 @@ public final class SamplingQueryRows {
 
         List<Estimate> estimates = sampling.estimates();
         List<String> extraWarnings = new ArrayList<>();
-        if (indexRandom && !estimates.isEmpty()) {
+        if (uniformRandom && !estimates.isEmpty()) {
             SamplingConfidence.Result confidence = SamplingConfidence.compute(estimates, stats);
             estimates = confidence.estimates();
             if (confidence.smallSampleGroups()) extraWarnings.add("SMALL_SAMPLE_GROUPS");

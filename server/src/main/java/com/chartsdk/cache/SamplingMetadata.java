@@ -9,12 +9,12 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v5).
+ * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v6).
  *
  * <p><b>스펙</b>(캐시 판정 대상 — builderConfig 만으로 결정): {@code mode·requestedMethod·rate·sizeTarget·seed}.
  * <b>실행</b>(표시용 — 런타임 해석 결과): {@code approximate·method·valueMode·populationEstimate·sampleSize·
  * sampledRowCount·confidenceLevel·groups·estimates·warnings}. {@link #matchesDefinition}은 스펙만 비교해
- * auto 해석이 INDEX_RANDOM/SYSTEM/FULL_SCAN 로 갈려도 캐시가 영구 미스되지 않게 한다.
+ * auto 해석이 INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN으로 갈려도 캐시가 영구 미스되지 않게 한다.
  */
 public record SamplingMetadata(
         int version,
@@ -36,7 +36,7 @@ public record SamplingMetadata(
         List<Estimate> estimates,
         List<String> warnings
 ) {
-    public static final int CONTRACT_VERSION = 5;
+    public static final int CONTRACT_VERSION = 6;
     public static final double MIN_RATE = 0.1;
     public static final double MAX_RATE = 100.0;
     public static final long DEFAULT_SEED = 48_291L;
@@ -134,6 +134,14 @@ public record SamplingMetadata(
                 List.of(), estimates, executionWarnings("INDEX_RANDOM", estimates));
     }
 
+    /** VIEW 또는 JOIN+WHERE 결과에서 뽑은 균일 행 표본. */
+    public SamplingMetadata asResultRandom(long populationEstimate, int sampleSize) {
+        return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
+                true, "RESULT_RANDOM", "sample", populationEstimate > 0 ? populationEstimate : null,
+                sampleSize, null, CONFIDENCE_LEVEL,
+                List.of(), estimates, executionWarnings("RESULT_RANDOM", estimates));
+    }
+
     /** 실행 통계(실측 표본수·그룹·오차범위·추가 경고) 주입. 정확 실행은 무시. */
     public SamplingMetadata withExecution(long sampledRowCount, List<GroupSampleCount> groupCounts,
                                           List<Estimate> withMoe, List<String> extraWarnings) {
@@ -172,7 +180,7 @@ public record SamplingMetadata(
         int version = map.get("version") instanceof Number n ? n.intValue() : 1;
         boolean approximate = !Boolean.FALSE.equals(map.get("approximate"));
         String method = string(map.get("method"), approximate ? "SYSTEM" : "FULL_SCAN");
-        if (approximate == "FULL_SCAN".equals(method)) return null; // 정합성: 정확=FULL_SCAN, 근사=SYSTEM/INDEX_RANDOM
+        if (approximate == "FULL_SCAN".equals(method)) return null; // 정합성: 정확=FULL_SCAN, 근사=SYSTEM/INDEX_RANDOM/RESULT_RANDOM
         String requestedMethod = string(map.get("requestedMethod"), "SYSTEM".equals(method) ? "system" : "auto");
         String mode = normalizedMode(map.get("mode"));
         Double rate = map.get("rate") instanceof Number n ? n.doubleValue() : null;
@@ -307,6 +315,7 @@ public record SamplingMetadata(
         return switch (method) {
             case "SYSTEM" -> List.of("BLOCK_SAMPLE_CLUSTERING");
             case "INDEX_RANDOM" -> List.of("INDEX_RANDOM_SAMPLE");
+            case "RESULT_RANDOM" -> List.of("RESULT_RANDOM_SAMPLE");
             default -> List.of();
         };
     }
