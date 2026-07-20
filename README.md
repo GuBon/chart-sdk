@@ -32,8 +32,9 @@
 # 필요 도구: Node >= 22, JDK 17
 npm install                 # 워크스페이스 의존성
 npm run gen:defaults        # chart-options/defaults.json 생성 (server가 로드)
-npm run dev                 # admin (Next) 개발 서버
-npm run build:sdk           # sdk.js 번들
+npm run dev                 # sdk.js 빌드·공개 경로 복사 후 admin (Next) 개발 서버
+npm run build:sdk           # SDK 번들만 생성(sdk/dist/sdk.js)
+npm run build               # SDK를 admin/public/sdk.js에 포함한 전체 프론트 production build
 
 # server (별도 빌드)
 cd server && gradle bootRun   # 또는 IntelliJ 임포트
@@ -76,4 +77,12 @@ NEXT_PUBLIC_API_BASE=http://localhost:8080
 NEXT_PUBLIC_ENABLE_MSW=false
 ```
 
-임베드 SDK가 호출하는 차트 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체해야 한다.
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들을 `/sdk.js`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
+
+### 임베드 코드를 직접 붙여 확인하기
+
+1. 백엔드(`:8080`)와 Admin(`npm run dev`, `:3000`)을 실행한다.
+2. [`admin/public/embed-host.html`](admin/public/embed-host.html)의 `임베드 코드 붙여넣기 시작/끝` 주석 사이에 S3에서 복사한 코드를 직접 붙여 넣고 저장한다.
+3. `http://localhost:3000/embed-host.html`을 열거나 새로고침한다.
+
+별도 정적 서버는 필요 없다. Next.js가 `admin/public`의 호스트 페이지와 빌드된 `/sdk.js`를 모두 `:3000`에서 제공한다.

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChartSDK 수동 임베드 호스트</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f5f6f8;
+      color: #171717;
+      font: 14px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(960px, calc(100% - 32px)); margin: 40px auto; }
+    .guide {
+      margin-bottom: 20px;
+      padding: 18px 20px;
+      border: 1px solid #dfe3e8;
+      border-radius: 12px;
+      background: #fff;
+    }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    p { margin: 0; color: #5f6875; }
+    code { color: #364152; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .embed-area {
+      overflow: hidden;
+      min-height: 420px;
+      border: 1px dashed #b8c0cc;
+      border-radius: 12px;
+      background: #fff;
+    }
+    [data-chart-id] { width: 100%; height: 420px; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="guide">
+      <h1>수동 임베드 확인 페이지</h1>
+      <p>Admin의 임베드 코드 모달에서 복사한 HTML을 아래 표시 위치에 직접 붙여 넣고 저장한 뒤 브라우저를 새로고침하세요.</p>
+    </section>
+
+    <section class="embed-area">
+      <!-- 임베드 코드 붙여넣기 시작 -->
+      <!-- Admin 임베드 모달에서 복사한 <div> + <script>를 여기에 붙여 넣으세요. -->
+      <!-- 임베드 코드 붙여넣기 끝 -->
+    </section>
+  </main>
+</body>
+</html>
