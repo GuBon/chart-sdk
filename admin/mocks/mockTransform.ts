@@ -4,6 +4,9 @@
 import type { BuilderConfig, ChartType, QueryResult, SchemaTable } from '@/lib/api';
 import {
   DEFAULT_SAMPLE_SEED,
+  DEFAULT_SAMPLE_SIZE,
+  FULL_SCAN_ROWS,
+  normalizeSampleSize,
   SAMPLING_CONTRACT_VERSION,
   normalizeSampleRate,
   samplingTreatment,
@@ -35,10 +38,6 @@ const colName = (ref: string) => {
   const i = ref.indexOf('.');
   return i < 0 ? ref : ref.slice(i + 1);
 };
-
-function assertSampleAllowed(cfg: BuilderConfig) {
-  if (cfg.sample && (cfg.joins?.length ?? 0) > 0) throw new Error('JOIN_SAMPLE_NOT_ALLOWED');
-}
 
 // 별칭 자동 생성 (생성규칙 2장) — 조인 시 테이블 접두는 별칭에서 제거
 const aliasOf = (y: { column: string; agg: string; alias?: string }) => y.alias || (y.agg === 'none' ? colName(y.column) : `${y.agg}_${colName(y.column)}`);
@@ -79,7 +78,6 @@ function whereSql(w: { column: string; op: string; value?: unknown }): string {
 
 /** 생성된 SQL 문자열(표시용) — 생성규칙 6·7·11장 모사 */
 export function buildGeneratedSql(cfg: BuilderConfig): string {
-  assertSampleAllowed(cfg);
   if (!cfg.table || !cfg.xAxis || cfg.yAxis.length === 0) return '';
   // 다중 소스면 페더레이션 → ds 별칭 표기(백엔드 §6 모사).
   const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((j) => j.table.datasourceId)]).size >= 2;
@@ -101,46 +99,173 @@ export function buildGeneratedSql(cfg: BuilderConfig): string {
     ];
     return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}\nLIMIT 1000`;
   }
-  const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${qcol(cfg.xAxis)}) AS ${qident(colName(cfg.xAxis))}` : qcol(cfg.xAxis);
-  const aggSql: Record<string, (c: string) => string> = {
-    sum: (c) => `SUM(${qcol(c)})`,
-    avg: (c) => `AVG(${qcol(c)})`,
-    stddev: (c) => `STDDEV(${qcol(c)})`,
-    variance: (c) => `VARIANCE(${qcol(c)})`,
-    count: (c) => `COUNT(${qcol(c)})`,
-    count_distinct: (c) => `COUNT(DISTINCT ${qcol(c)})`,
-    min: (c) => `MIN(${qcol(c)})`,
-    max: (c) => `MAX(${qcol(c)})`,
+  const aggSql: Record<string, (expr: string) => string> = {
+    sum: (expr) => `SUM(${expr})`,
+    avg: (expr) => `AVG(${expr})`,
+    stddev: (expr) => `STDDEV(${expr})`,
+    variance: (expr) => `VARIANCE(${expr})`,
+    count: (expr) => `COUNT(${expr})`,
+    count_distinct: (expr) => `COUNT(DISTINCT ${expr})`,
+    min: (expr) => `MIN(${expr})`,
+    max: (expr) => `MAX(${expr})`,
   };
-  const sampleRate = cfg.sample ? clampRate(cfg.sample.rate ?? 100) : null; // 목 표시용 — count 기반은 CTE 미모사(rate 없음→평이)
-  const approximate = sampleRate !== null && sampleRate < 100;
+  const plan = samplePlanForConfig(cfg);
+  const approximate = plan?.approximate === true;
+
+  // JOIN+WHERE 또는 VIEW 조회 결과를 먼저 확정한 뒤, 그 결과 행을 뽑고 마지막에 집계한다.
+  if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
+    const population = qident('__chartsdk_population');
+    const sample = qident('__chartsdk_sample');
+    const nCte = qident('__chartsdk_n');
+    const seedCte = qident('__chartsdk_seed');
+    const xAlias = '__chartsdk_x';
+    const yAliases = cfg.yAxis.map((_, i) => `__chartsdk_y_${i}`);
+    const projected = [
+      `${qcol(cfg.xAxis)} AS ${qident(xAlias)}`,
+      ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
+    ];
+    const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
+    const sampleBody = multi
+      ? `SELECT * FROM ${population} USING SAMPLE reservoir(${plan.sampleSize} ROWS) REPEATABLE (${plan.seed})`
+      : `SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize}`;
+    const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
+    const ctes = [
+      ...(!multi ? [`${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')})`] : []),
+      populationCte,
+      `${sample} AS MATERIALIZED (${sampleBody})`,
+      `${nCte} AS (SELECT COUNT(*) AS ${qident('sampled')} FROM ${sample})`,
+    ];
+    const sampleX = qcol(`__chartsdk_sample.${xAlias}`);
+    const xCol = cfg.xAxisBucket
+      ? `DATE_TRUNC('${cfg.xAxisBucket}', ${sampleX}) AS ${qident(colName(cfg.xAxis))}`
+      : `${sampleX} AS ${qident(colName(cfg.xAxis))}`;
+    const hiddenMoments = cfg.yAxis.flatMap((y, i) => {
+      if (!['avg', 'stddev', 'variance'].includes(y.agg)) return [];
+      const expr = qcol(`__chartsdk_sample.${yAliases[i]}`);
+      return [
+        `COUNT(${expr}) AS ${qident(`__chartsdk_sample_n_${i}`)}`,
+        `AVG(${expr}) AS ${qident(`__chartsdk_sample_mean_${i}`)}`,
+        `STDDEV_SAMP(${expr}) AS ${qident(`__chartsdk_sample_sd_${i}`)}`,
+      ];
+    });
+    const selects = [
+      xCol,
+      ...cfg.yAxis.map((y, i) => `${aggSql[y.agg](qcol(`__chartsdk_sample.${yAliases[i]}`))} AS ${qident(aliasOf(y))}`),
+      `COUNT(*) AS ${qident('__chartsdk_sample_count')}`,
+      `(SELECT ${qident('sampled')} FROM ${nCte}) AS ${qident('__chartsdk_sample_total')}`,
+      ...hiddenMoments,
+    ];
+    return `WITH ${ctes.join(',\n')}
+SELECT ${selects.join(', ')}
+FROM ${sample}
+GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}
+LIMIT 1000`;
+  }
+
+  const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
+  const sourceColumn = (ref: string) => indexRandom ? qident(colName(ref)) : qcol(ref);
+  const xSource = sourceColumn(cfg.xAxis);
+  const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${xSource}) AS ${qident(colName(cfg.xAxis))}` : xSource;
+  const hiddenMoments = indexRandom ? cfg.yAxis.flatMap((y, i) => {
+    if (!['avg', 'stddev', 'variance'].includes(y.agg)) return [];
+    const expr = sourceColumn(y.column);
+    return [
+      `COUNT(${expr}) AS ${qident(`__chartsdk_sample_n_${i}`)}`,
+      `AVG(${expr}) AS ${qident(`__chartsdk_sample_mean_${i}`)}`,
+      `STDDEV_SAMP(${expr}) AS ${qident(`__chartsdk_sample_sd_${i}`)}`,
+    ];
+  }) : [];
   const selects = [
     xCol,
-    ...cfg.yAxis.map((y) => `${aggSql[y.agg](y.column)} AS ${qident(aliasOf(y))}`),
+    ...cfg.yAxis.map((y) => `${aggSql[y.agg](sourceColumn(y.column))} AS ${qident(aliasOf(y))}`),
     ...(approximate
       ? [
           `COUNT(*) AS ${qident('__chartsdk_sample_count')}`,
-          `SUM(COUNT(*)) OVER () AS ${qident('__chartsdk_sample_total')}`,
+          indexRandom
+            ? `(SELECT ${qident('sampled')} FROM ${qident('__chartsdk_n')}) AS ${qident('__chartsdk_sample_total')}`
+            : `SUM(COUNT(*)) OVER () AS ${qident('__chartsdk_sample_total')}`,
+          ...hiddenMoments,
         ]
       : []),
   ];
-  const group = cfg.xAxisBucket ? '1' : qcol(cfg.xAxis);
-  // 표본 추출(3C) — base 뒤 TABLESAMPLE SYSTEM. 조인과 동시 사용은 검증 단계에서 차단한다.
-  const seed = Math.trunc(cfg.sample?.seed ?? DEFAULT_SAMPLE_SEED);
-  const sample = approximate ? ` TABLESAMPLE SYSTEM (${sampleRate}) REPEATABLE (${seed})` : '';
-  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${sample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+  const group = cfg.xAxisBucket ? '1' : xSource;
+  if (indexRandom) {
+    const indexPlan = plan!;
+    const seed = indexPlan.seed ?? DEFAULT_SAMPLE_SEED;
+    const population = Math.max(1, indexPlan.populationEstimate);
+    const cte = `WITH ${qident('__chartsdk_seed')} AS MATERIALIZED (SELECT setseed(${Math.max(-1, Math.min(1, (seed / 2_147_483_647) * 2 - 1))}) AS ${qident('seeded')}),\n`
+      + `${qident('__chartsdk_keys')} AS MATERIALIZED (SELECT 1 + floor(random() * ${population})::bigint AS ${qident('v')} FROM ${qident('__chartsdk_seed')} CROSS JOIN generate_series(1, ${indexPlan.sampleSize})),\n`
+      + `${qident('__chartsdk_sample')} AS (SELECT ${qident('__chartsdk_base')}.* FROM ${qident('__chartsdk_keys')} JOIN ${qtable(cfg.table, multi)} ${qident('__chartsdk_base')} ON ${qident('__chartsdk_base')}.${qident('id')} = ${qident('__chartsdk_keys')}.${qident('v')}),\n`
+      + `${qident('__chartsdk_n')} AS (SELECT COUNT(*) AS ${qident('sampled')} FROM ${qident('__chartsdk_sample')}) `;
+    return `${cte}SELECT ${selects.join(', ')}\nFROM ${qident('__chartsdk_sample')}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+  }
+  const systemSample = plan?.approximate && plan.method === 'SYSTEM'
+    ? ` TABLESAMPLE SYSTEM (${plan.executionRate}) REPEATABLE (${plan.seed})`
+    : '';
+  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${systemSample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
 }
 
 /** 표본 비율 0.1~100, 소수점 한 자리 정규화 (생성규칙 3C·9장) */
 export const clampRate = normalizeSampleRate;
 
-function populationEstimateForConfig(cfg: BuilderConfig): number {
-  if (!cfg.table) return 0;
+function baseRelationForConfig(cfg: BuilderConfig): SchemaTable | undefined {
+  if (!cfg.table) return undefined;
   return schemaTables.find((table) =>
     table.datasourceId === cfg.table!.datasourceId
     && table.schema === cfg.table!.schema
     && table.name === cfg.table!.name,
-  )?.estimatedRowCount ?? 0;
+  );
+}
+
+function populationEstimateForConfig(cfg: BuilderConfig): number {
+  return baseRelationForConfig(cfg)?.estimatedRowCount ?? 0;
+}
+
+type MockSamplePlan = {
+  method: SamplingMetadata['method'];
+  approximate: boolean;
+  populationEstimate: number;
+  sampleSize: number;
+  executionRate: number;
+  seed?: number;
+};
+
+/** 서버 SamplingPlanner의 관계 종류·크기·레거시 SYSTEM 결정 순서를 미러한다. */
+function samplePlanForConfig(cfg: BuilderConfig): MockSamplePlan | undefined {
+  if (!cfg.sample) return undefined;
+  const legacyRate = cfg.sample.rate;
+  const seed = Math.trunc(cfg.sample.seed ?? DEFAULT_SAMPLE_SEED);
+  if (legacyRate != null && legacyRate >= 100) {
+    return { method: 'FULL_SCAN', approximate: false, populationEstimate: populationEstimateForConfig(cfg), sampleSize: 0, executionRate: 100 };
+  }
+
+  const relation = baseRelationForConfig(cfg);
+  const resultPopulation = (cfg.joins?.length ?? 0) > 0 || relation?.relationType === 'VIEW';
+  // JOIN 결과의 행수는 base reltuples로 대신하지 않는다. 별도 COUNT 없이 알 수 없으므로 미상(0)이다.
+  const populationEstimate = resultPopulation ? 0 : relation?.estimatedRowCount ?? 0;
+  const sampleSize = normalizeSampleSize(cfg.sample.size
+    ?? (legacyRate != null && populationEstimate > 0
+      ? Math.round(populationEstimate * legacyRate / 100)
+      : DEFAULT_SAMPLE_SIZE));
+  const executionRate = legacyRate != null
+    ? clampRate(legacyRate)
+    : normalizeSampleRate(populationEstimate > 0 ? (sampleSize / populationEstimate) * 100 : Number.NaN);
+
+  if (resultPopulation) {
+    return { method: 'RESULT_RANDOM', approximate: true, populationEstimate, sampleSize, executionRate, seed };
+  }
+  const systemPinned = cfg.sample.method === 'system' || legacyRate != null;
+  if (systemPinned) {
+    return { method: 'SYSTEM', approximate: true, populationEstimate, sampleSize, executionRate, seed };
+  }
+  if (populationEstimate > 0 && populationEstimate <= FULL_SCAN_ROWS) {
+    return { method: 'FULL_SCAN', approximate: false, populationEstimate, sampleSize: 0, executionRate: 100, seed };
+  }
+  // mock에는 PK 카탈로그가 없다. 일반 TABLE은 정수 PK 사용 가능, MV·통계 미상 관계는 SYSTEM 폴백으로 모사한다.
+  if (relation?.relationType === 'MATERIALIZED_VIEW' || populationEstimate <= 0) {
+    return { method: 'SYSTEM', approximate: true, populationEstimate, sampleSize, executionRate, seed };
+  }
+  return { method: 'INDEX_RANDOM', approximate: true, populationEstimate, sampleSize, executionRate, seed };
 }
 
 /** 서버 SamplingMetadata.putInto의 레거시 sampleRate 별칭 계산을 미러한다. */
@@ -158,39 +283,31 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
   const mode = cfg.sample.mode === 'auto' ? 'auto' : 'manual';
   const requestedMethod = cfg.sample.method === 'system' ? 'system' : 'auto';
   const legacyRate = cfg.sample.rate;
+  const plan = samplePlanForConfig(cfg)!;
 
-  // 레거시 100% → 전량 정확 실행
-  if (legacyRate != null && legacyRate >= 100) {
+  if (!plan.approximate) {
     return {
       version: SAMPLING_CONTRACT_VERSION, mode, requestedMethod,
-      approximate: false, method: 'FULL_SCAN', rate: 100, valueMode: 'exact',
+      approximate: false, method: 'FULL_SCAN', ...(legacyRate != null ? { rate: 100 } : {}),
+      ...(cfg.sample.size != null ? { sizeTarget: cfg.sample.size } : {}),
+      ...(plan.seed != null ? { seed: plan.seed } : {}), valueMode: 'exact',
       estimates: cfg.yAxis.map((y) => ({ series: aliasOf(y), aggregate: y.agg, treatment: 'EXACT' as const })),
     };
   }
 
-  const populationEstimate = populationEstimateForConfig(cfg);
-  const legacySystem = requestedMethod === 'system' || legacyRate != null;
-  // mock에는 PK 카탈로그가 없으므로 알려진 테이블은 INDEX_RANDOM 가능으로, 행수 정보가 없으면 SYSTEM 폴백으로 모사한다.
-  const systemFallback = populationEstimate <= 0;
-  const method: SamplingMetadata['method'] = legacySystem || systemFallback ? 'SYSTEM' : 'INDEX_RANDOM';
-  const sampleSize = cfg.sample.size
-    ?? (legacyRate != null && populationEstimate > 0
-      ? Math.max(1_000, Math.min(50_000, Math.round(populationEstimate * legacyRate / 100)))
-      : 10_000);
-  const executionRate = legacyRate != null
-    ? clampRate(legacyRate)
-    : normalizeSampleRate(populationEstimate > 0 ? (sampleSize / populationEstimate) * 100 : Number.NaN);
+  const { method, populationEstimate, sampleSize, executionRate } = plan;
+  const uniformRandom = method === 'INDEX_RANDOM' || method === 'RESULT_RANDOM';
   const groups = labels.map((key, index) => ({
     key,
-    sampleCount: method === 'INDEX_RANDOM'
+    sampleCount: uniformRandom
       ? Math.floor(sampleSize / Math.max(1, labels.length)) + (index < sampleSize % Math.max(1, labels.length) ? 1 : 0)
       : Math.max(1, Math.round((5_000 + index * 350) * (executionRate / 100))),
   }));
   const estimates = cfg.yAxis.map((y) => {
     const warning = samplingWarningForAggregate(y.agg);
     const base = { series: aliasOf(y), aggregate: y.agg, treatment: samplingTreatment(y.agg, true), ...(warning ? { warning } : {}) };
-    // INDEX_RANDOM 목: 실제 서버와 같은 v5 형태를 미러한다. 분산 계열은 비대칭 그룹별 구간을 포함한다.
-    if (method === 'INDEX_RANDOM' && ['stddev', 'variance'].includes(y.agg)) {
+    // 균일 행 표본(INDEX_RANDOM/RESULT_RANDOM)은 분산 계열의 비대칭 그룹별 구간을 포함한다.
+    if (uniformRandom && ['stddev', 'variance'].includes(y.agg)) {
       const variance = y.agg === 'variance';
       const estimate = variance ? 100 : 10;
       const lower95 = variance ? 77.1 : 8.78;
@@ -201,23 +318,27 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
         intervals: groups.map((group) => ({ ...group, estimate, lower95, upper95, relativeErrorPct })),
       };
     }
-    return method === 'INDEX_RANDOM' && y.agg === 'avg'
+    return uniformRandom && y.agg === 'avg'
       ? { ...base, marginOfError: 12, relativeErrorPct: 1.2 } : base;
   });
-  const warnings = new Set<SamplingWarningCode>([method === 'SYSTEM' ? 'BLOCK_SAMPLE_CLUSTERING' : 'INDEX_RANDOM_SAMPLE']);
+  const methodWarning: SamplingWarningCode = method === 'SYSTEM'
+    ? 'BLOCK_SAMPLE_CLUSTERING'
+    : method === 'RESULT_RANDOM' ? 'RESULT_RANDOM_SAMPLE' : 'INDEX_RANDOM_SAMPLE';
+  const warnings = new Set<SamplingWarningCode>([methodWarning]);
   estimates.forEach((estimate) => { if (estimate.warning) warnings.add(estimate.warning); });
-  if (method === 'INDEX_RANDOM' && cfg.yAxis.some((y) => y.agg === 'stddev' || y.agg === 'variance')) {
+  if (uniformRandom && cfg.yAxis.some((y) => y.agg === 'stddev' || y.agg === 'variance')) {
     warnings.add('STDDEV_CI_NORMALITY_ASSUMED');
   }
   return {
     version: SAMPLING_CONTRACT_VERSION, mode, requestedMethod,
     approximate: true, method,
     ...(legacyRate != null ? { rate: executionRate } : {}),
-    seed: Math.trunc(cfg.sample.seed ?? DEFAULT_SAMPLE_SEED),
+    ...(cfg.sample.size != null ? { sizeTarget: cfg.sample.size } : {}),
+    seed: plan.seed,
     valueMode: 'sample',
-    populationEstimate, sampleSize,
+    ...(method === 'RESULT_RANDOM' && populationEstimate <= 0 ? {} : { populationEstimate }), sampleSize,
     sampledRowCount: groups.reduce((sum, group) => sum + group.sampleCount, 0),
-    ...(method === 'INDEX_RANDOM' ? { confidenceLevel: 0.95 } : {}),
+    ...(uniformRandom ? { confidenceLevel: 0.95 } : {}),
     groups, estimates,
     warnings: [...warnings],
   };
@@ -228,7 +349,6 @@ const SAMPLE_REGIONS = ['서울특별시', '부산광역시', '대구광역시',
 
 /** 집계 결과 rows 생성 — 카테고리/월 라벨 + yAxis별 가짜 값 */
 export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): QueryResult {
-  assertSampleAllowed(cfg);
   // 상자수염: 카테고리별로 원본값 여러 개(분포) — 변환기가 그룹핑해 5수 요약 계산.
   if (chartType === 'boxplot') {
     const valName = cfg.yAxis[0] ? colName(cfg.yAxis[0].column) : 'value';
@@ -285,7 +405,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   const labels = cfg.xAxisBucket ? SAMPLE_MONTHS : SAMPLE_CATS;
   const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: 'text' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
   const sampling = samplingForConfig(cfg, labels);
-  // sampling v5: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
+  // sampling v6: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
   const rows: Rows = labels.map((label, i) => [
     label,
     ...cfg.yAxis.map((_y, j) => Math.round(500 - i * 70 + j * 130 + (i % 2) * 40)),
@@ -302,7 +422,6 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
 
 /** 원본 데이터(mode:rows) — 집계 이전 세부 행 */
 export function buildRawRows(cfg: BuilderConfig): QueryResult {
-  assertSampleAllowed(cfg);
   const rawNumeric = cfg.yAxis.some((y) => y.agg === 'none');
   const columns: Cols = [
     { name: cfg.xAxis ? colName(cfg.xAxis) : 'category', type: rawNumeric ? 'numeric' : 'text' },

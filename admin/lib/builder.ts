@@ -86,9 +86,9 @@ export function tableRefKey(t: { datasourceId: number; schema: string; name: str
   return `${t.datasourceId}.${t.schema}.${t.name}`;
 }
 
-/** 표시 라벨 — public 은 스키마 생략(schema.table 또는 table). 소스는 셀렉트 옆에 별도 표기. */
+/** 표시 라벨 — 스키마가 있으면 항상 schema.table 로 표시. 소스는 셀렉트 옆에 별도 표기. */
 export function tableRefLabel(t: TableRef | SchemaTable): string {
-  return t.schema && t.schema !== 'public' ? `${t.schema}.${t.name}` : t.name;
+  return t.schema ? `${t.schema}.${t.name}` : t.name;
 }
 
 /** 컬럼 참조 prefix 로 쓰는 테이블 핸들 — 기본은 이름, 동명 충돌 시 저장된 handle(users_2). 백엔드 parseTableRef 와 규약 일치. */
@@ -249,7 +249,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       if (r.indexOf('.') < 0) return '조인 시 컬럼은 "테이블.컬럼" 형식이어야 합니다.';
       if (!activeHandles.includes(parseColumn(r, tableHandle(cfg.table)).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
     }
-    if (cfg.sample) return '표본 추출은 조인과 함께 사용할 수 없습니다.';
   }
   if (!cfg.xAxis) return 'X축 컬럼을 선택하세요.';
   if (cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
@@ -259,9 +258,9 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   const xType = columnType(cfg.xAxis, cfg, tables);
   const rawSeriesCount = cfg.yAxis.filter((y) => y.agg === 'none').length;
   if (chartType === 'boxplot') {
-    if (cfg.yAxis.length !== 1) return '상자수염 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
-    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '상자수염 차트는 집계 없이 원본값만 사용합니다.';
-    if (!isNumericType(columnType(cfg.yAxis[0]?.column, cfg, tables))) return '상자수염 차트는 숫자 값 컬럼(Y축)이 필요합니다.';
+    if (cfg.yAxis.length !== 1) return '박스 플롯은 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
+    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '박스 플롯은 집계 없이 원본값만 사용합니다.';
+    if (!isNumericType(columnType(cfg.yAxis[0]?.column, cfg, tables))) return '박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.';
   }
   if (chartType === 'geoscatter') {
     if (cfg.yAxis.length > 2) return '지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';

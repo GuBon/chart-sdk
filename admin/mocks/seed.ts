@@ -36,6 +36,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'sales',
+    relationType: 'TABLE',
     estimatedRowCount: 500_000_000,
     columns: [
       { name: 'id', type: 'int' },
@@ -50,6 +51,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'users',
+    relationType: 'TABLE',
     estimatedRowCount: 2_500_000,
     columns: [
       { name: 'id', type: 'int' },
@@ -61,6 +63,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'visits',
+    relationType: 'TABLE',
     estimatedRowCount: 80_000_000,
     columns: [
       { name: 'id', type: 'int' },
@@ -73,6 +76,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'orders',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'sale_id', type: 'int' },
@@ -85,6 +89,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'products',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'name', type: 'text' },
@@ -97,6 +102,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'analytics',
     name: 'events',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'kind', type: 'text' },
@@ -104,11 +110,47 @@ export const schemaTables: SchemaTable[] = [
       { name: 'occurred_at', type: 'timestamp' },
     ],
   },
+  {
+    datasourceId: 1,
+    schema: 'analytics',
+    name: 'sales_summary',
+    relationType: 'VIEW',
+    columns: [
+      { name: 'category', type: 'text' },
+      { name: 'amount', type: 'numeric' },
+      { name: 'date', type: 'date' },
+    ],
+  },
+  {
+    datasourceId: 1,
+    schema: 'analytics',
+    name: 'monthly_sales_mv',
+    relationType: 'MATERIALIZED_VIEW',
+    populated: true,
+    estimatedRowCount: 24,
+    columns: [
+      { name: 'month', type: 'date' },
+      { name: 'category', type: 'text' },
+      { name: 'amount', type: 'numeric' },
+    ],
+  },
+  {
+    datasourceId: 1,
+    schema: 'analytics',
+    name: 'stale_sales_mv',
+    relationType: 'MATERIALIZED_VIEW',
+    populated: false,
+    columns: [
+      { name: 'month', type: 'date' },
+      { name: 'amount', type: 'numeric' },
+    ],
+  },
   // 데이터소스 2 (sales-db) — 다중 소스 조인 데모: sales.customer_id(ds1) ↔ customers.id(ds2)
   {
     datasourceId: 2,
     schema: 'public',
     name: 'customers',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'region', type: 'text' },
@@ -120,6 +162,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 2,
     schema: 'public',
     name: 'users',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'region', type: 'text' },
@@ -131,6 +174,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 3,
     schema: 'public',
     name: `bulk_table_${String(i + 1).padStart(2, '0')}`,
+    relationType: 'TABLE' as const,
     columns: [
       { name: 'id', type: 'int' },
       { name: 'amount', type: 'numeric' },
@@ -142,6 +186,7 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 3,
     schema: 'archive',
     name: 'events',
+    relationType: 'TABLE',
     columns: [
       { name: 'id', type: 'int' },
       { name: 'kind', type: 'text' },

@@ -33,7 +33,7 @@ export interface OrderBy {
 }
 
 /**
- * 표본 설정 (생성규칙 3C v5) — 무편향 표본은 절대 갯수(size)가 추정 정밀도를 결정한다.
+ * 표본 설정 (생성규칙 3C v6) — 무편향 표본은 절대 갯수(size)가 추정 정밀도를 결정한다.
  * auto: 서버가 방식·크기 결정 / manual: size(갯수) 지정. rate·method 는 레거시 SYSTEM 핀 전용.
  */
 export interface SampleConfig {
@@ -73,7 +73,7 @@ export interface BuilderConfig {
   where: WhereCond[];
   orderBy: OrderBy | null;
   limit?: number;
-  sample?: SampleConfig | null; // 집계 모드 전용. 기본은 개수 기반 INDEX_RANDOM, 불가 시 SYSTEM. 조인과 동시 사용 불가(11장)
+  sample?: SampleConfig | null; // 집계 모드 전용. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
 }
 
 /** S1 목록 카드 */
@@ -173,10 +173,14 @@ export interface User {
 }
 
 /** 스키마 탐색(S2 좌측). datasourceId 는 이 테이블이 속한 데이터소스(클라이언트가 로드 시 태깅) — 다중 소스 조인 식별에 쓴다. */
+export type RelationType = 'TABLE' | 'VIEW' | 'MATERIALIZED_VIEW';
+
 export interface SchemaTable {
   datasourceId: number;
   schema: string;
   name: string;
+  relationType: RelationType;
+  populated?: boolean; // MATERIALIZED_VIEW 전용. false이면 REFRESH 전까지 조회할 수 없다.
   estimatedRowCount?: number; // pg_class.reltuples 기반 계획용 추정치 — 표본 계획·전량 폴백·UI 안내에만 사용
   columns: { name: string; type: string }[];
 }
@@ -201,6 +205,10 @@ export interface ChartDataResponse {
   computedAt: string;
   rowCount?: number;
   truncated?: boolean;
+  /** 단건 편집 미리보기에서만 제공. 목록 batch는 payload 절감을 위해 생략한다. */
+  columns?: { name: string; type: string }[];
+  rows?: unknown[][];
+  elapsedMs?: number;
   sampling?: SamplingMetadata;
   approximate?: boolean;
   sampleRate?: number;

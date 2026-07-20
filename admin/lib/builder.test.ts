@@ -28,7 +28,7 @@ import {
 
 // ── 테스트 픽스처 (동명 크로스소스 테이블 포함) ──
 const SALES: SchemaTable = {
-  datasourceId: 1, schema: 'public', name: 'sales',
+  datasourceId: 1, schema: 'public', name: 'sales', relationType: 'TABLE',
   columns: [
     { name: 'id', type: 'int' },
     { name: 'category', type: 'text' },
@@ -38,15 +38,15 @@ const SALES: SchemaTable = {
   ],
 };
 const USERS1: SchemaTable = {
-  datasourceId: 1, schema: 'public', name: 'users',
+  datasourceId: 1, schema: 'public', name: 'users', relationType: 'TABLE',
   columns: [{ name: 'id', type: 'int' }, { name: 'name', type: 'text' }],
 };
 const USERS2: SchemaTable = {
-  datasourceId: 2, schema: 'public', name: 'users',
+  datasourceId: 2, schema: 'public', name: 'users', relationType: 'TABLE',
   columns: [{ name: 'id', type: 'int' }, { name: 'tier', type: 'text' }],
 };
 const EVENTS: SchemaTable = {
-  datasourceId: 1, schema: 'analytics', name: 'events',
+  datasourceId: 1, schema: 'analytics', name: 'events', relationType: 'TABLE',
   columns: [{ name: 'id', type: 'int' }, { name: 'value', type: 'numeric' }],
 };
 const TABLES: SchemaTable[] = [SALES, USERS1, USERS2, EVENTS];
@@ -121,8 +121,8 @@ describe('테이블 식별자', () => {
     expect(tableRefKey(salesRef)).toBe('1.public.sales');
     expect(tableRefKey(users2Ref)).toBe('2.public.users');
   });
-  it('tableRefLabel 은 public 스키마를 생략한다', () => {
-    expect(tableRefLabel(salesRef)).toBe('sales');
+  it('tableRefLabel 은 public 을 포함한 스키마를 항상 표시한다', () => {
+    expect(tableRefLabel(salesRef)).toBe('public.sales');
     expect(tableRefLabel({ datasourceId: 1, schema: 'analytics', name: 'events' })).toBe('analytics.events');
   });
   it('tableHandle 은 handle 우선, 없으면 name', () => {
@@ -251,10 +251,10 @@ describe('builderValidationIssue', () => {
   it('동명 크로스소스 조인은 핸들로 구분되어 정상 검증된다', () => {
     expect(builderValidationIssue(crossJoin(), 'bar', TABLES)).toBeNull();
   });
-  it('조인 + 표본 추출 동시 사용을 거부한다', () => {
+  it('조인 결과 표본 추출을 허용한다', () => {
     const cfg = crossJoin();
     cfg.sample = { rate: 10 };
-    expect(builderValidationIssue(cfg, 'bar', TABLES)).toBe('표본 추출은 조인과 함께 사용할 수 없습니다.');
+    expect(builderValidationIssue(cfg, 'bar', TABLES)).toBeNull();
   });
 });
 
@@ -334,13 +334,13 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'none' }] }), 'boxplot', TABLES)).toBeNull();
     // 2개 → 거부
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'none' }, { column: 'id', agg: 'none' }] }), 'boxplot', TABLES))
-      .toBe('상자수염 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.');
+      .toBe('박스 플롯은 값 컬럼(Y축)을 1개만 사용할 수 있습니다.');
     // 집계 있음 → 거부
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }] }), 'boxplot', TABLES))
-      .toBe('상자수염 차트는 집계 없이 원본값만 사용합니다.');
+      .toBe('박스 플롯은 집계 없이 원본값만 사용합니다.');
     // 비숫자 값 컬럼(category) → 거부
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'category', agg: 'none' }] }), 'boxplot', TABLES))
-      .toBe('상자수염 차트는 숫자 값 컬럼(Y축)이 필요합니다.');
+      .toBe('박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.');
   });
 
   it('map 검증 — 값 컬럼 1개', () => {

@@ -3,6 +3,7 @@ import contractCases from '@chartsdk/chart-options/layout-contract-cases.json';
 import samplingCases from '@chartsdk/chart-options/sampling-contract-cases.json';
 import type { BuilderConfig, ChartType, QueryResult } from './api/types';
 import { assembleOption, buildAggregateRows, buildGeneratedSql } from '../mocks/mockTransform';
+import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 
 type LayoutContractCase = {
   name: string;
@@ -75,7 +76,7 @@ describe('mock 변환기 표본 집계 계약', () => {
     };
     const sampled = buildAggregateRows(config, 'bar');
     expect(sampled.sampling).toMatchObject({
-      version: 5,
+      version: SAMPLING_CONTRACT_VERSION,
       approximate: true,
       method: 'SYSTEM',
       mode: 'manual',
@@ -100,13 +101,13 @@ describe('mock 변환기 표본 집계 계약', () => {
     expect(buildGeneratedSql(config)).not.toMatch(/TABLESAMPLE|REPEATABLE|__chartsdk_sample|100\.0 \/ 100/);
     const result = buildAggregateRows(config, 'bar');
     expect(result.sampling).toEqual({
-      version: 5, mode: 'manual', requestedMethod: 'auto', approximate: false, method: 'FULL_SCAN', rate: 100,
+      version: SAMPLING_CONTRACT_VERSION, mode: 'manual', requestedMethod: 'auto', approximate: false, method: 'FULL_SCAN', rate: 100,
       valueMode: 'exact', estimates: [{ series: 'variance_amount', aggregate: 'variance', treatment: 'EXACT' }],
     });
     expect(result.approximate).toBe(false);
   });
 
-  it('INDEX_RANDOM 표준편차는 서버 v5와 같은 그룹별 95% 구간·정규성 경고를 반환한다', () => {
+  it('INDEX_RANDOM 표준편차는 서버 v6와 같은 그룹별 95% 구간·정규성 경고를 반환한다', () => {
     const config: BuilderConfig = {
       table: { datasourceId: 1, schema: 'public', name: 'sales' }, joins: [], xAxis: 'category', xAxisBucket: null,
       yAxis: [{ column: 'amount', agg: 'stddev' }], where: [], orderBy: null,
@@ -116,7 +117,7 @@ describe('mock 변환기 표본 집계 계약', () => {
     const result = buildAggregateRows(config, 'bar');
 
     expect(result.sampling).toMatchObject({
-      version: 5,
+      version: SAMPLING_CONTRACT_VERSION,
       method: 'INDEX_RANDOM',
       populationEstimate: 500_000_000,
       sampleSize: 10_000,
@@ -129,6 +130,56 @@ describe('mock 변환기 표본 집계 계약', () => {
     expect(result.sampling?.estimates?.[0]?.intervals).toHaveLength(result.rows.length);
     expect(result.sampling?.estimates?.[0]?.intervals?.[0]).toMatchObject({
       sampleCount: 2_000, estimate: 10, lower95: 8.78, upper95: 11.62,
+    });
+  });
+
+  it('조인·WHERE 결과를 모집단 CTE로 만든 뒤 집계 전에 RESULT_RANDOM 표본을 뽑는다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [{
+        table: { datasourceId: 1, schema: 'public', name: 'orders' },
+        type: 'left',
+        on: { leftColumn: 'sales.id', rightColumn: 'orders.sale_id' },
+      }],
+      xAxis: 'sales.category',
+      xAxisBucket: null,
+      yAxis: [{ column: 'orders.amount', agg: 'avg', alias: 'average' }],
+      where: [{ column: 'orders.amount', op: 'gt', value: 0 }],
+      orderBy: null,
+      sample: { mode: 'manual', size: 12_000, seed: 321 },
+    };
+
+    const sql = buildGeneratedSql(config);
+    expect(sql).toContain('"__chartsdk_population" AS (SELECT');
+    expect(sql).toContain('LEFT JOIN "orders" ON "sales"."id" = "orders"."sale_id"');
+    expect(sql).toContain('WHERE "orders"."amount" > ?)');
+    expect(sql).toContain('ORDER BY random() LIMIT 12000');
+    expect(sql.indexOf('LEFT JOIN')).toBeLessThan(sql.indexOf('ORDER BY random()'));
+    expect(sql).toContain('AVG("__chartsdk_sample"."__chartsdk_y_0") AS "average"');
+
+    expect(buildAggregateRows(config, 'bar').sampling).toMatchObject({
+      version: SAMPLING_CONTRACT_VERSION,
+      method: 'RESULT_RANDOM',
+      sampleSize: 12_000,
+      sampledRowCount: 12_000,
+      confidenceLevel: 0.95,
+      warnings: ['RESULT_RANDOM_SAMPLE'],
+    });
+  });
+
+  it('일반 VIEW는 TABLESAMPLE 대신 조회 결과 행 표본을 사용한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'analytics', name: 'sales_summary' },
+      joins: [], xAxis: 'category', xAxisBucket: null,
+      yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null,
+      sample: { mode: 'auto', seed: 9 },
+    };
+
+    expect(buildGeneratedSql(config)).toContain('FROM "analytics"."sales_summary"');
+    expect(buildGeneratedSql(config)).toContain('"__chartsdk_population" AS');
+    expect(buildGeneratedSql(config)).not.toContain('TABLESAMPLE');
+    expect(buildAggregateRows(config, 'bar').sampling).toMatchObject({
+      method: 'RESULT_RANDOM', warnings: ['RESULT_RANDOM_SAMPLE', 'SAMPLE_AGGREGATE_ONLY'],
     });
   });
 
