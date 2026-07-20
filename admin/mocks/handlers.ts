@@ -90,8 +90,11 @@ export const handlers = [
     const result = buildAggregateRows(chart.builderConfig, chart.chartType);
     return HttpResponse.json({
       chartId: id,
+      columns: result.columns,
+      rows: result.rows,
       rowCount: result.rowCount,
       truncated: result.truncated,
+      elapsedMs: result.elapsedMs,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: new Date().toISOString(),
       option: assembleOption(result, chart.chartType, chart.options ?? {}),
