@@ -201,6 +201,70 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: 'S1 카드 표시·검색용. option 미반영 (차트 메타)',
   },
 
+  // ── 크기 ──
+  {
+    key: 'display.preset', zone: 'common', section: '크기', label: '설계 크기',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'standard',
+    echarts: '@display.size',
+    choices: [
+      { value: 'small', label: '작은 카드 · 360×240' },
+      { value: 'standard', label: '표준 · 640×360' },
+      { value: 'large', label: '대형 · 960×540' },
+      { value: 'hd', label: 'HD · 1280×720' },
+      { value: 'fhd', label: 'FHD · 1920×1080' },
+      { value: 'custom', label: '사용자 지정' },
+    ],
+    help: '미리보기의 논리 캔버스와 자동 글꼴 기준. 임베드 호스트의 CSS width·height를 강제로 덮어쓰지 않는다',
+  },
+  {
+    key: 'display.width', zone: 'common', section: '크기', label: '사용자 너비',
+    control: 'number', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 640,
+    showIf: (o) => o.display?.preset === 'custom', min: 240, max: 3840, unit: 'px', echarts: '@display.width',
+  },
+  {
+    key: 'display.height', zone: 'common', section: '크기', label: '사용자 높이',
+    control: 'number', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 360,
+    showIf: (o) => o.display?.preset === 'custom', min: 180, max: 2160, unit: 'px', echarts: '@display.height',
+  },
+
+  // ── 글꼴 ──
+  {
+    key: 'typography.mode', zone: 'common', section: '글꼴', label: '글꼴 크기',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'auto',
+    echarts: '@typography.mode', choices: [{ value: 'auto', label: '자동' }, { value: 'custom', label: '직접 지정' }],
+    help: '자동은 설계 크기에 맞는 기본값을 사용하고, 직접 지정은 요소별 px 값을 저장한다',
+  },
+  {
+    key: 'typography.scale', zone: 'common', section: '글꼴', label: '전체 배율',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 100,
+    showIf: (o) => o.typography?.mode !== 'custom', min: 80, max: 150, step: 5, unit: '%', echarts: '@typography.scale',
+  },
+  {
+    key: 'typography.titleFontSize', zone: 'common', section: '글꼴', label: '제목',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 18,
+    showIf: (o) => o.typography?.mode === 'custom', min: 10, max: 48, step: 1, unit: 'px', echarts: 'title.textStyle.fontSize',
+  },
+  {
+    key: 'typography.legendFontSize', zone: 'common', section: '글꼴', label: '범례',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 12,
+    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'legend.textStyle.fontSize',
+  },
+  {
+    key: 'typography.axisFontSize', zone: 'common', section: '글꼴', label: '축',
+    control: 'slider', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 12,
+    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: '@axis.fontSize',
+  },
+  {
+    key: 'typography.dataLabelFontSize', zone: 'common', section: '글꼴', label: '데이터 라벨',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 12,
+    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'series.label.fontSize',
+  },
+  {
+    key: 'typography.tooltipFontSize', zone: 'common', section: '글꼴', label: '툴팁',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 12,
+    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'tooltip.textStyle.fontSize',
+  },
+
   // ── 색상 ──
   // boxplot: 팔레트/개별색 = 상자 색. heatmap·map: 팔레트[0]을 visualMap 그라디언트 상단색으로 사용(개별색 무의미 → 제외).
   {

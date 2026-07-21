@@ -8,6 +8,7 @@
   "types": "./optionRegistry.ts",
   "exports": {
     ".": "./optionRegistry.ts",
+    "./display": "./display.ts",
     "./renderLayout": "./renderLayout.ts",
     "./sampling": "./sampling.ts",
     "./layout-contract-cases.json": "./layout-contract-cases.json",

@@ -75,5 +75,49 @@
       "series.0.label.show": false
     },
     "absent": ["series.0.labelLayout"]
+  },
+  {
+    "name": "custom-fonts-expand-layout-blocks",
+    "chartType": "bar",
+    "options": {
+      "title": "큰 제목",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" },
+      "dataLabel": true,
+      "typography": {
+        "mode": "custom",
+        "titleFontSize": 32,
+        "legendFontSize": 20,
+        "axisFontSize": 15,
+        "dataLabelFontSize": 17,
+        "tooltipFontSize": 14
+      }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 32,
+      "legend.top": 43,
+      "legend.textStyle.fontSize": 20,
+      "grid.top": 105,
+      "xAxis.axisLabel.fontSize": 15,
+      "series.0.label.fontSize": 17,
+      "tooltip.textStyle.fontSize": 14
+    }
+  },
+  {
+    "name": "fhd-auto-fonts-expand-heatmap-stack",
+    "chartType": "heatmap",
+    "options": {
+      "title": "FHD 히트맵",
+      "titleV": "bottom",
+      "display": { "preset": "fhd" },
+      "typography": { "mode": "auto", "scale": 100 }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 26,
+      "visualMap.bottom": 36,
+      "visualMap.textStyle.fontSize": 16,
+      "grid.bottom": 101,
+      "xAxis.axisLabel.fontSize": 16
+    }
   }
 ]
