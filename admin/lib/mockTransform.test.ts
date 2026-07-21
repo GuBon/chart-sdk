@@ -42,6 +42,39 @@ describe('mock 변환기 레이아웃 계약', () => {
 });
 
 describe('mock 변환기 표본 집계 계약', () => {
+  it('지도 포인트 SQL은 조건에 맞는 좌표를 전부 반환하고 일반 원본 차트 제한은 유지한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [],
+      xAxis: 'amount',
+      xAxisBucket: null,
+      yAxis: [{ column: 'id', agg: 'none' }],
+      where: [{ column: 'amount', op: 'gte', value: 126 }],
+      orderBy: null,
+    };
+
+    expect(buildGeneratedSql(config, 'geoscatter')).toContain('WHERE "amount" >= ?');
+    expect(buildGeneratedSql(config, 'geoscatter')).not.toContain('LIMIT 1000');
+    expect(buildGeneratedSql(config, 'scatter')).toContain('LIMIT 1000');
+  });
+
+  it('공간 Point 지도 포인트 SQL은 WGS84 경도·위도와 선택 크기값으로 투영한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [], xAxis: null, xAxisBucket: null, yAxis: [],
+      where: [{ column: 'dept', op: 'eq', value: '영업' }], orderBy: null,
+      geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: 'amount' },
+    };
+
+    const sql = buildGeneratedSql(config, 'geoscatter');
+    expect(sql).toContain('ST_X(ST_Transform(("location")::geometry, 4326)) AS "__chartsdk_longitude"');
+    expect(sql).toContain('ST_Y(ST_Transform(("location")::geometry, 4326)) AS "__chartsdk_latitude"');
+    expect(sql).toContain('"amount" AS "__chartsdk_size"');
+    expect(sql).toContain('WHERE "dept" = ? AND "location" IS NOT NULL');
+    expect(sql).not.toContain('LIMIT 1000');
+    expect(buildAggregateRows(config, 'geoscatter').columns).toHaveLength(3);
+  });
+
   it.each(samplingCases)('$name', ({ agg, rate, sampledValue, expectedValue, extrapolated }) => {
     expect(sampledValue).toBe(expectedValue);
     expect(extrapolated).toBe(false);

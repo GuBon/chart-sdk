@@ -13,6 +13,7 @@ import {
   hasJoins,
   isDateType,
   isNumericType,
+  isSpatialPointType,
   migrateBuilderConfig,
   migrateTableRef,
   normalizeBuilder,
@@ -35,6 +36,9 @@ const SALES: SchemaTable = {
     { name: 'amount', type: 'numeric' },
     { name: 'date', type: 'date' },
     { name: 'customer_id', type: 'int' },
+    { name: 'location', type: 'geometry(Point,4326)' },
+    { name: 'location_geog', type: 'geography(Point,4326)' },
+    { name: 'service_area', type: 'geometry(Polygon,4326)' },
   ],
 };
 const USERS1: SchemaTable = {
@@ -83,6 +87,12 @@ describe('타입 판정', () => {
     expect(isNumericType('double precision')).toBe(true);
     expect(isNumericType('text')).toBe(false);
     expect(isNumericType('date')).toBe(false);
+  });
+  it('isSpatialPointType 은 SRID가 지정된 PostGIS Point만 인식한다', () => {
+    expect(isSpatialPointType('geometry(Point,4326)')).toBe(true);
+    expect(isSpatialPointType('geography(PointZ, 4326)')).toBe(true);
+    expect(isSpatialPointType('geometry(Polygon,4326)')).toBe(false);
+    expect(isSpatialPointType('geometry')).toBe(false);
   });
 });
 
@@ -167,7 +177,16 @@ describe('parseColumn', () => {
 describe('columnsForBuilder', () => {
   it('미조인 시 base 컬럼을 bare 로 제공한다', () => {
     const opts = columnsForBuilder(bar(), TABLES);
-    expect(opts.map((o) => o.value)).toEqual(['id', 'category', 'amount', 'date', 'customer_id']);
+    expect(opts.map((o) => o.value)).toEqual([
+      'id',
+      'category',
+      'amount',
+      'date',
+      'customer_id',
+      'location',
+      'location_geog',
+      'service_area',
+    ]);
     expect(opts.find((o) => o.value === 'amount')?.type).toBe('numeric');
   });
   it('조인 시 활성 테이블 전부를 "핸들.컬럼" 으로 qualified 한다', () => {
@@ -357,6 +376,7 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     expect(out.sample).toBeNull();
     expect(out.yAxis).toHaveLength(2);
     expect(out.yAxis.every((y) => y.agg === 'none')).toBe(true);
+    expect(out.geoPoint).toEqual({ mode: 'columns' });
   });
 
   it('geoscatter 검증 — 경도·위도 숫자 필수, 최대 2컬럼', () => {
@@ -371,5 +391,30 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     // 비숫자 위도 → 거부
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'category', agg: 'none' }] }), 'geoscatter', TABLES))
       .toBe('지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.');
+  });
+
+  it('geoscatter 공간 Point 모드는 X/Y 대신 Point와 선택 크기 컬럼을 검증한다', () => {
+    const spatial = bar({
+      xAxis: null,
+      yAxis: [],
+      geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: 'amount' },
+    });
+    expect(builderValidationIssue(spatial, 'geoscatter', TABLES)).toBeNull();
+
+    const normalized = normalizeBuilderForChartType({ ...spatial, xAxis: 'amount', orderBy: { target: 'x', direction: 'asc' } }, 'geoscatter');
+    expect(normalized).toMatchObject({ xAxis: null, yAxis: [], orderBy: null, sample: null, geoPoint: spatial.geoPoint });
+
+    expect(builderValidationIssue({ ...spatial, geoPoint: { mode: 'spatial', spatialColumn: 'service_area' } }, 'geoscatter', TABLES))
+      .toBe('지도 포인트 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.');
+    expect(builderValidationIssue({ ...spatial, geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: 'category' } }, 'geoscatter', TABLES))
+      .toBe('지도 포인트의 크기값 컬럼은 숫자여야 합니다.');
+
+    const crossSource = {
+      ...spatial,
+      joins: [{ table: users2Ref, type: 'left' as const, on: { leftColumn: 'sales.customer_id', rightColumn: 'users.id' } }],
+      geoPoint: { mode: 'spatial' as const, spatialColumn: 'sales.location', sizeColumn: 'sales.amount' },
+    };
+    expect(builderValidationIssue(crossSource, 'geoscatter', TABLES))
+      .toBe('공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.');
   });
 });

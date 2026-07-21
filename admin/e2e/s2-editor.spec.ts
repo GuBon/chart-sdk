@@ -2,18 +2,21 @@ import { test, expect } from '@playwright/test';
 
 // S2-a 레이아웃 골격 + S2-b 스키마 탐색기 동작 검증.
 test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
-  test('신규 진입 시 편집 헤더·정의모드 탭이 보인다', async ({ page }) => {
+  test('신규 진입 시 편집 헤더와 노코드 구성 내부의 정의모드 탭이 보인다', async ({ page }) => {
     await page.goto('/charts/new');
 
     // Top Bar
-    await expect(page.getByRole('button', { name: '목록' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '목록', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '저장' })).toBeVisible();
     await expect(page.getByRole('button', { name: '임베드 코드' })).toBeDisabled();
     await expect(page.getByPlaceholder('차트 이름')).toBeVisible();
 
-    // 정의 모드 탭
-    await expect(page.getByText('노코드', { exact: true })).toBeVisible();
-    await expect(page.getByText('준비 중')).toBeVisible();
+    // 정의 모드 탭은 전역 헤더가 아니라 노코드 구성 패널 안에 위치한다.
+    const builderWorkspace = page.getByTestId('data-builder-workspace');
+    const defineModeTabs = builderWorkspace.getByRole('tablist', { name: '차트 정의 방식' });
+    await expect(defineModeTabs).toBeVisible();
+    await expect(defineModeTabs.getByRole('tab', { name: '노코드' })).toHaveAttribute('aria-selected', 'true');
+    await expect(defineModeTabs.getByRole('tab', { name: /SQL/ })).toBeDisabled();
 
     // 테이블 목록과 차트 미리보기·옵션 패널의 기본 폭
     const sidePanels = page.locator('aside');
@@ -28,6 +31,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     });
 
     await page.goto('/charts/12');
+
+    await expect(page).toHaveURL('/tables/2/public/sales/charts/12');
 
     const sidePanels = page.locator('aside');
     await expect(sidePanels.last().locator('canvas')).toBeVisible();
@@ -130,6 +135,69 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // 대분류 전환(막대→원형) 후에도 미리보기 유지
     await page.getByRole('button', { name: '원형', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('논리 크기별 미리보기와 패널별 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
+    await page.goto('/charts/12');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+
+    const designCanvas = page.getByTestId('chart-design-canvas');
+    await expect(designCanvas).toHaveAttribute('data-design-width', '640');
+    await expect(designCanvas).toHaveAttribute('data-design-height', '360');
+
+    await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('fhd');
+    await expect(designCanvas).toHaveAttribute('data-design-width', '1920');
+    await expect(designCanvas).toHaveAttribute('data-design-height', '1080');
+
+    await expect(page.getByRole('button', { name: /영역 확대/ })).toHaveCount(0);
+
+    await page.getByRole('button', { name: '데이터 패널 접기' }).click();
+    await expect(page.getByTestId('schema-sidebar')).toHaveCount(0);
+    await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
+    const dataRail = page.getByTestId('schema-sidebar-rail');
+    await expect(dataRail).toBeVisible();
+
+    await page.getByRole('button', { name: '노코드 구성·결과 접기' }).click();
+    await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
+    const builderRail = page.getByTestId('data-builder-workspace-rail');
+    await expect(builderRail).toBeVisible();
+    const expandedBox = await page.getByTestId('visual-editor-workspace').boundingBox();
+    const dataRailBox = await dataRail.boundingBox();
+    const builderRailBox = await builderRail.boundingBox();
+    expect(dataRailBox?.x).toBeLessThan(builderRailBox?.x ?? 0);
+    expect(builderRailBox?.x).toBeLessThan(expandedBox?.x ?? 0);
+    expect(expandedBox?.width).toBeGreaterThanOrEqual(1200);
+    await expect(page.getByRole('button', { name: '너비 맞춤' })).toBeVisible();
+
+    await page.getByRole('button', { name: '시각화 옵션 접기' }).click();
+    await expect(page.getByTestId('visual-option-editor')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 펼치기' })).toBeVisible();
+
+    const focusPreviewButton = page.getByRole('button', { name: '전체 화면', exact: true });
+    await focusPreviewButton.click();
+    const dialog = page.getByTestId('chart-focus-dialog');
+    await expect(dialog).toBeVisible();
+    const closeFocusPreview = dialog.getByRole('button', { name: '집중 미리보기 닫기' });
+    await expect(closeFocusPreview).toBeFocused();
+    await expect(dialog.getByTestId('chart-design-canvas')).toHaveAttribute('data-design-width', '1920');
+    await dialog.getByRole('button', { name: '100%' }).click();
+    await expect(dialog.getByTestId('chart-focus-viewport')).toHaveAttribute('data-fit-mode', 'actual');
+    await closeFocusPreview.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(focusPreviewButton).toBeFocused();
+
+    await page.reload();
+    await expect(page.getByTestId('schema-sidebar')).toHaveCount(0);
+    await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
+    await expect(page.getByTestId('visual-option-editor')).toHaveCount(0);
+    await expect(page.getByTestId('schema-sidebar-rail')).toBeVisible();
+    await expect(page.getByTestId('data-builder-workspace-rail')).toBeVisible();
+
+    await page.getByRole('button', { name: '데이터 패널 펼치기' }).click();
+    await expect(page.getByTestId('schema-sidebar')).toBeVisible();
+    await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
+    await page.getByRole('button', { name: '노코드 구성·결과 펼치기' }).click();
+    await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
   });
 
   test('팔레트 swatch 선택 후 RGB 사용자지정 값이 미리보기에 반영된다', async ({ page }) => {
@@ -447,7 +515,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
 
   test('미저장 변경 상태에서 목록 이동은 이탈확인 모달을 거친다', async ({ page }) => {
     await buildChart(page);
-    await page.getByRole('button', { name: '목록' }).click();
+    await page.getByRole('button', { name: '목록', exact: true }).click();
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeVisible();
     await page.getByRole('button', { name: '계속 편집' }).click();
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeHidden();
@@ -604,7 +672,7 @@ test.describe('S2 이탈 모달·옵션 검색', () => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
     await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
-    await page.getByRole('button', { name: '목록' }).click();
+    await page.getByRole('button', { name: '목록', exact: true }).click();
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeVisible();
     await page.getByRole('button', { name: '저장 안 함' }).click();
     await expect(page.getByText('새 차트 만들기')).toBeVisible(); // 목록 도착
@@ -616,13 +684,13 @@ test.describe('S2 이탈 모달·옵션 검색', () => {
     await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
     await page.getByPlaceholder('차트 이름').fill('이탈저장차트');
     // 미실행 → 저장 후 나가기 비활성
-    await page.getByRole('button', { name: '목록' }).click();
+    await page.getByRole('button', { name: '목록', exact: true }).click();
     await expect(page.getByRole('button', { name: '저장 후 나가기' })).toBeDisabled();
     await page.getByRole('button', { name: '계속 편집' }).click();
     // 실행 후 → 저장 후 나가기 활성 → 저장 + 이동
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByText('의류')).toBeVisible();
-    await page.getByRole('button', { name: '목록' }).click();
+    await page.getByRole('button', { name: '목록', exact: true }).click();
     await page.getByRole('button', { name: '저장 후 나가기' }).click();
     await expect(page.getByText('이탈저장차트', { exact: true })).toBeVisible();
   });
@@ -797,6 +865,37 @@ test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
     await page.getByRole('combobox', { name: 'X축' }).selectOption('amount');
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('PostGIS Point 컬럼과 크기값을 선택하면 실제 좌표 표본으로 지도 포인트가 렌더된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await page.locator('aside').first().getByRole('button', { name: 'sales public' }).click();
+    await page.getByRole('button', { name: '지도 포인트', exact: true }).click();
+
+    await page.getByRole('combobox', { name: '좌표 방식' }).selectOption('spatial');
+    await expect(page.getByRole('combobox', { name: '공간 Point 컬럼' })).toHaveValue('location');
+    await page.getByRole('combobox', { name: '점 크기 컬럼' }).selectOption('amount');
+
+    const requestPromise = page.waitForRequest((request) =>
+      request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    const request = await requestPromise;
+    expect(request.postDataJSON().builderConfig.geoPoint).toEqual({
+      mode: 'spatial',
+      spatialColumn: 'location',
+      sizeColumn: 'amount',
+    });
+
+    await expect(page.getByRole('columnheader', { name: '__chartsdk_longitude' })).toBeVisible();
+    await expect(page.getByText('126.978')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+
+    await page.getByText('생성된 SQL 보기').click();
+    const sql = page.locator('pre');
+    await expect(sql).toContainText('ST_X(ST_Transform');
+    await expect(sql).toContainText('ST_Y(ST_Transform');
+    await expect(sql).not.toContainText('LIMIT 1000');
   });
 
   test('지도 유형에서 지도 단위를 시군구로 바꿔도 미리보기가 렌더된다', async ({ page }) => {
