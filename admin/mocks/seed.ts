@@ -1,6 +1,12 @@
 // 개발용 시드 데이터 — S1 화면(183:16)의 카드 구성과 일치시킨다.
 import type { Chart, ChartSummary, Datasource, SchemaTable, User, UserToken } from '@/lib/api/types';
 
+const DATASOURCE_NAMES: Record<number, string> = {
+  1: 'analytics-db',
+  2: 'sales-db',
+  3: 'legacy-dw',
+};
+
 export const charts: ChartSummary[] = ([
   // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
   { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-10T09:30:00Z' },
@@ -20,13 +26,18 @@ export const charts: ChartSummary[] = ([
   { id: 24, name: '월별 순이익', description: '월별 순이익 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-05-05T09:00:00Z' },
 ] satisfies Array<Omit<ChartSummary, 'mainTable'>>).map((chart) => ({
   ...chart,
-  mainTable: { datasourceId: chart.datasourceId, schema: 'public', name: 'sales' },
+  mainTable: {
+    datasourceId: chart.datasourceId,
+    datasourceName: DATASOURCE_NAMES[chart.datasourceId],
+    schema: 'public',
+    name: 'sales',
+  },
 }));
 
 export const datasources: Datasource[] = [
-  { id: 1, name: 'analytics-db', host: 'db.internal', port: 5432, databaseName: 'analytics', dbUser: 'reader', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: true },
-  { id: 2, name: 'sales-db', host: '10.0.3.21', port: 5432, databaseName: 'sales', dbUser: 'readonly', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: true },
-  { id: 3, name: 'legacy-dw', host: '10.0.7.8', port: 5433, databaseName: 'warehouse', dbUser: 'dw', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: false },
+  { id: 1, name: DATASOURCE_NAMES[1], host: 'db.internal', port: 5432, databaseName: 'analytics', dbUser: 'reader', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: true },
+  { id: 2, name: DATASOURCE_NAMES[2], host: '10.0.3.21', port: 5432, databaseName: 'sales', dbUser: 'readonly', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: true },
+  { id: 3, name: DATASOURCE_NAMES[3], host: '10.0.7.8', port: 5433, databaseName: 'warehouse', dbUser: 'dw', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: false },
 ];
 
 /** 삭제 시 영향받는 차트 수(409 경고용 목 데이터) */

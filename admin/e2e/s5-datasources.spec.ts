@@ -22,12 +22,12 @@ test.describe('S5 데이터소스 관리', () => {
     await page.goto('/datasources');
 
     await page.getByRole('link', { name: 'analytics-db' }).click();
-    await expect(page).toHaveURL('/data/1');
+    await expect(page).toHaveURL('/data/analytics-db');
     await expect(page.getByRole('heading', { name: 'analytics-db' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '이 데이터소스를 사용하는 차트' })).toBeVisible();
 
     await page.getByRole('link', { name: 'public' }).click();
-    await expect(page).toHaveURL('/data/1/public');
+    await expect(page).toHaveURL('/data/analytics-db/public');
     const search = page.getByRole('textbox', { name: '관계 검색' });
     await search.fill('users');
     await expect(page.getByRole('link', { name: 'users' })).toBeVisible();
@@ -35,13 +35,13 @@ test.describe('S5 데이터소스 관리', () => {
     await search.clear();
 
     await page.getByRole('link', { name: 'sales' }).click();
-    await expect(page).toHaveURL('/data/1/public/sales');
+    await expect(page).toHaveURL('/data/analytics-db/public/sales');
     await expect(page.getByRole('heading', { name: 'sales', exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '컬럼명' })).toBeVisible();
     const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
     await expect(visitorChart).toBeVisible();
     await expect(visitorChart.getByRole('link', { name: '편집' }))
-      .toHaveAttribute('href', '/data/1/public/sales/13');
+      .toHaveAttribute('href', '/data/analytics-db/public/sales/13');
   });
 
   test('추가 모달은 생성 시 비밀번호를 요구하고 저장 후 목록에 반영한다', async ({ page }) => {
@@ -89,7 +89,8 @@ test.describe('S5 데이터소스 관리', () => {
 
     await dialog.getByPlaceholder('analytics-db').fill('analytics-db-2');
     await dialog.getByRole('button', { name: '저장' }).click();
-    await expect(page.getByText('analytics-db-2')).toBeVisible();
+    const renamedDatasource = page.getByRole('link', { name: 'analytics-db-2' });
+    await expect(renamedDatasource).toHaveAttribute('href', '/data/analytics-db-2');
   });
 
   test('수정 시 비밀번호를 비우면 PUT 요청에 dbPassword가 없다', async ({ page }) => {

@@ -177,7 +177,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           setChartType(c.chartType);
           setOptions({ ...defaultsFor(c.chartType), ...c.options });
           setGeneratedSql(c.sqlQuery || null);
-          const canonicalPath = chartEditPath(c.id, restoredBuilder.table);
+          const canonicalPath = chartEditPath(c.id, c.mainTable);
           replaceEditorPath(canonicalPath);
         } else {
           setToast('차트를 불러오지 못했습니다.');
@@ -363,10 +363,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       if (savedId == null) {
         const created = await chartsApi.create(input);
         setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
-        replaceEditorPath(chartEditPath(created.id, builder.table));
+        replaceEditorPath(chartEditPath(created.id, created.mainTable));
       } else {
-        await chartsApi.update(savedId, input);
-        replaceEditorPath(chartEditPath(savedId, builder.table));
+        const updated = await chartsApi.update(savedId, input);
+        replaceEditorPath(chartEditPath(savedId, updated.mainTable));
       }
       setDirty(false);
       setToast('저장되었습니다');

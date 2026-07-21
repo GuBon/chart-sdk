@@ -5,7 +5,7 @@ import type { Datasource } from '@/lib/api/types';
 import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
 import type { User, UserToken } from '@/lib/api';
 import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildTablePreview } from './mockTransform';
-import type { BuilderConfig, ChartType } from '@/lib/api';
+import type { BuilderConfig, ChartMainTable, ChartType, TableRef } from '@/lib/api';
 import { builderValidationIssue } from '@/lib/builder';
 
 // 쓰기 가능한 가변 상태(세션 한정)
@@ -26,6 +26,22 @@ function chartUsesDatasource(chartId: number, primaryDatasourceId: number, datas
   if (primaryDatasourceId === datasourceId) return true;
   const saved = savedCharts[chartId] as { builderConfig?: BuilderConfig } | undefined;
   return saved?.builderConfig?.joins?.some((join) => join.table.datasourceId === datasourceId) ?? false;
+}
+
+function mainTableResponse(value: unknown, fallbackDatasourceId: number): ChartMainTable | null {
+  if (!value || typeof value !== 'object') return null;
+  const table = value as Partial<TableRef>;
+  if (!table.name) return null;
+  const datasourceId = Number(table.datasourceId) || fallbackDatasourceId;
+  const datasourceName = datasources.find((item) => item.id === datasourceId)?.name;
+  if (!datasourceName) return null;
+  return {
+    datasourceId,
+    datasourceName,
+    schema: table.schema || 'public',
+    name: table.name,
+    ...(table.handle ? { handle: table.handle } : {}),
+  };
 }
 
 export const handlers = [
@@ -155,10 +171,12 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
     const id = nextChartId++;
-    const chart = { id, ...body, createdAt: now, updatedAt: now };
-    savedCharts[id] = chart;
     const builderConfig = body.builderConfig as { table?: unknown } | undefined;
-    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId: Number(body.datasourceId) || 1, mainTable: (builderConfig?.table as never) ?? null, updatedAt: now }, ...chartList];
+    const datasourceId = Number(body.datasourceId) || 1;
+    const mainTable = mainTableResponse(builderConfig?.table, datasourceId);
+    const chart = { id, ...body, mainTable, createdAt: now, updatedAt: now };
+    savedCharts[id] = chart;
+    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId, mainTable, updatedAt: now }, ...chartList];
     return HttpResponse.json(chart, { status: 201 });
   }),
   http.put('/api/v1/charts/:id', async ({ params, request }) => {
@@ -166,10 +184,13 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
     const prev = savedCharts[id] as { createdAt?: string } | undefined;
-    const chart = { id, ...body, createdAt: prev?.createdAt ?? now, updatedAt: now };
-    savedCharts[id] = chart;
     const builderConfig = body.builderConfig as { table?: unknown } | undefined;
-    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId: Number(body.datasourceId) || c.datasourceId, mainTable: (builderConfig?.table as never) ?? c.mainTable ?? null, updatedAt: now } : c));
+    const current = chartList.find((item) => item.id === id);
+    const datasourceId = Number(body.datasourceId) || current?.datasourceId || 1;
+    const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable ?? null;
+    const chart = { id, ...body, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
+    savedCharts[id] = chart;
+    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId, mainTable, updatedAt: now } : c));
     return HttpResponse.json(chart);
   }),
 
@@ -199,6 +220,16 @@ export const handlers = [
     const idx = datasources.findIndex((d) => d.id === id);
     if (idx < 0) return err(404, 'NOT_FOUND', '데이터소스를 찾을 수 없습니다.');
     datasources[idx] = { ...datasources[idx], ...body, id };
+    const nextName = datasources[idx].name;
+    chartList = chartList.map((chart) => chart.mainTable?.datasourceId === id
+      ? { ...chart, mainTable: { ...chart.mainTable, datasourceName: nextName } }
+      : chart);
+    for (const [chartId, saved] of Object.entries(savedCharts)) {
+      const mainTable = saved.mainTable as ChartMainTable | null | undefined;
+      if (mainTable?.datasourceId === id) {
+        savedCharts[Number(chartId)] = { ...saved, mainTable: { ...mainTable, datasourceName: nextName } };
+      }
+    }
     return HttpResponse.json(datasources[idx]);
   }),
 

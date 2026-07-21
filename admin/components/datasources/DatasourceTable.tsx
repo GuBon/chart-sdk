@@ -41,7 +41,7 @@ export function DatasourceTable({ datasources, testingId, onTest, onEdit, onDele
           {datasources.map((ds) => (
             <tr key={ds.id} className="h-[52px] border-t border-border">
               <td className="truncate pl-5 text-[13px] font-medium" title={ds.name}>
-                <Link href={dataSourcePath(ds.id)} className="text-text-primary hover:text-primary hover:underline">{ds.name}</Link>
+                <Link href={dataSourcePath(ds.name)} className="text-text-primary hover:text-primary hover:underline">{ds.name}</Link>
               </td>
               <td className="truncate text-[13px] text-text-secondary" title={`${ds.host} : ${ds.port}`}>
                 {ds.host} : {ds.port}

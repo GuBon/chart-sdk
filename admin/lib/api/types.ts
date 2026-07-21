@@ -62,6 +62,11 @@ export interface TableRef {
   handle?: string;
 }
 
+/** 차트 응답의 기준 관계. URL 생성용 현재 데이터소스 이름은 저장 정의가 아닌 읽기 모델에만 포함한다. */
+export interface ChartMainTable extends TableRef {
+  datasourceName: string;
+}
+
 export type JoinType = 'inner' | 'left';
 /** 테이블 조인 (생성규칙 11장). N개 체인 — 각 on.leftColumn 은 base 또는 앞서 조인된 테이블의 qualified 컬럼. */
 export interface JoinSpec {
@@ -92,7 +97,7 @@ export interface ChartSummary {
   chartType: ChartType;
   datasourceId: number;
   /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 관계별 차트 목록에 사용한다. */
-  mainTable?: TableRef | null;
+  mainTable?: ChartMainTable | null;
   updatedAt: string;
 }
 
@@ -123,7 +128,7 @@ export interface Chart {
   name: string;
   description: string | null;
   datasourceId: number;
-  mainTable?: TableRef | null; // builderConfig.table 파생 응답. 저장 입력에서는 생략한다.
+  mainTable?: ChartMainTable | null; // builderConfig.table + 현재 데이터소스 이름에서 파생한 읽기 전용 응답.
   defineMode: DefineMode;
   sqlQuery: string;
   builderConfig: BuilderConfig;
@@ -135,7 +140,7 @@ export interface Chart {
   updatedAt: string;
 }
 
-export type ChartInput = Omit<Chart, 'id' | 'createdAt' | 'updatedAt'>;
+export type ChartInput = Omit<Chart, 'id' | 'mainTable' | 'createdAt' | 'updatedAt'>;
 
 /** 데이터소스 — 비밀번호는 응답에 절대 포함되지 않는다 */
 export interface Datasource {

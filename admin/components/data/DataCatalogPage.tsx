@@ -19,36 +19,50 @@ import { isRelationSelectable, relationBadgeLabel, relationTypeLabel } from '@/l
 
 const PAGE_SIZE = 12;
 interface Props {
-  datasourceId: number;
+  datasourceName: string;
   schema?: string;
   relation?: string;
 }
 
-export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
-  const [datasource, setDatasource] = useState<Datasource | null | undefined>(undefined);
+export function DataCatalogPage({ datasourceName, schema, relation }: Props) {
+  const [datasources, setDatasources] = useState<Datasource[] | null>(null);
   const [relations, setRelations] = useState<SchemaTable[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [relationQuery, setRelationQuery] = useState('');
 
   useEffect(() => {
     let alive = true;
-    setDatasource(undefined);
+    setDatasources(null);
     setRelations(null);
     setError(null);
-    void Promise.all([datasourcesApi.list(), schemaApi.tables(datasourceId)])
-      .then(([datasources, tables]) => {
+    void datasourcesApi.list()
+      .then(async (items) => {
         if (!alive) return;
-        setDatasource(datasources.find((item) => item.id === datasourceId) ?? null);
-        setRelations(tables);
+        setDatasources(items);
+        const selected = items.find((item) => item.name === datasourceName);
+        if (!selected) {
+          setRelations([]);
+          return;
+        }
+        try {
+          const tables = await schemaApi.tables(selected.id);
+          if (alive) setRelations(tables);
+        } catch {
+          if (!alive) return;
+          setRelations([]);
+          setError('데이터 정보를 불러오지 못했습니다.');
+        }
       })
       .catch(() => {
         if (!alive) return;
-        setDatasource(null);
+        setDatasources([]);
         setRelations([]);
         setError('데이터 정보를 불러오지 못했습니다.');
       });
     return () => { alive = false; };
-  }, [datasourceId]);
+  }, [datasourceName]);
+
+  const datasource = datasources?.find((item) => item.name === datasourceName) ?? null;
 
   const schemas = useMemo(() => {
     const counts = new Map<string, number>();
@@ -68,7 +82,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
     return schemaRelations.filter((item) => item.name.toLocaleLowerCase('ko').includes(query));
   }, [relationQuery, schemaRelations]);
 
-  if (datasource === undefined || relations === null) {
+  if (datasources === null || relations === null) {
     return <div className="py-24 text-center text-sm text-text-tertiary">데이터 탐색 정보를 불러오는 중…</div>;
   }
   if (datasource === null) {
@@ -77,7 +91,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
         className="py-24"
         icon={<Database className="size-8 text-text-tertiary" />}
         title="데이터소스를 찾을 수 없습니다"
-        description={error ?? `데이터소스 #${datasourceId}가 존재하지 않습니다.`}
+        description={error ?? `데이터소스 '${datasourceName}'이(가) 존재하지 않습니다.`}
         action={<Link href="/datasources" className="text-[13px] text-primary hover:underline">데이터소스 목록으로</Link>}
       />
     );
@@ -86,6 +100,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
   return (
     <div className="mx-auto w-full max-w-[1240px]">
       <DataBreadcrumb datasource={datasource} schema={schema} relation={relation} />
+      {error && <p className="mb-4 text-[13px] text-danger">{error}</p>}
 
       {schema == null ? (
         <>
@@ -101,7 +116,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
             ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                 {schemas.map(([name, count]) => (
-                  <Link key={name} href={dataSchemaPath(datasourceId, name)} className="flex items-center gap-3 rounded-[10px] border border-border bg-bg-panel p-4 transition-colors hover:border-text-tertiary">
+                  <Link key={name} href={dataSchemaPath(datasource.name, name)} className="flex items-center gap-3 rounded-[10px] border border-border bg-bg-panel p-4 transition-colors hover:border-text-tertiary">
                     <Layers3 className="size-5 text-text-tertiary" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-text-primary">{name}</p>
@@ -113,7 +128,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
               </div>
             )}
           </section>
-          <ScopedChartGrid datasourceId={datasourceId} title="이 데이터소스를 사용하는 차트" />
+          <ScopedChartGrid datasourceId={datasource.id} title="이 데이터소스를 사용하는 차트" />
         </>
       ) : relation == null ? (
         <>
@@ -155,7 +170,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
                   {visibleSchemaRelations.map((item) => (
                     <tr key={item.name} className="h-[52px] border-t border-border text-[13px]">
                       <td className="pl-5 font-medium">
-                        <Link href={dataRelationPath(item)} className="text-text-primary hover:text-primary hover:underline">{item.name}</Link>
+                        <Link href={dataRelationPath({ datasourceName: datasource.name, schema: item.schema, name: item.name })} className="text-text-primary hover:text-primary hover:underline">{item.name}</Link>
                       </td>
                       <td><RelationBadge type={item.relationType} populated={item.populated} /></td>
                       <td className="text-text-secondary">{item.columns.length}개</td>
@@ -173,7 +188,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
           icon={<Database className="size-8 text-text-tertiary" />}
           title="관계를 찾을 수 없습니다"
           description={`${schema}.${relation}이 현재 카탈로그에 없습니다.`}
-          action={<Link href={dataSchemaPath(datasourceId, schema)} className="text-[13px] text-primary hover:underline">관계 목록으로</Link>}
+          action={<Link href={dataSchemaPath(datasource.name, schema)} className="text-[13px] text-primary hover:underline">관계 목록으로</Link>}
         />
       ) : (
         <>
@@ -203,7 +218,7 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
               </table>
             </div>
           </section>
-          <ScopedChartGrid datasourceId={datasourceId} schema={schema} relation={relation} title="이 관계를 기준으로 만든 차트" />
+          <ScopedChartGrid datasourceId={datasource.id} schema={schema} relation={relation} title="이 관계를 기준으로 만든 차트" />
         </>
       )}
     </div>
@@ -252,8 +267,8 @@ function DataBreadcrumb({ datasource, schema, relation }: { datasource: Datasour
     <nav aria-label="데이터 경로" className="mb-4 flex flex-wrap items-center gap-1.5 text-xs text-text-tertiary">
       <Link href="/datasources" className="hover:text-text-primary">데이터소스</Link>
       <ChevronRight className="size-3" />
-      {schema == null ? <span className="text-text-secondary">{datasource.name}</span> : <Link href={dataSourcePath(datasource.id)} className="hover:text-text-primary">{datasource.name}</Link>}
-      {schema != null && <><ChevronRight className="size-3" />{relation == null ? <span className="text-text-secondary">{schema}</span> : <Link href={dataSchemaPath(datasource.id, schema)} className="hover:text-text-primary">{schema}</Link>}</>}
+      {schema == null ? <span className="text-text-secondary">{datasource.name}</span> : <Link href={dataSourcePath(datasource.name)} className="hover:text-text-primary">{datasource.name}</Link>}
+      {schema != null && <><ChevronRight className="size-3" />{relation == null ? <span className="text-text-secondary">{schema}</span> : <Link href={dataSchemaPath(datasource.name, schema)} className="hover:text-text-primary">{schema}</Link>}</>}
       {relation != null && <><ChevronRight className="size-3" /><span className="text-text-secondary">{relation}</span></>}
     </nav>
   );
