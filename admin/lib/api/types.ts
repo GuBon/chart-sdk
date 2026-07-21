@@ -44,6 +44,13 @@ export interface SampleConfig {
   seed?: number; // legacy 미지정은 공용 기본 seed로 승격
 }
 
+/** 지도 포인트 좌표 입력. 미지정/columns는 기존 경도·위도 컬럼 방식이다. */
+export interface GeoPointConfig {
+  mode: 'columns' | 'spatial';
+  spatialColumn?: string | null; // PostGIS geometry/geography(Point, SRID)
+  sizeColumn?: string | null; // 공간 컬럼 모드의 선택적 점 크기 숫자 컬럼
+}
+
 /**
  * 소스·스키마 한정 테이블 참조(다중 데이터소스 페더레이션). 백엔드 §12.3 과 1:1 — 컬럼 참조는 "handle.col" 문자열.
  * handle: 한 차트 내 이 테이블의 유일 식별자. 기본은 name, 서로 다른 소스/스키마의 동명 테이블이 겹칠 때만 접미(users_2)로 구분.
@@ -74,6 +81,7 @@ export interface BuilderConfig {
   orderBy: OrderBy | null;
   limit?: number;
   sample?: SampleConfig | null; // 집계 모드 전용. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
+  geoPoint?: GeoPointConfig; // geoscatter 전용. 미지정은 레거시 경도(X)+위도(Y) 방식.
 }
 
 /** S1 목록 카드 */
@@ -83,6 +91,8 @@ export interface ChartSummary {
   description: string | null;
   chartType: ChartType;
   datasourceId: number;
+  /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 향후 테이블별 차트 목록에 사용한다. */
+  mainTable?: TableRef | null;
   updatedAt: string;
 }
 
@@ -111,6 +121,7 @@ export interface Chart {
   name: string;
   description: string | null;
   datasourceId: number;
+  mainTable?: TableRef | null; // builderConfig.table 파생 응답. 저장 입력에서는 생략한다.
   defineMode: DefineMode;
   sqlQuery: string;
   builderConfig: BuilderConfig;

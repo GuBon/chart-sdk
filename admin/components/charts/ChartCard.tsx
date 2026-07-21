@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { BarChart3, CandlestickChart, Grid3x3, LineChart, MapIcon, MapPin, PieChart, ScatterChart, Trash2 } from 'lucide-react';
 import type { ChartOptions, ChartSummary, ChartType } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { chartEditPath } from '@/lib/chartRoutes';
 
 // S1 차트 카드(183:29) — 썸네일 + 제목·배지·설명·#id·수정일 + 편집/임베드.
 import { MiniChart } from './MiniChart';
@@ -64,7 +65,7 @@ export function ChartCard({
           #{chart.id} · 수정 {formatDate(chart.updatedAt)}
         </p>
         <div className="flex gap-2">
-          <Link href={`/charts/${chart.id}`} className="flex-1">
+          <Link href={chartEditPath(chart.id, chart.mainTable)} className="flex-1">
             <Button variant="secondary" size="sm" className="h-7 w-full">
               편집
             </Button>
