@@ -26,6 +26,18 @@ export type Tier = 'T1' | 'T2' | 'T3';
 /** 활성 대분류 런타임 목록 (MajorType 의 단일 진실원 — 패널 그리드·기본값 생성·전환이 공유) */
 export const MAJOR_TYPES: MajorType[] = ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'];
 
+/** 대분류의 사용자 표시 이름·그룹. Admin 목록/카드/옵션 패널이 같은 라벨을 사용한다. */
+export const MAJOR_TYPE_CHOICES: { value: MajorType; label: string; group?: string }[] = [
+  { value: 'bar', label: '막대' },
+  { value: 'line', label: '선' },
+  { value: 'pie', label: '원형' },
+  { value: 'scatter', label: '분포' },
+  { value: 'boxplot', label: '박스 플롯' },
+  { value: 'heatmap', label: '히트맵' },
+  { value: 'map', label: '지도', group: 'GEO' },
+  { value: 'geoscatter', label: '지도 포인트', group: 'GEO' },
+];
+
 /** 패널 컨트롤 종류 — 공통 컴포넌트(화면설계서 2.4)와 1:1 */
 export type Control =
   | 'iconGrid'   // 대분류 선택 (아이콘 4)
@@ -162,12 +174,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     key: 'chartType', zone: 'common', section: '기본', label: '대분류',
     control: 'iconGrid', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     storage: 'column', column: 'chart_type', default: 'bar', echarts: '@series.type',
-    choices: [
-      { value: 'bar', label: '막대' }, { value: 'line', label: '선' },
-      { value: 'pie', label: '원형' }, { value: 'scatter', label: '분포' },
-      { value: 'boxplot', label: '박스 플롯' }, { value: 'heatmap', label: '히트맵' },
-      { value: 'map', label: '지도', group: 'GEO' }, { value: 'geoscatter', label: '지도 포인트', group: 'GEO' },
-    ],
+    choices: MAJOR_TYPE_CHOICES,
     help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 옵션 패널). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
   },
   {

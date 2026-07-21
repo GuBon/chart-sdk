@@ -1,24 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { BarChart3, CandlestickChart, Grid3x3, LineChart, MapIcon, MapPin, PieChart, ScatterChart, Trash2 } from 'lucide-react';
-import type { ChartOptions, ChartSummary, ChartType } from '@/lib/api';
+import { Trash2 } from 'lucide-react';
+import type { ChartOptions, ChartSummary } from '@/lib/api';
+import { CHART_TYPE_META } from '@/lib/chartTypes';
 import { Button } from '@/components/ui/Button';
 import { chartEditPath } from '@/lib/chartRoutes';
 
 // S1 차트 카드(183:29) — 썸네일 + 제목·배지·설명·#id·수정일 + 편집/임베드.
 import { MiniChart } from './MiniChart';
-
-const TYPE_META: Record<ChartType, { label: string; Icon: typeof BarChart3 }> = {
-  bar: { label: '막대', Icon: BarChart3 },
-  line: { label: '선', Icon: LineChart },
-  pie: { label: '원형', Icon: PieChart },
-  scatter: { label: '분포', Icon: ScatterChart },
-  boxplot: { label: '박스 플롯', Icon: CandlestickChart },
-  heatmap: { label: '히트맵', Icon: Grid3x3 },
-  map: { label: '지도', Icon: MapIcon },
-  geoscatter: { label: '지도 포인트', Icon: MapPin },
-};
 
 function formatDate(iso: string) {
   return iso.slice(0, 10);
@@ -35,7 +25,7 @@ export function ChartCard({
   onEmbed: (c: ChartSummary) => void;
   onDelete: (c: ChartSummary) => void;
 }) {
-  const { label, Icon } = TYPE_META[chart.chartType];
+  const { label, Icon } = CHART_TYPE_META[chart.chartType];
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-[10px] border border-border bg-bg-panel">
       <div className="h-[120px] bg-muted p-2">
