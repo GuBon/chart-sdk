@@ -16,11 +16,9 @@ import java.util.Map;
  */
 @Service
 public class ChartOptionConverter {
-    // 레이아웃 예약 높이(px) — 제목·범례·visualMap 이 같은 모서리에 쌓일 때 서로 겹치지 않도록 grid 여백을 가산한다.
-    // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않으므로(각자 독립 좌표) 조립자가 조정한다. mock 변환기와 값 일치 필수.
-    private static final int TITLE_H = 26;
-    private static final int LEGEND_H = 24;
-    private static final int VISUALMAP_H = 36;
+    // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않는다. 예약 높이는 사용자 글꼴 크기에서 계산하며 mock과 수식이 같아야 한다.
+    private record Typography(int title, int legend, int axis, int dataLabel, int tooltip) {}
+    private record LayoutMetrics(int titleHeight, int legendHeight, int visualMapHeight) {}
 
     private final OptionDefaults defaults;
 
@@ -95,6 +93,7 @@ public class ChartOptionConverter {
         t.put("text", title);
         t.put("left", string(opt.get("titleH"), "center"));
         t.put("top", string(opt.get("titleV"), "top"));
+        t.put("textStyle", Map.of("fontSize", typography(opt).title()));
         o.put("title", t);
     }
 
@@ -111,16 +110,19 @@ public class ChartOptionConverter {
         Map<String, Object> l = new LinkedHashMap<>();
         l.put("show", legend.getOrDefault("show", true));
         String position = string(legend.get("position"), "bottom");
+        Typography typography = typography(opt);
+        LayoutMetrics metrics = layoutMetrics(typography);
         // 제목이 같은 모서리(상/하)에 있으면 범례를 제목 다음 줄로 밀어 겹침 방지(규칙 1). 좌/우 범례는 제목과 축이 달라 무관.
         boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
         boolean titleBottom = titleAtBottom(opt);
         switch (position) {
-            case "top" -> { l.put("top", titleTop ? TITLE_H : 0); l.put("orient", "horizontal"); }
+            case "top" -> { l.put("top", titleTop ? metrics.titleHeight() : 0); l.put("orient", "horizontal"); }
             case "left" -> { l.put("left", 0); l.put("orient", "vertical"); }
             case "right" -> { l.put("right", 0); l.put("orient", "vertical"); }
-            default -> { l.put("bottom", titleBottom ? TITLE_H : 0); l.put("orient", "horizontal"); }
+            default -> { l.put("bottom", titleBottom ? metrics.titleHeight() : 0); l.put("orient", "horizontal"); }
         }
-        // 상·하 범례는 항상 scroll 로 단일행을 보장해야 LEGEND_H=24 예약 높이가 실제 레이아웃과 일치한다.
+        l.put("textStyle", Map.of("fontSize", typography.legend()));
+        // 상·하 범례는 항상 scroll로 단일행을 보장해야 계산한 범례 블록 높이와 실제 레이아웃이 일치한다.
         // 좌·우는 기존 T2 토글을 존중한다.
         boolean horizontal = "top".equals(position) || "bottom".equals(position);
         if (horizontal || Boolean.TRUE.equals(legend.get("scroll"))) l.put("type", "scroll");
@@ -138,6 +140,7 @@ public class ChartOptionConverter {
         if (axisPointer != null && !itemForced) t.put("axisPointer", Map.of("type", axisPointer));
         // 임베드 방어: 툴팁(HTML div)을 차트 컨테이너 안으로 제한 — 호스트의 overflow:hidden 클리핑·좌표 어긋남 차단.
         t.put("confine", true);
+        t.put("textStyle", Map.of("fontSize", typography(opt).tooltip()));
         o.put("tooltip", t);
     }
 
@@ -157,14 +160,15 @@ public class ChartOptionConverter {
 
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
+        int axisFontSize = typography(opt).axis();
         Map<String, Object> xAxis = new LinkedHashMap<>();
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("boundaryGap", true);
-        decorateAxis(xAxis, xCfg, true);
+        decorateAxis(xAxis, xCfg, true, axisFontSize);
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "log".equals(string(yCfg.get("scale"), "value")) ? "log" : "value");
-        decorateAxis(yAxis, yCfg, false);
+        decorateAxis(yAxis, yCfg, false, axisFontSize);
 
         applyGrid(o, opt);
         o.put("xAxis", xAxis);
@@ -207,23 +211,26 @@ public class ChartOptionConverter {
 
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
+        Typography typography = typography(opt);
+        LayoutMetrics metrics = layoutMetrics(typography);
         Map<String, Object> xAxis = new LinkedHashMap<>();
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("splitArea", Map.of("show", true));
-        decorateAxis(xAxis, xCfg, true);
+        decorateAxis(xAxis, xCfg, true, typography.axis());
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "category");
         yAxis.put("data", yNames);
         yAxis.put("splitArea", Map.of("show", true));
         String yTitle = string(yCfg.get("title"), "");
         if (!yTitle.isEmpty()) yAxis.put("name", yTitle);
+        applyAxisTypography(yAxis, typography.axis());
 
         Map<String, Object> grid = new LinkedHashMap<>(presetGrid(string(map(opt.get("grid")).get("preset"), "normal")));
         grid.put("containLabel", map(opt.get("grid")).getOrDefault("containLabel", true));
         applyMargins(grid, opt, false); // 제목만 가산(heatmap 은 범례 제거) — 규칙 2
-        // 하단 visualMap 공간 확보. visualMap 은 titleAtBottom 이면 이미 TITLE_H 만큼 올라가 있으므로 그 위에 쌓는다.
-        grid.put("bottom", ((Number) grid.get("bottom")).intValue() + VISUALMAP_H);
+        // 하단 visualMap 공간 확보. visualMap 은 하단 제목이 있으면 동적 제목 높이만큼 올라가 그 위에 쌓인다.
+        grid.put("bottom", ((Number) grid.get("bottom")).intValue() + metrics.visualMapHeight());
         o.remove("legend"); // heatmap 은 visualMap 이 범례 대체 (공통 zone 잔존 legend 제거)
         o.put("grid", grid);
         o.put("xAxis", xAxis);
@@ -234,7 +241,7 @@ public class ChartOptionConverter {
         s.put("type", "heatmap");
         s.put("name", "값");
         s.put("data", data);
-        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel"))));
+        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography.dataLabel()));
         o.put("series", List.of(s));
     }
 
@@ -261,7 +268,7 @@ public class ChartOptionConverter {
         s.put("type", "map");
         s.put("map", mapName(opt));
         s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
-        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel"))));
+        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography(opt).dataLabel()));
         applyLabelLayout(s, opt);
         s.put("emphasis", Map.of("label", Map.of("show", true)));
         s.put("data", data);
@@ -330,6 +337,8 @@ public class ChartOptionConverter {
     /** heatmap·map 공용 연속 visualMap — 팔레트[0]을 고강도색으로. */
     private Map<String, Object> visualMap(double min, double max, Map<String, Object> opt) {
         Object top = ColorResolver.paletteColor(opt, 0);
+        Typography typography = typography(opt);
+        LayoutMetrics metrics = layoutMetrics(typography);
         Map<String, Object> vm = new LinkedHashMap<>();
         vm.put("min", min);
         vm.put("max", max);
@@ -337,7 +346,8 @@ public class ChartOptionConverter {
         vm.put("orient", "horizontal");
         vm.put("left", "center");
         // 제목이 하단이면 visualMap 을 제목 위로 올려 겹침 방지(규칙 1의 map/heatmap 변형).
-        vm.put("bottom", titleAtBottom(opt) ? TITLE_H : 0);
+        vm.put("bottom", titleAtBottom(opt) ? metrics.titleHeight() : 0);
+        vm.put("textStyle", Map.of("fontSize", typography.legend()));
         vm.put("inRange", Map.of("color", List.of("#f7f7f7", top != null ? top : "#5470C6")));
         return vm;
     }
@@ -378,20 +388,21 @@ public class ChartOptionConverter {
         };
     }
 
-    /** grid 의 top/bottom 에 제목(TITLE_H)·범례(LEGEND_H) 예약 높이를 같은 모서리별로 가산한다.
+    /** grid 의 top/bottom 에 글꼴에서 계산한 제목·범례 예약 높이를 같은 모서리별로 가산한다.
      *  includeLegend=false 는 범례를 제거하는 유형(heatmap 등)에서 범례 가산을 건너뛸 때. */
     private void applyMargins(Map<String, Object> g, Map<String, Object> opt, boolean includeLegend) {
         int top = ((Number) g.get("top")).intValue();
         int bottom = ((Number) g.get("bottom")).intValue();
+        LayoutMetrics metrics = layoutMetrics(typography(opt));
         boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
-        if (titleTop) top += TITLE_H;
-        if (titleAtBottom(opt)) bottom += TITLE_H;
+        if (titleTop) top += metrics.titleHeight();
+        if (titleAtBottom(opt)) bottom += metrics.titleHeight();
         if (includeLegend) {
             Map<String, Object> legend = map(opt.get("legend"));
             boolean shown = !legend.isEmpty() && !Boolean.FALSE.equals(legend.get("show"));
             String pos = string(legend.get("position"), "bottom");
-            if (shown && "top".equals(pos)) top += LEGEND_H;
-            if (shown && "bottom".equals(pos)) bottom += LEGEND_H;
+            if (shown && "top".equals(pos)) top += metrics.legendHeight();
+            if (shown && "bottom".equals(pos)) bottom += metrics.legendHeight();
         }
         g.put("top", top);
         g.put("bottom", bottom);
@@ -400,6 +411,7 @@ public class ChartOptionConverter {
     private void applyAxes(Map<String, Object> o, Map<String, Object> opt, boolean scatter, boolean horizontal, List<Object> categories) {
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
+        int axisFontSize = typography(opt).axis();
 
         Map<String, Object> categoryAxis = new LinkedHashMap<>();
         categoryAxis.put("type", "category");
@@ -412,15 +424,15 @@ public class ChartOptionConverter {
             // 분포: X·Y 모두 수치축, data 없음. (데이터는 [x,y] 쌍)
             Map<String, Object> x = new LinkedHashMap<>();
             x.put("type", "log".equals(string(xCfg.get("scale"), "value")) ? "log" : "value");
-            decorateAxis(x, xCfg, true);
-            decorateAxis(valueAxis, yCfg, false);
+            decorateAxis(x, xCfg, true, axisFontSize);
+            decorateAxis(valueAxis, yCfg, false, axisFontSize);
             o.put("xAxis", x);
             o.put("yAxis", valueAxis);
             return;
         }
 
-        decorateAxis(categoryAxis, xCfg, true);
-        decorateAxis(valueAxis, yCfg, false);
+        decorateAxis(categoryAxis, xCfg, true, axisFontSize);
+        decorateAxis(valueAxis, yCfg, false, axisFontSize);
 
         if (horizontal) {
             o.put("xAxis", valueAxis);
@@ -438,7 +450,7 @@ public class ChartOptionConverter {
     }
 
     /** 축 공통 장식: name, rotate(카테고리), splitLine, min/max(수동), 단위 포맷터. */
-    private void decorateAxis(Map<String, Object> axis, Map<String, Object> cfg, boolean isX) {
+    private void decorateAxis(Map<String, Object> axis, Map<String, Object> cfg, boolean isX, int fontSize) {
         String title = string(cfg.get("title"), "");
         if (!title.isEmpty()) axis.put("name", title);
         if (cfg.containsKey("splitLine")) axis.put("splitLine", Map.of("show", Boolean.TRUE.equals(cfg.get("splitLine"))));
@@ -457,6 +469,14 @@ public class ChartOptionConverter {
                 label.put("formatter", "{value}" + unit);
             }
         }
+        applyAxisTypography(axis, fontSize);
+    }
+
+    private void applyAxisTypography(Map<String, Object> axis, int fontSize) {
+        Map<String, Object> label = new LinkedHashMap<>(map(axis.get("axisLabel")));
+        label.put("fontSize", fontSize);
+        axis.put("axisLabel", label);
+        axis.put("nameTextStyle", Map.of("fontSize", fontSize));
     }
 
     // ── 시리즈 (직교) ────────────────────────────────────
@@ -540,6 +560,7 @@ public class ChartOptionConverter {
         if (Boolean.TRUE.equals(opt.get("dataLabel"))) {
             Map<String, Object> label = new LinkedHashMap<>();
             label.put("show", true);
+            label.put("fontSize", typography(opt).dataLabel());
             String position = string(opt.get("labelPosition"), null);
             if (position != null) label.put("position", position);
             s.put("label", label);
@@ -605,6 +626,7 @@ public class ChartOptionConverter {
 
         Map<String, Object> label = new LinkedHashMap<>();
         label.put("show", Boolean.TRUE.equals(opt.get("dataLabel")) || !"basic".equals(variant) || pieCfg.get("labelPosition") != null);
+        label.put("fontSize", typography(opt).dataLabel());
         putIfNotNull(label, "position", pieCfg.get("labelPosition"));
         s.put("label", label);
         putIfNotNull(s, "startAngle", pieCfg.get("startAngle"));
@@ -631,6 +653,63 @@ public class ChartOptionConverter {
             if (name.equals(columns.get(i).get("name"))) return i;
         }
         return -1;
+    }
+
+    // ── 논리 크기·글꼴·레이아웃 ────────────────────────────
+    /** chart-options/display.ts와 같은 계약. 자동 모드는 논리 캔버스 프리셋에 맞추고, 직접 지정은 요소별 px 값을 사용한다. */
+    private Typography typography(Map<String, Object> opt) {
+        Map<String, Object> display = map(opt.get("display"));
+        Map<String, Object> typography = map(opt.get("typography"));
+        String preset = string(display.get("preset"), "standard");
+        String mode = string(typography.get("mode"), "auto");
+        int scale = clampInt(number(typography.get("scale"), 100), 80, 150);
+
+        if ("custom".equals(mode)) {
+            return new Typography(
+                    clampInt(number(typography.get("titleFontSize"), 18), 10, 48),
+                    clampInt(number(typography.get("legendFontSize"), 12), 8, 32),
+                    clampInt(number(typography.get("axisFontSize"), 12), 8, 32),
+                    clampInt(number(typography.get("dataLabelFontSize"), 12), 8, 32),
+                    clampInt(number(typography.get("tooltipFontSize"), 12), 8, 32));
+        }
+
+        int titleBase;
+        int bodyBase;
+        switch (preset) {
+            case "small" -> { titleBase = 14; bodyBase = 10; }
+            case "large" -> { titleBase = 22; bodyBase = 14; }
+            case "hd" -> { titleBase = 24; bodyBase = 15; }
+            case "fhd" -> { titleBase = 26; bodyBase = 16; }
+            case "custom" -> {
+                int width = clampInt(number(display.get("width"), 640), 240, 3840);
+                double ratio = Math.max(0.78, Math.min(1.5, Math.sqrt(width / 640.0)));
+                titleBase = (int) Math.round(18 * ratio);
+                bodyBase = (int) Math.round(12 * ratio);
+            }
+            default -> { titleBase = 18; bodyBase = 12; }
+        }
+        int title = scaledFont(titleBase, scale, 10, 48);
+        int body = scaledFont(bodyBase, scale, 8, 32);
+        return new Typography(title, body, body, body, body);
+    }
+
+    /** 기본 640×360, 100%에서 26/24/36px가 되어 기존 차트 외형을 유지한다. */
+    private LayoutMetrics layoutMetrics(Typography typography) {
+        int titleHeight = (int) Math.ceil(typography.title() * 1.2) + 4;
+        int legendHeight = (int) Math.ceil(typography.legend() * 1.25) + 9;
+        return new LayoutMetrics(titleHeight, legendHeight, legendHeight + 12);
+    }
+
+    private int scaledFont(int base, int scale, int min, int max) {
+        return clampInt((int) Math.round(base * scale / 100.0), min, max);
+    }
+
+    private static int number(Object value, int fallback) {
+        return value instanceof Number n && Double.isFinite(n.doubleValue()) ? (int) Math.round(n.doubleValue()) : fallback;
+    }
+
+    private static int clampInt(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     // ── deep merge & 헬퍼 ────────────────────────────────
