@@ -41,7 +41,7 @@ test.describe('S5 데이터소스 관리', () => {
     const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
     await expect(visitorChart).toBeVisible();
     await expect(visitorChart.getByRole('link', { name: '편집' }))
-      .toHaveAttribute('href', '/data/1/public/sales/charts/13');
+      .toHaveAttribute('href', '/data/1/public/sales/13');
   });
 
   test('추가 모달은 생성 시 비밀번호를 요구하고 저장 후 목록에 반영한다', async ({ page }) => {
