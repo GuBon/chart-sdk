@@ -32,6 +32,7 @@ import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
+import { isRelationSelectable } from '@/lib/relations';
 
 // 표본 크기 입력 옆 안내 — 전체 추정 행수(reltuples)는 정확치가 아니라 "약 N행"으로 표기. 작으면 전량 정확 계산.
 function sampleTotalHint(estimatedRowCount?: number): string {
@@ -93,7 +94,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const sourceLabel = (t: SchemaTable) => `${dsName(t.datasourceId)} · ${tableRefLabel(t)}`;
   // 탐색 소스의 테이블만 드롭다운 옵션으로. 사이드바가 소스를 정하고, 드롭다운은 그 소스의 테이블만 노출.
   const browseTables = tables.filter((t) => t.datasourceId === browseDatasourceId);
-  const selectableBrowseTables = browseTables.filter((t) => t.relationType !== 'MATERIALIZED_VIEW' || t.populated !== false);
+  const selectableBrowseTables = browseTables.filter(isRelationSelectable);
   // browse 소스 테이블 − exclude. 현재 선택값이 목록 밖(타 소스 base/조인)이면 선택 유지용으로 앞에 추가(출처 표기).
   const tableOptionsFor = (currentKey: string | null, exclude: Set<string>) => {
     const opts = selectableBrowseTables

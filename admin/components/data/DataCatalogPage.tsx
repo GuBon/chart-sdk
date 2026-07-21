@@ -1,25 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { BarChart3, ChevronRight, Database, Layers3, Plus, Search, Table2 } from 'lucide-react';
-import { chartsApi, datasourcesApi, schemaApi } from '@/lib/api';
-import type { ChartOptions, ChartSummary, Datasource, RelationType, SchemaTable } from '@/lib/api';
+import { datasourcesApi, schemaApi } from '@/lib/api';
+import type { ChartSummary, Datasource, RelationType, SchemaTable } from '@/lib/api';
 import { dataRelationPath, dataSchemaPath, dataSourcePath } from '@/lib/chartRoutes';
 import { ChartCard } from '@/components/charts/ChartCard';
 import { DeleteChartModal } from '@/components/charts/DeleteChartModal';
 import { EmbedModal } from '@/components/charts/EmbedModal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Pagination } from '@/components/ui/Pagination';
+import { useChartPage } from '@/components/charts/useChartPage';
+import { isRelationSelectable, relationBadgeLabel, relationTypeLabel } from '@/lib/relations';
 
 const PAGE_SIZE = 12;
-const RELATION_LABEL: Record<RelationType, string> = {
-  TABLE: 'TABLE',
-  VIEW: 'View',
-  MATERIALIZED_VIEW: 'Materialized View',
-};
-
 interface Props {
   datasourceId: number;
   schema?: string;
@@ -74,7 +72,15 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
     return <div className="py-24 text-center text-sm text-text-tertiary">데이터 탐색 정보를 불러오는 중…</div>;
   }
   if (datasource === null) {
-    return <EmptyState title="데이터소스를 찾을 수 없습니다" description={error ?? `데이터소스 #${datasourceId}가 존재하지 않습니다.`} />;
+    return (
+      <EmptyState
+        className="py-24"
+        icon={<Database className="size-8 text-text-tertiary" />}
+        title="데이터소스를 찾을 수 없습니다"
+        description={error ?? `데이터소스 #${datasourceId}가 존재하지 않습니다.`}
+        action={<Link href="/datasources" className="text-[13px] text-primary hover:underline">데이터소스 목록으로</Link>}
+      />
+    );
   }
 
   return (
@@ -162,13 +168,19 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
           )}
         </>
       ) : selectedRelation == null ? (
-        <EmptyState title="관계를 찾을 수 없습니다" description={`${schema}.${relation}이 현재 카탈로그에 없습니다.`} />
+        <EmptyState
+          className="py-24"
+          icon={<Database className="size-8 text-text-tertiary" />}
+          title="관계를 찾을 수 없습니다"
+          description={`${schema}.${relation}이 현재 카탈로그에 없습니다.`}
+          action={<Link href={dataSchemaPath(datasourceId, schema)} className="text-[13px] text-primary hover:underline">관계 목록으로</Link>}
+        />
       ) : (
         <>
           <PageHeader
             icon={<Table2 className="size-5" />}
             title={selectedRelation.name}
-            description={`${selectedRelation.schema} · ${RELATION_LABEL[selectedRelation.relationType]}${selectedRelation.estimatedRowCount == null ? '' : ` · 약 ${selectedRelation.estimatedRowCount.toLocaleString()}행`}`}
+            description={`${selectedRelation.schema} · ${relationTypeLabel(selectedRelation.relationType)}${selectedRelation.estimatedRowCount == null ? '' : ` · 약 ${selectedRelation.estimatedRowCount.toLocaleString()}행`}`}
           />
           <section className="mb-8">
             <SectionHeader title="컬럼" count={selectedRelation.columns.length} />
@@ -199,45 +211,15 @@ export function DataCatalogPage({ datasourceId, schema, relation }: Props) {
 }
 
 function ScopedChartGrid({ datasourceId, schema, relation, title }: { datasourceId: number; schema?: string; relation?: string; title: string }) {
-  const [charts, setCharts] = useState<ChartSummary[] | null>(null);
-  const [previews, setPreviews] = useState<Record<number, ChartOptions | null>>({});
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
   const [toDelete, setToDelete] = useState<ChartSummary | null>(null);
   const [toEmbed, setToEmbed] = useState<ChartSummary | null>(null);
-
-  const reload = useCallback(() => {
-    setCharts(null);
-    void chartsApi.list({ datasourceId, schema, relation, page, pageSize: PAGE_SIZE })
-      .then((response) => {
-        setCharts(response.charts);
-        setTotal(response.total);
-        setTotalPages(response.totalPages);
-        if (page > response.totalPages) setPage(response.totalPages);
-      })
-      .catch(() => {
-        setCharts([]);
-        setTotal(0);
-        setTotalPages(1);
-      });
-  }, [datasourceId, page, relation, schema]);
+  const { charts, previewOptions, total, totalPages, reload } = useChartPage(
+    { datasourceId, schema, relation, page, pageSize: PAGE_SIZE },
+    setPage,
+  );
 
   useEffect(() => { setPage(1); }, [datasourceId, schema, relation]);
-  useEffect(() => void reload(), [reload]);
-  useEffect(() => {
-    if (!charts?.length) {
-      setPreviews({});
-      return;
-    }
-    let alive = true;
-    const ids = charts.map((chart) => chart.id);
-    void chartsApi.previews(ids).then((response) => {
-      if (!alive) return;
-      setPreviews(Object.fromEntries(ids.map((id) => [id, response.previews[String(id)]?.option ?? null])));
-    }).catch(() => { if (alive) setPreviews({}); });
-    return () => { alive = false; };
-  }, [charts]);
 
   return (
     <section>
@@ -254,17 +236,11 @@ function ScopedChartGrid({ datasourceId, schema, relation, title }: { datasource
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
           {charts.map((chart) => (
-            <ChartCard key={chart.id} chart={chart} previewOption={previews[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} />
+            <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} />
           ))}
         </div>
       )}
-      {charts && totalPages > 1 && (
-        <div className="mt-5 flex items-center justify-center gap-3">
-          <Button variant="secondary" size="sm" className="h-8" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>이전</Button>
-          <span className="min-w-24 text-center text-[13px] text-text-secondary">{page} / {totalPages}</span>
-          <Button variant="secondary" size="sm" className="h-8" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>다음</Button>
-        </div>
-      )}
+      {charts && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
       {toDelete && <DeleteChartModal chart={toDelete} onClose={() => setToDelete(null)} onDeleted={() => { setToDelete(null); reload(); }} />}
       {toEmbed && <EmbedModal chart={toEmbed} onClose={() => setToEmbed(null)} />}
     </section>
@@ -300,14 +276,11 @@ function SectionHeader({ title, count, className = 'mb-3' }: { title: string; co
 }
 
 function RelationBadge({ type, populated }: { type: RelationType; populated?: boolean }) {
-  const warning = type === 'MATERIALIZED_VIEW' && populated === false;
-  return <span className={`rounded px-2 py-1 text-[11px] ${warning ? 'bg-amber-50 text-amber-700' : 'bg-muted text-text-secondary'}`}>{RELATION_LABEL[type]}{warning ? ' · 갱신 필요' : ''}</span>;
+  const relation = { relationType: type, populated };
+  const warning = !isRelationSelectable(relation);
+  return <span className={`rounded px-2 py-1 text-[11px] ${warning ? 'bg-amber-50 text-amber-700' : 'bg-muted text-text-secondary'}`}>{relationBadgeLabel(relation)}</span>;
 }
 
 function EmptyPanel({ text, icon }: { text: string; icon?: ReactNode }) {
   return <div className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border bg-bg-panel px-4 text-center text-[13px] text-text-tertiary">{icon}{text}</div>;
-}
-
-function EmptyState({ title, description }: { title: string; description: string }) {
-  return <div className="flex flex-col items-center gap-2 rounded-[10px] border border-dashed border-border bg-bg-panel py-24 text-center"><Database className="size-8 text-text-tertiary" /><p className="font-semibold text-text-primary">{title}</p><p className="text-[13px] text-text-secondary">{description}</p><Link href="/datasources" className="mt-2 text-[13px] text-primary hover:underline">데이터소스 목록으로</Link></div>;
 }

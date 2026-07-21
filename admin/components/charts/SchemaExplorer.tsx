@@ -7,8 +7,9 @@ import { tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
-import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
+import { isRelationSelectable, relationBadgeLabel } from '@/lib/relations';
+import { Pagination } from '@/components/ui/Pagination';
 
 // S2 좌측 스키마 탐색기(258:178) — 표시 전용. 데이터/선택 상태는 ChartEditor 소유.
 // 데이터소스→테이블→컬럼의 수직 선택 흐름(Redash 패턴).
@@ -193,10 +194,8 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
             const key = tableRefKey(t);
             const open = expanded.has(key);
             const active = selectedTable === key;
-            const unavailable = t.relationType === 'MATERIALIZED_VIEW' && t.populated === false;
-            const relationLabel = t.relationType === 'VIEW'
-              ? 'View'
-              : t.relationType === 'MATERIALIZED_VIEW' ? 'Materialized View' : null;
+            const unavailable = !isRelationSelectable(t);
+            const relationLabel = t.relationType === 'TABLE' ? null : relationBadgeLabel(t);
             return (
               <div key={key}>
                 <button
@@ -223,7 +222,7 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
                   <span className="ml-auto flex shrink-0 items-center gap-1">
                     {relationLabel && (
                       <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">
-                        {relationLabel}{unavailable ? ' · 갱신 필요' : ''}
+                        {relationLabel}
                       </span>
                     )}
                     {t.schema && (
@@ -244,18 +243,14 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
         )}
       </div>
 
-      {datasourceId != null && totalPages > 1 && (
-        <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border px-2 py-2">
-          <Button variant="secondary" size="sm" className="h-7" disabled={pageClamped <= 1} onClick={() => setPage(pageClamped - 1)}>
-            이전
-          </Button>
-          <span className="min-w-16 text-center text-xs text-text-secondary">
-            {pageClamped} / {totalPages}
-          </span>
-          <Button variant="secondary" size="sm" className="h-7" disabled={pageClamped >= totalPages} onClick={() => setPage(pageClamped + 1)}>
-            다음
-          </Button>
-        </div>
+      {datasourceId != null && (
+        <Pagination
+          page={pageClamped}
+          totalPages={totalPages}
+          onChange={setPage}
+          compact
+          className="shrink-0 gap-2 border-t border-border px-2 py-2"
+        />
       )}
     </div>
   );
