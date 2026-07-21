@@ -55,6 +55,9 @@ public final class BuilderSqlBuilder {
     private static final String KEYS_ALIAS = "__chartsdk_keys";
     private static final String RESULT_X = "__chartsdk_x";
     private static final String RESULT_Y_PREFIX = "__chartsdk_y_";
+    private static final String SPATIAL_LONGITUDE = "__chartsdk_longitude";
+    private static final String SPATIAL_LATITUDE = "__chartsdk_latitude";
+    private static final String SPATIAL_SIZE = "__chartsdk_size";
 
     private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
                              String chartType, boolean rawMode, SamplePlan plan, boolean federated) {
@@ -120,6 +123,10 @@ public final class BuilderSqlBuilder {
             String where = buildWhere(params);
             return new Sql("SELECT *" + " FROM " + render(baseRef) + joins + where
                     + " LIMIT " + QueryExecutor.MAX_ROWS, params, null);
+        }
+
+        if (isSpatialGeoPoint()) {
+            return buildSpatialGeoScatter(joins, sampling);
         }
 
         if (xAxis == null) throw invalidReq("xAxis is required.");
@@ -204,7 +211,7 @@ public final class BuilderSqlBuilder {
         }
 
         String sql = cteHead + "SELECT " + String.join(", ", selects) + from + where + groupBy + order
-                + " LIMIT " + QueryExecutor.MAX_ROWS;
+                + resultLimit();
         return new Sql(sql, params, sampling);
     }
 
@@ -304,8 +311,69 @@ public final class BuilderSqlBuilder {
         String groupBy = " GROUP BY " + (bucket == null ? sampledX : "1");
         String order = buildOrder(yAxis.size());
         String sql = cte + "SELECT " + String.join(", ", selects) + " FROM " + sample
-                + groupBy + order + " LIMIT " + QueryExecutor.MAX_ROWS;
+                + groupBy + order + resultLimit();
         return new Sql(sql, params, sampling);
+    }
+
+    /**
+     * PostGIS Point 컬럼을 ECharts 공통 행 형태 [경도, 위도, (크기)]로 투영한다.
+     * 컬럼 식별자는 카탈로그 화이트리스트를 통과하고 타입도 SRID가 명시된 Point로 제한한다.
+     */
+    private Sql buildSpatialGeoScatter(String joins, SamplingMetadata sampling) {
+        if (sampling != null) throw invalidReq("Sample cannot be used with spatial point values.");
+        if (federated) {
+            throw invalidReq("Spatial point columns are not supported across multiple datasources.");
+        }
+
+        Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
+        String pointColumn = geoPoint == null ? null : str(geoPoint.get("spatialColumn"));
+        if (pointColumn == null) throw invalidReq("geoPoint.spatialColumn is required.");
+        Ref point = resolveRef(pointColumn);
+        if (!isSpatialPointType(typeOf(point))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "geoscatter spatial column must be geometry/geography Point with an SRID.");
+        }
+
+        String pointSql = render(point);
+        // geography와 geometry를 한 경로로 처리한다. geometry 캐스트는 기존 SRID를 보존하고 ST_Transform이 WGS84로 정규화한다.
+        String wgs84 = "ST_Transform((" + pointSql + ")::geometry, 4326)";
+        List<String> selects = new ArrayList<>();
+        selects.add("ST_X(" + wgs84 + ") AS " + SqlIdentifier.quote(SPATIAL_LONGITUDE));
+        selects.add("ST_Y(" + wgs84 + ") AS " + SqlIdentifier.quote(SPATIAL_LATITUDE));
+
+        String sizeColumn = str(geoPoint.get("sizeColumn"));
+        if (sizeColumn != null) {
+            Ref size = resolveRef(sizeColumn);
+            if (!isNumeric(typeOf(size))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                        "geoscatter size column must be numeric.");
+            }
+            selects.add(render(size) + " AS " + SqlIdentifier.quote(SPATIAL_SIZE));
+        }
+
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        where += where.isEmpty() ? " WHERE " + pointSql + " IS NOT NULL" : " AND " + pointSql + " IS NOT NULL";
+        String sql = "SELECT " + String.join(", ", selects)
+                + " FROM " + render(baseRef) + joins + where + resultLimit();
+        return new Sql(sql, params, null);
+    }
+
+    private boolean isSpatialGeoPoint() {
+        Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
+        return "geoscatter".equals(chartType) && geoPoint != null
+                && "spatial".equals(str(geoPoint.get("mode")));
+    }
+
+    private static boolean isSpatialPointType(String type) {
+        if (type == null) return false;
+        String compact = type.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        return compact.matches(".*(?:geometry|geography)\\(point(?:zm|z|m)?,[1-9]\\d*\\).*");
+    }
+
+    /** 지도 포인트는 사용자가 지정한 WHERE 범위의 좌표를 모두 반환한다. 원본 행 미리보기는 별도 rawMode이므로 계속 제한한다. */
+    private String resultLimit() {
+        return "geoscatter".equals(chartType) && !rawMode ? "" : " LIMIT " + QueryExecutor.MAX_ROWS;
     }
 
     private List<String> hiddenResultSampleColumns(List<Map<String, Object>> yAxis) {

@@ -14,8 +14,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 모든 고객 DB 조회의 단일 실행 경로. 읽기 전용·타임아웃·행 제한·에러코드 매핑을 한 곳에서 강제한다
+ * 모든 고객 DB 조회의 단일 실행 경로. 읽기 전용·타임아웃·행 제한 정책·에러코드 매핑을 한 곳에서 강제한다
  * (노코드 빌더·raw SQL·스키마 미리보기가 공유 — 별도 실행 경로를 만들지 않는다, 노코드 SQL생성규칙 §1.1).
+ * 기본은 1,000행 제한이며 지도 포인트 빌더만 같은 경로에서 JDBC 행 제한을 해제한다.
  */
 @Service
 public class QueryExecutor {
@@ -34,11 +35,20 @@ public class QueryExecutor {
 
     /** PreparedStatement 바인딩 실행(노코드 빌더 경로). params 가 비면 정적 실행과 동일. */
     public QueryRows execute(long datasourceId, String sql, List<Object> params) {
+        return execute(datasourceId, sql, params, MAX_ROWS);
+    }
+
+    /** 지도 포인트처럼 결과 행 전체가 계약인 빌더 쿼리용. 쿼리 타임아웃은 일반 실행과 동일하게 유지한다. */
+    public QueryRows executeUnbounded(long datasourceId, String sql, List<Object> params) {
+        return execute(datasourceId, sql, params, 0);
+    }
+
+    private QueryRows execute(long datasourceId, String sql, List<Object> params, int maxRows) {
         long start = System.nanoTime();
         try (Connection conn = pools.connection(datasourceId);
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
-            ps.setMaxRows(MAX_ROWS);
+            ps.setMaxRows(maxRows);
             for (int i = 0; i < params.size(); i++) {
                 Object p = params.get(i);
                 if (p instanceof long[] keys) {
@@ -51,7 +61,7 @@ public class QueryExecutor {
                 }
             }
             try (ResultSet rs = ps.executeQuery()) {
-                return QueryRows.from(rs, start);
+                return QueryRows.from(rs, start, maxRows);
             }
         } catch (SQLTimeoutException e) {
             throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Query timed out.");

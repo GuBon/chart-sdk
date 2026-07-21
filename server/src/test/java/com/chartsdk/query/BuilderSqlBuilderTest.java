@@ -29,7 +29,10 @@ class BuilderSqlBuilderTest {
                     "category", "text",
                     "amount", "numeric",
                     "ordered_at", "timestamp without time zone",
-                    "customer_id", "bigint"
+                    "customer_id", "bigint",
+                    "location", "geometry(Point,3857)",
+                    "location_geog", "geography(Point,4326)",
+                    "service_area", "geometry(Polygon,4326)"
             ),
             "customers", Map.of(
                     "id", "bigint",
@@ -351,7 +354,13 @@ class BuilderSqlBuilderTest {
                 "xAxis", "amount",
                 "yAxis", List.of(Map.of("column", "id", "agg", "none"))
         ), "geoscatter", false);
-        assertThat(sql.text()).doesNotContain("GROUP BY");
+        assertThat(sql.text()).doesNotContain("GROUP BY").doesNotContain("LIMIT 1000");
+
+        // 차트용 좌표 결과만 전량 반환하며, 원본 데이터 미리보기 제한은 유지한다.
+        BuilderSqlBuilder.Sql rawPreview = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales"
+        ), "geoscatter", true);
+        assertThat(rawPreview.text()).endsWith("LIMIT 1000");
 
         // 텍스트 경도 → 거부
         assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, Map.of(
@@ -370,6 +379,36 @@ class BuilderSqlBuilderTest {
         ), "geoscatter", false))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("one or two yAxis fields");
+    }
+
+    @Test
+    void geoScatterSupportsPostgisPointColumnWithOptionalNumericSize() {
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoPoint", Map.of("mode", "spatial", "spatialColumn", "location", "sizeColumn", "amount"),
+                "where", List.of(Map.of("column", "category", "op", "eq", "value", "A"))
+        ), "geoscatter", false);
+
+        assertThat(sql.text())
+                .contains("ST_X(ST_Transform((\"public\".\"sales\".\"location\")::geometry, 4326)) AS \"__chartsdk_longitude\"")
+                .contains("ST_Y(ST_Transform((\"public\".\"sales\".\"location\")::geometry, 4326)) AS \"__chartsdk_latitude\"")
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_size\"")
+                .contains("WHERE \"public\".\"sales\".\"category\" = ? AND \"public\".\"sales\".\"location\" IS NOT NULL")
+                .doesNotContain("LIMIT 1000");
+        assertThat(sql.params()).containsExactly("A");
+
+        BuilderSqlBuilder.Sql geography = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoPoint", Map.of("mode", "spatial", "spatialColumn", "location_geog")
+        ), "geoscatter", false);
+        assertThat(geography.text()).contains("location_geog\")::geometry, 4326");
+
+        assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoPoint", Map.of("mode", "spatial", "spatialColumn", "service_area")
+        ), "geoscatter", false))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("geometry/geography Point with an SRID");
     }
 
     @Test

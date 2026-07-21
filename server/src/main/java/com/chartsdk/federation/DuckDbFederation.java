@@ -30,7 +30,8 @@ import java.util.Map;
  * 다중 소스 페더레이션 실행 엔진(설계 §3). per-op 무상태: DuckDB in-memory 연결을 열어 필요한 데이터소스를
  * read-only ATTACH 하고 페더레이션 SQL 을 1회 실행한 뒤 닫는다. 계산 경로(저장/새로고침/미리보기)에서만 호출된다.
  *
- * <p>가드: read-only ATTACH · 쿼리 타임아웃 · 메모리 상한 · (SQL 말미) LIMIT 1000. 자격증명은
+ * <p>가드: read-only ATTACH · 쿼리 타임아웃 · 메모리 상한 · 기본 생성 SQL의 LIMIT 1000.
+ * 지도 포인트 빌더는 WHERE 범위의 좌표를 전량 반환하므로 최종 LIMIT만 적용하지 않는다. 자격증명은
  * libpq+SQL 이중 이스케이프로 안전 삽입하고, 로그에는 {@link #maskedAttachSql}(비밀번호 마스킹)만 남긴다(§10).
  */
 @Component
@@ -67,6 +68,15 @@ public class DuckDbFederation {
      * WHERE 바인딩({@code ?})은 PreparedStatement 로 넘긴다(노코드 빌더 경로). ATTACH 는 바인딩 불가라 Statement 로 선행.
      */
     public QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
+        return execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_ROWS);
+    }
+
+    /** 지도 포인트 빌더처럼 SQL 자체에 결과 LIMIT이 없는 페더레이션 실행용. */
+    public QueryRows executeUnbounded(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
+        return execute(datasourceIds, federatedSql, params, 0);
+    }
+
+    private QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params, int maxRows) {
         long start = System.nanoTime();
         boolean repeatableReservoir = federatedSql.contains("USING SAMPLE reservoir(");
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
@@ -86,7 +96,7 @@ public class DuckDbFederation {
                 ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
                 for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
                 try (ResultSet rs = ps.executeQuery()) {
-                    return QueryRows.from(rs, start);
+                    return QueryRows.from(rs, start, maxRows);
                 }
             }
         } catch (SQLTimeoutException e) {

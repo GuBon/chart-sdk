@@ -18,5 +18,25 @@ services:
       timeout: 5s
       retries: 10
 
+  # 공간 Point 통합 테스트 전용. 기존 chartsol-postgres와 데이터·포트를 공유하지 않는다.
+  # 실행: docker compose --profile spatial-test up -d postgis-test
+  postgis-test:
+    image: postgis/postgis:17-3.5
+    container_name: chartsdk-postgis-test
+    profiles: ["spatial-test"]
+    environment:
+      POSTGRES_DB: chartsdk_spatial_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "0218"
+    ports:
+      - "55433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chartsdk_spatial_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
 volumes:
   chartsol_pgdata:

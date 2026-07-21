@@ -46,6 +46,7 @@ public class FederatedQueryRunner {
 
     /** builderConfig 로부터 SQL 생성 + 실행(미리보기·저장 시드·수동 새로고침의 재생성 경로). */
     public BuiltResult runBuilder(long primaryDatasourceId, Map<String, Object> cfg, String chartType, boolean rawMode) {
+        boolean unboundedPoints = "geoscatter".equals(chartType) && !rawMode;
         Set<Long> refs = BuilderSqlBuilder.referencedDatasources(cfg);
         if (refs.size() >= 2) {
             FederatedCatalog catalog = federation.catalog(refs);
@@ -54,7 +55,10 @@ public class FederatedQueryRunner {
             BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
                     catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
             SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                    federation.execute(refs, sql.text(), sql.params()), sql.sampling());
+                    unboundedPoints
+                            ? federation.executeUnbounded(refs, sql.text(), sql.params())
+                            : federation.execute(refs, sql.text(), sql.params()),
+                    sql.sampling());
             return new BuiltResult(result.rows(), sql, refs, result.sampling());
         }
         long dsId = refs.isEmpty() ? primaryDatasourceId : refs.iterator().next();
@@ -62,7 +66,10 @@ public class FederatedQueryRunner {
         SamplePlan plan = planner.plan(dsId, cfg, rawMode); // 관계 종류·조인 유무·PK·행수·밀도로 RESULT_RANDOM 포함 실행 방식 결정
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
         SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                queries.execute(dsId, sql.text(), sql.params()), sql.sampling());
+                unboundedPoints
+                        ? queries.executeUnbounded(dsId, sql.text(), sql.params())
+                        : queries.execute(dsId, sql.text(), sql.params()),
+                sql.sampling());
         return new BuiltResult(result.rows(), sql, Set.of(dsId), result.sampling());
     }
 

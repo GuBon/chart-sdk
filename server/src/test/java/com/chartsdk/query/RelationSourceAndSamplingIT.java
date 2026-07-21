@@ -130,6 +130,22 @@ class RelationSourceAndSamplingIT {
     }
 
     @Test
+    void geoScatterReturnsEveryCoordinateMatchingTheFilterBeyondDefaultLimit() {
+        Map<String, Object> points = Map.of(
+                "table", ref("sales"),
+                "xAxis", "amount",
+                "yAxis", List.of(Map.of("column", "id", "agg", "none")),
+                "where", List.of(Map.of("column", "id", "op", "lte", "value", 1_205)));
+
+        FederatedQueryRunner.BuiltResult result =
+                runner.runBuilder(DATASOURCE_ID, points, "geoscatter", false);
+
+        assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
+        assertThat(result.rows().rowCount()).isEqualTo(1_205);
+        assertThat(result.rows().truncated()).isFalse();
+    }
+
+    @Test
     void materializedViewSupportsPhysicalSystemSamplingAndRejectsUnpopulatedPreview() {
         Map<String, Object> sampledMv = Map.of(
                 "table", ref("sales_mv"),

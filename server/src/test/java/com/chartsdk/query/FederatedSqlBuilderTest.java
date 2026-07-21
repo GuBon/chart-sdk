@@ -19,7 +19,8 @@ class FederatedSqlBuilderTest {
     private final FederatedCatalog catalog = new FederatedCatalog(Map.of(
             2L, new SchemaCatalog(Map.of(
                     new SchemaCatalog.Key("sales", "orders"),
-                    Map.of("id", "bigint", "user_id", "bigint", "amount", "numeric", "ordered_at", "timestamp without time zone"))),
+                    Map.of("id", "bigint", "user_id", "bigint", "amount", "numeric", "ordered_at", "timestamp without time zone",
+                            "location", "geometry(Point,4326)"))),
             5L, new SchemaCatalog(Map.of(
                     new SchemaCatalog.Key("public", "customers"),
                     Map.of("id", "bigint", "region", "text")))
@@ -72,6 +73,20 @@ class FederatedSqlBuilderTest {
                 SELECT "ds5"."public"."customers"."region", SUM("ds2"."sales"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" LEFT JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" WHERE "ds2"."sales"."orders"."amount" >= ? GROUP BY "ds5"."public"."customers"."region" LIMIT 1000\
                 """);
         assertThat(sql.params()).containsExactly(1000L);
+    }
+
+    @Test
+    void rejectsPostgisPointExtractionAcrossDatasourcesUntilDuckDbSpatialIsGuaranteed() {
+        assertThatThrownBy(() -> gen(Map.of(
+                "table", ref(2, "sales", "orders"),
+                "joins", List.of(Map.of(
+                        "table", ref(5, "public", "customers"),
+                        "type", "inner",
+                        "on", Map.of("leftColumn", "orders.user_id", "rightColumn", "customers.id"))),
+                "geoPoint", Map.of("mode", "spatial", "spatialColumn", "orders.location")
+        ), "geoscatter", false))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("not supported across multiple datasources");
     }
 
     @Test
