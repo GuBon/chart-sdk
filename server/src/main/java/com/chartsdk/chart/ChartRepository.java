@@ -62,7 +62,11 @@ public class ChartRepository {
         int safePage = query.resolvedPage(totalPages);
 
         StringBuilder sql = new StringBuilder("""
-                SELECT id, name, description, chart_type, datasource_id, builder_config::text, updated_at
+                SELECT id, name, description, chart_type, datasource_id, builder_config::text, updated_at,
+                       (SELECT ds.name
+                          FROM mc_datasource ds
+                         WHERE ds.id=COALESCE(NULLIF(mc_chart.builder_config->'table'->>'datasourceId', '')::bigint,
+                                              mc_chart.datasource_id)) AS datasource_name
                 """);
         sql.append(where);
         sql.append(" ORDER BY ").append(orderBy(query.sort()));
@@ -83,7 +87,15 @@ public class ChartRepository {
     }
 
     public Map<String, Object> get(Long ownerId, long id) {
-        StringBuilder sql = new StringBuilder("SELECT * FROM mc_chart WHERE id=?");
+        StringBuilder sql = new StringBuilder("""
+                SELECT mc_chart.*,
+                       (SELECT ds.name
+                          FROM mc_datasource ds
+                         WHERE ds.id=COALESCE(NULLIF(mc_chart.builder_config->'table'->>'datasourceId', '')::bigint,
+                                              mc_chart.datasource_id)) AS datasource_name
+                  FROM mc_chart
+                 WHERE id=?
+                """);
         java.util.ArrayList<Object> params = new java.util.ArrayList<>();
         params.add(id);
         appendOwnerScope(sql, params, ownerId);
@@ -238,12 +250,17 @@ public class ChartRepository {
         m.put("description", rs.getString("description"));
         m.put("chartType", rs.getString("chart_type"));
         m.put("datasourceId", rs.getLong("datasource_id"));
-        m.put("mainTable", mainTable(readJson(rs.getString("builder_config")), rs.getLong("datasource_id")));
+        m.put("mainTable", mainTable(
+                readJson(rs.getString("builder_config")),
+                rs.getLong("datasource_id"),
+                rs.getString("datasource_name")
+        ));
         m.put("updatedAt", timestampString(rs.getTimestamp("updated_at")));
         return m;
     }
 
-    private static Map<String, Object> mainTable(Map<String, Object> builderConfig, long fallbackDatasourceId) {
+    private static Map<String, Object> mainTable(Map<String, Object> builderConfig, long fallbackDatasourceId,
+                                                  String datasourceName) {
         Object raw = builderConfig.get("table");
         if (raw instanceof Map<?, ?> table) {
             Object rawDatasourceId = table.get("datasourceId");
@@ -251,14 +268,24 @@ public class ChartRepository {
             String schema = table.get("schema") instanceof String s && !s.isBlank() ? s : "public";
             Object name = table.get("name");
             if (name instanceof String s && !s.isBlank()) {
-                return Map.of("datasourceId", datasourceId, "schema", schema, "name", s);
+                return Map.of(
+                        "datasourceId", datasourceId,
+                        "datasourceName", datasourceName,
+                        "schema", schema,
+                        "name", s
+                );
             }
         }
         if (raw instanceof String relation && !relation.isBlank()) {
             int separator = relation.indexOf('.');
             String schema = separator < 0 ? "public" : relation.substring(0, separator);
             String name = separator < 0 ? relation : relation.substring(separator + 1);
-            return Map.of("datasourceId", fallbackDatasourceId, "schema", schema, "name", name);
+            return Map.of(
+                    "datasourceId", fallbackDatasourceId,
+                    "datasourceName", datasourceName,
+                    "schema", schema,
+                    "name", name
+            );
         }
         return null;
     }

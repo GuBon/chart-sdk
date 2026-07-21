@@ -68,7 +68,7 @@ class MultiSourceChartLifecycleIT {
         Map<String, Object> created = chartService.create(req);
         long chartId = ((Number) created.get("id")).longValue();
         assertThat(created.get("mainTable")).isEqualTo(
-                Map.of("datasourceId", tId, "schema", "tandanji", "name", "exercise_logs"));
+                Map.of("datasourceId", tId, "datasourceName", "it-tandanji", "schema", "tandanji", "name", "exercise_logs"));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> listed = (List<Map<String, Object>>) chartService
@@ -77,7 +77,7 @@ class MultiSourceChartLifecycleIT {
                 .filteredOn(chart -> ((Number) chart.get("id")).longValue() == chartId)
                 .singleElement()
                 .extracting(chart -> chart.get("mainTable"))
-                .isEqualTo(Map.of("datasourceId", tId, "schema", "tandanji", "name", "exercise_logs"));
+                .isEqualTo(Map.of("datasourceId", tId, "datasourceName", "it-tandanji", "schema", "tandanji", "name", "exercise_logs"));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> referencedBySecondarySource = (List<Map<String, Object>>) chartService
@@ -92,6 +92,10 @@ class MultiSourceChartLifecycleIT {
         assertThat(mainRelationCharts)
                 .extracting(chart -> ((Number) chart.get("id")).longValue())
                 .contains(chartId);
+
+        meta.update("UPDATE mc_datasource SET name=? WHERE id=?", "it-tandanji-renamed", tId);
+        assertThat(chartService.get(chartId).get("mainTable")).isEqualTo(
+                Map.of("datasourceId", tId, "datasourceName", "it-tandanji-renamed", "schema", "tandanji", "name", "exercise_logs"));
 
         // 1) junction — 두 소스가 기록된다(§12.1).
         assertThat(meta.queryForObject(
