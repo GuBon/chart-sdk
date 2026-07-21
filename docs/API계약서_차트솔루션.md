@@ -1,6 +1,6 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v3.0 — 데이터 카탈로그 계층·관계별 차트 조회 계약 (2026-07-21)
+**문서 버전:** v3.1 — 짧은 데이터 카탈로그·편집 URL 계약 (2026-07-21)
 **관련 문서:** PRD v2.9, 화면설계서 v3.4, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
@@ -233,9 +233,9 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 }
 ```
 
-`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceId}/{schema}/{relation}/charts/{id}`를 만든다. 메인 관계를 알 수 없는 구 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
+`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceId}/{schema}/{relation}/{chartId}`를 만든다. 메인 관계를 알 수 없는 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
 
-Admin 데이터 탐색 경로는 `/data/{datasourceId}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceId}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceId}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트) 순서다. 경로는 화면 문맥이고, 저장 권위는 계속 `builder_config.table`과 `mc_chart_datasource`에 있다.
+Admin 데이터 탐색 경로는 `/data/{datasourceId}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceId}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceId}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트), `/data/{datasourceId}/{schema}/{relation}/{chartId}`(차트 편집) 순서다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장 권위는 계속 `builder_config.table`과 `mc_chart_datasource`에 있다.
 
 ### 3.2 단건 조회 — S2 진입
 
