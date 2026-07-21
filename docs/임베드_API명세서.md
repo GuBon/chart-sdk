@@ -218,7 +218,7 @@ SDK behavior:
 4. Replace the slot content with an internal chart host and create an ECharts instance with `echarts.init(chartHost)`.
 5. If a title exists, merge its responsive width (`chartHost.clientWidth - 32`) and `overflow:'truncate'`, then call `chart.setOption(response.option)`.
 6. If `sampling` exists, show `{samplingMethodLabel} {sampledRowCount}행 · 표본 결과` or `전체 데이터 · 정확한 결과`. RESULT_RANDOM is labeled `결과 무작위 행 표본`. Label sampled SUM/COUNT as `표본 합계`/`표본 개수` and state that they are not whole-population totals. If an AVG/STDDEV/VARIANCE confidence summary exists, append `95% 신뢰수준 · 오차 약 ±X%`. Render every `sampling.warnings` entry visibly; STDDEV/VARIANCE intervals require the normality-assumption warning and SYSTEM requires the block-clustering warning.
-7. Observe the host size; on resize call `chart.resize()` and refresh the title width patch.
+7. Observe the host size; on resize call `chart.resize()` and refresh only the title `width/overflow` patch. The option's title, legend, axis, data-label, and tooltip `fontSize` values remain fixed px; host CSS resizing never recalculates them.
 8. On failure, render an isolated error state inside the chart container only.
 
 SPA integrations can use the imperative API. Rendering the same element again disposes the previous ECharts instance and observer automatically; call `dispose` when the component unmounts.
