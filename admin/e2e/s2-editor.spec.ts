@@ -24,6 +24,50 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(sidePanels.last()).toHaveCSS('width', '440px');
   });
 
+  test('미리보기는 720px을 넘어 확장되고 끝까지 줄인 데이터·노코드 패널은 자동으로 접힌다', async ({ page }) => {
+    await page.goto('/charts/12');
+
+    const previewWorkspace = page.getByTestId('visual-editor-workspace');
+    const builderWorkspace = page.getByTestId('data-builder-workspace');
+    let verticalHandles = page.locator('[role="separator"][aria-orientation="vertical"]');
+    await expect(verticalHandles).toHaveCount(2);
+
+    const previewBefore = await previewWorkspace.boundingBox();
+    const previewHandle = await verticalHandles.last().boundingBox();
+    if (!previewBefore || !previewHandle) throw new Error('미리보기 경계를 찾을 수 없습니다.');
+    const targetPreviewWidth = 760;
+    await page.mouse.move(previewHandle.x, previewHandle.y + previewHandle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(previewHandle.x - (targetPreviewWidth - previewBefore.width), previewHandle.y + previewHandle.height / 2, { steps: 8 });
+    await page.mouse.up();
+    expect((await previewWorkspace.boundingBox())?.width).toBeGreaterThan(720);
+    await expect(builderWorkspace).toBeVisible();
+
+    const builderBox = await builderWorkspace.boundingBox();
+    const expandedPreviewHandle = await verticalHandles.last().boundingBox();
+    if (!builderBox || !expandedPreviewHandle) throw new Error('노코드 패널 경계를 찾을 수 없습니다.');
+    await page.mouse.move(expandedPreviewHandle.x, expandedPreviewHandle.y + expandedPreviewHandle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(builderBox.x + 24, expandedPreviewHandle.y + expandedPreviewHandle.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect(builderWorkspace).toHaveCount(0);
+    await expect(page.getByTestId('data-builder-workspace-rail')).toBeVisible();
+
+    await page.getByTestId('data-builder-workspace-rail').click();
+    await expect(builderWorkspace).toBeVisible();
+    verticalHandles = page.locator('[role="separator"][aria-orientation="vertical"]');
+    const datasourcePanel = page.getByTestId('schema-sidebar');
+    const datasourceBox = await datasourcePanel.boundingBox();
+    const datasourceHandle = await verticalHandles.first().boundingBox();
+    if (!datasourceBox || !datasourceHandle) throw new Error('데이터 패널 경계를 찾을 수 없습니다.');
+    await page.mouse.move(datasourceHandle.x, datasourceHandle.y + datasourceHandle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(datasourceBox.x + 24, datasourceHandle.y + datasourceHandle.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect(datasourcePanel).toHaveCount(0);
+    await expect(page.getByTestId('schema-sidebar-rail')).toBeVisible();
+  });
+
   test('저장된 차트 편집 진입은 실행 없이 캐시 결과와 차트 미리보기를 복원한다', async ({ page }) => {
     let builderRuns = 0;
     page.on('request', (request) => {

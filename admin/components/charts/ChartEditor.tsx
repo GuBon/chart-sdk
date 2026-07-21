@@ -23,6 +23,8 @@ import { EmbedModal } from './EmbedModal';
 const COLUMN_OPTION_KEYS = ['description', 'refreshMode', 'cacheTtlSeconds'] as const;
 const LEFT_PANEL_DEFAULT_WIDTH = 320;
 const RIGHT_PANEL_DEFAULT_WIDTH = 440;
+const PANEL_COLLAPSE_THRESHOLD = 48;
+const PANEL_RESTORE_MIN_WIDTH = 200;
 
 function useStoredBoolean(key: string, initial: boolean) {
   const [value, setValue] = useState(initial);
@@ -126,6 +128,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [rawError, setRawError] = useState<string | null>(null);
   const [resultTab, setResultTab] = useState<ResultTab>('result');
   const rawRequestId = useRef(0);
+  const editorBodyRef = useRef<HTMLDivElement>(null);
+  const builderWorkspaceRef = useRef<HTMLElement>(null);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -209,10 +213,40 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   }, [chartType, options, result]);
 
   // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
-  const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth');
-  const rightPanel = useResizable(RIGHT_PANEL_DEFAULT_WIDTH, 280, 720, 'right', 'chartsdk.editor.rightWidth');
+  const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth', {
+    shouldCollapse: (nextSize) => nextSize <= PANEL_COLLAPSE_THRESHOLD,
+    onCollapse: () => setLeftCollapsed(true),
+  });
+  const rightPanel = useResizable(RIGHT_PANEL_DEFAULT_WIDTH, 280, null, 'right', 'chartsdk.editor.rightWidth', {
+    shouldCollapse: (_nextSize, event) => {
+      const bounds = builderWorkspaceRef.current?.getBoundingClientRect();
+      return bounds != null && event.clientX <= bounds.left + PANEL_COLLAPSE_THRESHOLD;
+    },
+    onCollapse: () => setBuilderCollapsed(true),
+  });
   const resultsPanel = useResizable(288, 120, 560, 'up', 'chartsdk.editor.resultsHeight');
   const optionEditor = useResizable(280, 120, 720, 'up', 'chartsdk.editor.optionHeight');
+
+  useEffect(() => {
+    if (builderCollapsed) return;
+    const workspace = builderWorkspaceRef.current;
+    if (!workspace) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width <= PANEL_COLLAPSE_THRESHOLD) setBuilderCollapsed(true);
+    });
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [builderCollapsed, setBuilderCollapsed]);
+
+  const expandBuilderPanel = () => {
+    const editorWidth = editorBodyRef.current?.clientWidth;
+    if (editorWidth != null) {
+      const leftWidth = leftCollapsed ? 40 : leftPanel.size;
+      const availableRightWidth = Math.max(280, editorWidth - leftWidth - PANEL_RESTORE_MIN_WIDTH);
+      if (rightPanel.size > availableRightWidth) rightPanel.setSize(availableRightWidth);
+    }
+    setBuilderCollapsed(false);
+  };
 
   const invalidateRaw = () => {
     rawRequestId.current += 1;
@@ -418,7 +452,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       </header>
 
       {/* 3분할 Body */}
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={editorBodyRef} className="flex flex-1 overflow-hidden">
         {leftCollapsed ? (
           <CollapsedPanelRail
             label="데이터 패널"
@@ -448,11 +482,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             label="노코드 구성·결과"
             controls="data-builder-workspace"
             testId="data-builder-workspace-rail"
-            onExpand={() => setBuilderCollapsed(false)}
+            onExpand={expandBuilderPanel}
           />
         ) : (
           <>
-            <section id="data-builder-workspace" data-testid="data-builder-workspace" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <section ref={builderWorkspaceRef} id="data-builder-workspace" data-testid="data-builder-workspace" className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <NocodeBuilder
                   config={builder}

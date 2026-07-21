@@ -5,11 +5,27 @@ import { cn } from '@/lib/cn';
 
 type ResizeDir = 'left' | 'right' | 'up';
 
+interface CollapseOnDrag {
+  shouldCollapse: (nextSize: number, event: PointerEvent) => boolean;
+  onCollapse: () => void;
+}
+
+function clampPanelSize(value: number, min: number, max: number | null): number {
+  return Math.max(min, max == null ? value : Math.min(max, value));
+}
+
 // 패널 한 변을 드래그해 크기를 바꾸는 훅. dir = 패널이 놓인 위치 기준 핸들 방향.
 //   left  = 패널이 왼쪽, 오른쪽 경계 핸들(오른쪽 드래그 → 커짐)
 //   right = 패널이 오른쪽, 왼쪽 경계 핸들(왼쪽 드래그 → 커짐)
 //   up    = 패널이 아래, 위쪽 경계 핸들(위로 드래그 → 커짐)
-export function useResizable(initial: number, min: number, max: number, dir: ResizeDir, storageKey?: string) {
+export function useResizable(
+  initial: number,
+  min: number,
+  max: number | null,
+  dir: ResizeDir,
+  storageKey?: string,
+  collapseOnDrag?: CollapseOnDrag,
+) {
   const [size, setSize] = useState(initial);
   const [restored, setRestored] = useState(false);
   const dragging = useRef(false);
@@ -17,7 +33,7 @@ export function useResizable(initial: number, min: number, max: number, dir: Res
   useEffect(() => {
     if (storageKey) {
       const stored = Number(window.localStorage.getItem(storageKey));
-      if (Number.isFinite(stored) && stored > 0) setSize(Math.max(min, Math.min(max, stored)));
+      if (Number.isFinite(stored) && stored > 0) setSize(clampPanelSize(stored, min, max));
     }
     setRestored(true);
   }, [max, min, storageKey]);
@@ -35,7 +51,13 @@ export function useResizable(initial: number, min: number, max: number, dir: Res
       if (!dragging.current) return;
       const cur = dir === 'up' ? ev.clientY : ev.clientX;
       const delta = dir === 'left' ? cur - origin : origin - cur; // left만 같은 방향, right·up은 반대
-      setSize(Math.max(min, Math.min(max, start + delta)));
+      const nextSize = start + delta;
+      if (collapseOnDrag?.shouldCollapse(nextSize, ev)) {
+        dragging.current = false;
+        collapseOnDrag.onCollapse();
+        return;
+      }
+      setSize(clampPanelSize(nextSize, min, max));
     };
     const up = () => {
       dragging.current = false;
