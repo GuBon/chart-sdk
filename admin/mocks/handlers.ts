@@ -22,6 +22,12 @@ let nextUserId = Math.max(...userList.map((u) => u.id)) + 1;
 const err = (status: number, code: string, message: string, extra?: Record<string, unknown>) =>
   HttpResponse.json({ error: { code, message, ...extra } }, { status });
 
+function chartUsesDatasource(chartId: number, primaryDatasourceId: number, datasourceId: number): boolean {
+  if (primaryDatasourceId === datasourceId) return true;
+  const saved = savedCharts[chartId] as { builderConfig?: BuilderConfig } | undefined;
+  return saved?.builderConfig?.joins?.some((join) => join.table.datasourceId === datasourceId) ?? false;
+}
+
 export const handlers = [
   // ── 차트 ──────────────────────────────────────────
   http.get('/api/v1/charts', ({ request }) => {
@@ -29,13 +35,20 @@ export const handlers = [
     const q = p.get('q')?.toLowerCase().trim();
     const type = p.get('type');
     const dsId = p.get('datasourceId');
+    const schema = p.get('schema');
+    const relation = p.get('relation');
     const sort = p.get('sort') ?? 'updated_desc';
     const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '12') || 12));
     const requestedPage = Math.max(1, Number(p.get('page') ?? '1') || 1);
     let list = chartList;
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
     if (type) list = list.filter((c) => c.chartType === type);
-    if (dsId) list = list.filter((c) => c.datasourceId === Number(dsId));
+    if (dsId) list = list.filter((c) => chartUsesDatasource(c.id, c.datasourceId, Number(dsId)));
+    if (relation) {
+      list = list.filter((c) => c.mainTable?.datasourceId === Number(dsId)
+        && c.mainTable.schema === (schema || 'public')
+        && c.mainTable.name === relation);
+    }
     list = [...list].sort((a, b) => {
       switch (sort) {
         case 'updated_asc': return a.updatedAt.localeCompare(b.updatedAt);

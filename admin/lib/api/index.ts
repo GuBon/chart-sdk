@@ -32,6 +32,8 @@ export const chartsApi = {
         q: params.q,
         type: params.type && params.type !== 'all' ? params.type : undefined,
         datasourceId: params.datasourceId && params.datasourceId !== 'all' ? params.datasourceId : undefined,
+        schema: params.schema,
+        relation: params.relation,
         sort: params.sort && params.sort !== 'updated_desc' ? params.sort : undefined,
         page: params.page && params.page > 1 ? params.page : undefined,
         pageSize: params.pageSize,

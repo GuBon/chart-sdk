@@ -91,7 +91,7 @@ export interface ChartSummary {
   description: string | null;
   chartType: ChartType;
   datasourceId: number;
-  /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 향후 테이블별 차트 목록에 사용한다. */
+  /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 관계별 차트 목록에 사용한다. */
   mainTable?: TableRef | null;
   updatedAt: string;
 }
@@ -102,6 +102,8 @@ export interface ChartListParams {
   q?: string;
   type?: ChartType | 'all';
   datasourceId?: number | 'all';
+  schema?: string;
+  relation?: string;
   sort?: ChartSort;
   page?: number;
   pageSize?: number;

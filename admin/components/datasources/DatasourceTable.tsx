@@ -1,4 +1,6 @@
+import Link from 'next/link';
 import type { Datasource } from '@/lib/api';
+import { dataSourcePath } from '@/lib/chartRoutes';
 import { Button } from '@/components/ui/Button';
 import { StatusDot } from './StatusDot';
 
@@ -38,7 +40,9 @@ export function DatasourceTable({ datasources, testingId, onTest, onEdit, onDele
         <tbody>
           {datasources.map((ds) => (
             <tr key={ds.id} className="h-[52px] border-t border-border">
-              <td className="truncate pl-5 text-[13px] font-medium text-text-primary" title={ds.name}>{ds.name}</td>
+              <td className="truncate pl-5 text-[13px] font-medium" title={ds.name}>
+                <Link href={dataSourcePath(ds.id)} className="text-text-primary hover:text-primary hover:underline">{ds.name}</Link>
+              </td>
               <td className="truncate text-[13px] text-text-secondary" title={`${ds.host} : ${ds.port}`}>
                 {ds.host} : {ds.port}
               </td>
