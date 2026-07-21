@@ -16,6 +16,23 @@ describe('차트 논리 크기와 글꼴 계약', () => {
       .toMatchObject({ title: 39, legend: 24, axis: 24, dataLabel: 24, tooltip: 24 });
   });
 
+  it('사용자 지정 논리 크기는 가로·세로를 모두 반영하고 직접 지정 px는 크기와 무관하게 유지한다', () => {
+    const standardHeight = resolveChartTypography({
+      display: { preset: 'custom', width: 640, height: 360 },
+      typography: { mode: 'auto', scale: 100 },
+    });
+    const tall = resolveChartTypography({
+      display: { preset: 'custom', width: 640, height: 1440 },
+      typography: { mode: 'auto', scale: 100 },
+    });
+    expect(standardHeight).toMatchObject({ title: 18, legend: 12 });
+    expect(tall).toMatchObject({ title: 25, legend: 17 });
+
+    const fixed = { mode: 'custom', titleFontSize: 31, legendFontSize: 19, axisFontSize: 15, dataLabelFontSize: 13, tooltipFontSize: 14 };
+    expect(resolveChartTypography({ display: { preset: 'small' }, typography: fixed }))
+      .toEqual(resolveChartTypography({ display: { preset: 'fhd' }, typography: fixed }));
+  });
+
   it('직접 지정 글꼴에서 제목·범례 예약 높이를 함께 늘린다', () => {
     const options = {
       typography: { mode: 'custom', titleFontSize: 32, legendFontSize: 20 },

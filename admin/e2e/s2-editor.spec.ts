@@ -200,6 +200,32 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
   });
 
+  test('자동 글자는 논리 크기에 반응하고 직접 지정 px는 크기를 바꿔도 유지된다', async ({ page }) => {
+    await page.goto('/charts/12');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+
+    const fontSection = page.locator('section').filter({ has: page.getByText('글꼴', { exact: true }) });
+    const policy = fontSection.getByTestId('typography-policy');
+    await expect(policy).toContainText('자동: 논리 차트 크기를 바꾸면 다시 계산합니다.');
+    await expect(policy).toContainText('현재 제목 18px · 범례 12px · 축 12px · 라벨 12px · 툴팁 12px');
+    await expect(policy).toContainText('임베드 영역만 CSS로 리사이즈하면 위 px 값은 유지됩니다.');
+
+    await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('fhd');
+    await expect(policy).toContainText('현재 제목 26px · 범례 16px · 축 16px · 라벨 16px · 툴팁 16px');
+
+    await fontSection.getByRole('button', { name: '직접 지정', exact: true }).click();
+    const titleFont = fontSection.locator('input[type="range"][aria-label="제목"]');
+    await titleFont.fill('31');
+    await expect(policy).toContainText('직접 지정: 저장한 px 값을 그대로 사용합니다.');
+    await expect(policy).toContainText('현재 제목 31px');
+
+    await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('small');
+    await expect(policy).toContainText('현재 제목 31px');
+
+    await fontSection.getByRole('button', { name: '자동', exact: true }).click();
+    await expect(policy).toContainText('현재 제목 14px · 범례 10px · 축 10px · 라벨 10px · 툴팁 10px');
+  });
+
   test('팔레트 swatch 선택 후 RGB 사용자지정 값이 미리보기에 반영된다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });

@@ -13,6 +13,7 @@ import {
   type OptionDef,
   type Options,
 } from '@chartsdk/chart-options';
+import { resolveChartTypography, type ChartTypography } from '@chartsdk/chart-options/display';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Segmented } from '@/components/ui/Segmented';
@@ -50,6 +51,7 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
   const disabled = !hasResult;
   const q = query.toLowerCase().trim();
   const defs = visibleDefs(chartType, options).filter((d) => !q || d.label.toLowerCase().includes(q) || d.section.toLowerCase().includes(q));
+  const typography = resolveChartTypography(options);
 
   const getValue = (def: OptionDef) => {
     if (def.key === 'chartType') return chartType;
@@ -143,6 +145,7 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
                   </button>
                   {open && (
                     <div className="mt-2.5 flex flex-col gap-2.5">
+                      {section === '글꼴' && <TypographyPolicy typography={typography} />}
                       {sectionDefs.map((def) => (
                         <Control
                           key={def.key}
@@ -166,6 +169,22 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function TypographyPolicy({ typography }: { typography: ChartTypography }) {
+  return (
+    <div data-testid="typography-policy" aria-live="polite" className="rounded-md bg-muted px-2.5 py-2 text-[11px] leading-4 text-text-tertiary">
+      <p>
+        {typography.mode === 'auto'
+          ? '자동: 논리 차트 크기를 바꾸면 다시 계산합니다.'
+          : '직접 지정: 저장한 px 값을 그대로 사용합니다.'}
+      </p>
+      <p>
+        현재 제목 {typography.title}px · 범례 {typography.legend}px · 축 {typography.axis}px · 라벨 {typography.dataLabel}px · 툴팁 {typography.tooltip}px
+      </p>
+      <p>임베드 영역만 CSS로 리사이즈하면 위 px 값은 유지됩니다.</p>
     </div>
   );
 }

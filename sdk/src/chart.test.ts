@@ -168,6 +168,40 @@ describe('renderChart', () => {
     });
   });
 
+  it('임베드 컨테이너 리사이즈는 모든 글자 px를 유지하고 제목 폭만 보정한다', () => {
+    const el = document.createElement('div');
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValueOnce(800).mockReturnValue(400);
+    renderChart(el, {
+      title: { text: 'FHD 차트', textStyle: { fontSize: 26 } },
+      legend: { textStyle: { fontSize: 16 } },
+      tooltip: { textStyle: { fontSize: 15 } },
+      xAxis: { axisLabel: { fontSize: 16 }, nameTextStyle: { fontSize: 16 } },
+      yAxis: { axisLabel: { fontSize: 16 }, nameTextStyle: { fontSize: 16 } },
+      series: [{ type: 'bar', label: { show: true, fontSize: 14 } }],
+    });
+
+    const initial = ec.instance.setOption.mock.calls[0][0] as {
+      title: { textStyle: Record<string, unknown> };
+      legend: { textStyle: Record<string, unknown> };
+      tooltip: { textStyle: Record<string, unknown> };
+      xAxis: { axisLabel: Record<string, unknown> };
+      yAxis: { nameTextStyle: Record<string, unknown> };
+      series: Array<{ label: Record<string, unknown> }>;
+    };
+    expect(initial.title.textStyle).toMatchObject({ fontSize: 26, width: 768, overflow: 'truncate' });
+    expect(initial.legend.textStyle.fontSize).toBe(16);
+    expect(initial.tooltip.textStyle.fontSize).toBe(15);
+    expect(initial.xAxis.axisLabel.fontSize).toBe(16);
+    expect(initial.yAxis.nameTextStyle.fontSize).toBe(16);
+    expect(initial.series[0].label.fontSize).toBe(14);
+
+    roCallback?.([], {} as ResizeObserver);
+    expect(ec.instance.resize).toHaveBeenCalledOnce();
+    const resizePatch = ec.instance.setOption.mock.calls.at(-1)?.[0];
+    expect(resizePatch).toEqual({ title: { textStyle: { width: 368, overflow: 'truncate' } } });
+    expect(JSON.stringify(resizePatch)).not.toContain('fontSize');
+  });
+
   it('제목이 없으면 title 을 주입하지 않는다', () => {
     const el = document.createElement('div');
     renderChart(el, { series: [] });

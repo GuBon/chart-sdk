@@ -79,7 +79,11 @@ export function resolveChartDesignSize(options: Record<string, unknown>): ChartD
 
 function autoTypographyFor(size: ChartDesignSize): Omit<ChartTypography, 'mode' | 'scale'> {
   if (size.preset !== 'custom') return TYPOGRAPHY_BY_PRESET[size.preset];
-  const ratio = clamp(Math.sqrt(size.width / DEFAULT_CHART_DESIGN_SIZE.width), 0.78, 1.5);
+  // 사용자 지정 캔버스는 가로·세로를 모두 반영한다. 면적비의 4제곱근을 쓰면 같은 종횡비에서
+  // 기존 sqrt(width ratio)와 같은 크기감을 유지하면서, 높이만 바뀌는 경우도 자동 글꼴이 반응한다.
+  const areaRatio = (size.width * size.height)
+    / (DEFAULT_CHART_DESIGN_SIZE.width * DEFAULT_CHART_DESIGN_SIZE.height);
+  const ratio = clamp(Math.pow(areaRatio, 0.25), 0.78, 1.5);
   return {
     title: Math.round(18 * ratio),
     legend: Math.round(12 * ratio),

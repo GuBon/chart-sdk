@@ -682,7 +682,10 @@ public class ChartOptionConverter {
             case "fhd" -> { titleBase = 26; bodyBase = 16; }
             case "custom" -> {
                 int width = clampInt(number(display.get("width"), 640), 240, 3840);
-                double ratio = Math.max(0.78, Math.min(1.5, Math.sqrt(width / 640.0)));
+                int height = clampInt(number(display.get("height"), 360), 180, 2160);
+                double areaRatio = (width * (double) height) / (640.0 * 360.0);
+                // chart-options/display.ts와 동일: 같은 종횡비의 기존 크기감은 유지하면서 가로·세로를 모두 반영한다.
+                double ratio = Math.max(0.78, Math.min(1.5, Math.pow(areaRatio, 0.25)));
                 titleBase = (int) Math.round(18 * ratio);
                 bodyBase = (int) Math.round(12 * ratio);
             }

@@ -119,5 +119,26 @@
       "grid.bottom": 101,
       "xAxis.axisLabel.fontSize": 16
     }
+  },
+  {
+    "name": "custom-tall-size-recalculates-auto-fonts",
+    "chartType": "bar",
+    "options": {
+      "title": "세로형 차트",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" },
+      "dataLabel": true,
+      "display": { "preset": "custom", "width": 640, "height": 1440 },
+      "typography": { "mode": "auto", "scale": 100 }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 25,
+      "legend.top": 34,
+      "legend.textStyle.fontSize": 17,
+      "grid.top": 93,
+      "xAxis.axisLabel.fontSize": 17,
+      "series.0.label.fontSize": 17,
+      "tooltip.textStyle.fontSize": 17
+    }
   }
 ]
