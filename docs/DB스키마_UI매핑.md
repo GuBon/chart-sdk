@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v2.3 (2026-07-20 갱신: 공간 Point·테이블 문맥 URL)
-**관련:** Flyway `V1~V4` · PRD v2.8(9장) · API v2.9 · 화면설계서 v3.3 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
+**문서 버전:** v2.4 (2026-07-21 갱신: 데이터 카탈로그 계층·관계별 차트)
+**관련:** Flyway `V1~V4` · PRD v2.9(9장) · API v3.0 · 화면설계서 v3.4 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -64,7 +64,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 |---|---|---|
 | 검색 입력(이름·설명) | ⏳→📦 | 쿼리 파라미터 `q` → 대상 `mc_chart.name`·`description` (사용자 범위 `owner_id` + ILIKE, pg_trgm GIN) |
 | 종류 필터(막대/선/원형/분포) | ⏳→📦 | 쿼리 파라미터 `type` → `mc_chart.chart_type` (owner 범위 내 필터) |
-| 데이터소스 필터 | ⏳→📦 | 쿼리 파라미터 `datasourceId` → `mc_chart.datasource_id` |
+| 데이터소스 필터 | ⏳→📦 | 쿼리 파라미터 `datasourceId` → `mc_chart_datasource` 존재 여부. 기준 관계와 조인 보조 소스를 모두 포함 |
 | 정렬(수정일·이름) | ⏳→📦 | 쿼리 파라미터 `sort` → `mc_chart.updated_at`·`name` (기본 updated_at DESC, idx_mc_chart_owner_updated) |
 | 카드 썸네일 | 📦/⏳ | `mc_chart_cache.thumbnail`(후속) / MVP는 차트종류 일러스트(⏳) |
 | 차트명 | 📦 | `mc_chart.name` |
@@ -75,7 +75,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 수정일 | 📦 | `mc_chart.updated_at` (정렬: idx DESC) |
 | 소유자(인증 후) | 📦/🔁 | `mc_chart.owner_id` → `mc_user` |
 | 편집/임베드 버튼 | ⚙️ | 화면 전환 |
-| 편집 URL의 메인 관계 | 🔁 | `mc_chart.builder_config.table` → `/tables/{datasourceId}/{schema}/{table}/charts/{id}`. 별도 컬럼·마이그레이션 없음 |
+| 데이터 탐색·편집 URL | 🔁 | `mc_chart.builder_config.table` → `/data/{datasourceId}/{schema}/{relation}` 및 하위 `/charts/{id}`. 데이터소스 차트 범위는 `mc_chart_datasource`; 별도 컬럼·마이그레이션 없음 |
 | 삭제 | ⚙️ | `DELETE mc_chart` (cache CASCADE) |
 | 복제(2차) | ⚙️ | `INSERT mc_chart` + 캐시 시드 |
 | 빈 상태 | 🔁 | `count(*)=0` |

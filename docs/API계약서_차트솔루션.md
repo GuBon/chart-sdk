@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v2.9 — 공간 Point·메인 관계 URL 메타데이터 계약 (2026-07-20)
-**관련 문서:** PRD v2.8, 화면설계서 v3.3, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
+**문서 버전:** v3.0 — 데이터 카탈로그 계층·관계별 차트 조회 계약 (2026-07-21)
+**관련 문서:** PRD v2.9, 화면설계서 v3.4, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -204,7 +204,7 @@ POST /api/v1/charts/preview
 ### 3.1 목록 — S1
 
 ```
-GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&sort={정렬}
+GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={schema}&relation={relation}&sort={정렬}&page={page}&pageSize={pageSize}
 ```
 
 모든 파라미터는 선택이며, 항상 **현재 사용자 소유(`owner_id`) 범위**로 먼저 좁힌 뒤 적용한다.
@@ -213,10 +213,14 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&sort={정렬
 |---|---|---|
 | `q` | 문자열 | 이름·설명 부분일치(ILIKE). DB는 `pg_trgm` GIN 인덱스로 최적화 |
 | `type` | `bar`\|`line`\|`pie`\|`scatter` | 대분류(`chart_type`) 필터. 미지정 시 전체 |
-| `datasourceId` | 정수 | 데이터소스 필터. 미지정 시 전체 |
+| `datasourceId` | 정수 | 데이터소스 참조 필터. 기준 관계뿐 아니라 `mc_chart_datasource`에 기록된 조인 보조 소스도 포함. 미지정 시 전체 |
+| `schema` | 문자열 | `relation`과 함께 쓰는 기준 관계 스키마. 미지정 시 `public` |
+| `relation` | 문자열 | `builder_config.table.name` 기준 관계 필터. `datasourceId`와 함께 관계 상세의 관련 차트를 조회 |
 | `sort` | `updated_desc`(기본)\|`updated_asc`\|`name_asc`\|`name_desc` | 정렬 |
+| `page` | 1 이상의 정수 | 페이지 번호. 기본 1 |
+| `pageSize` | 1~60 정수 | 페이지 크기. 기본 12 |
 
-- 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. `type`·`datasourceId` 필터와 이름 정렬은 owner 범위가 개인 스코프라 소량이므로 인덱스 스캔 후 필터/정렬로 처리한다(전용 인덱스 불요).
+- 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. 데이터소스 필터는 `mc_chart_datasource`의 PK `(chart_id,datasource_id)`를 이용한 `EXISTS`로 조인 보조 소스까지 찾는다. 관계 필터는 현재 별도 읽기 모델 없이 `builder_config.table` JSONB의 기준 관계를 조회한다.
 
 응답 200:
 
@@ -229,7 +233,9 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&sort={정렬
 }
 ```
 
-`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/tables/{datasourceId}/{schema}/{table}/charts/{id}`를 만든다. 메인 관계를 알 수 없는 구 SQL 차트는 `mainTable:null`과 기존 `/charts/{id}`를 사용한다.
+`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceId}/{schema}/{relation}/charts/{id}`를 만든다. 메인 관계를 알 수 없는 구 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
+
+Admin 데이터 탐색 경로는 `/data/{datasourceId}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceId}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceId}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트) 순서다. 경로는 화면 문맥이고, 저장 권위는 계속 `builder_config.table`과 `mc_chart_datasource`에 있다.
 
 ### 3.2 단건 조회 — S2 진입
 
@@ -430,7 +436,7 @@ GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}
 Admin S1 차트 목록은 서버 페이지네이션을 기준으로 동작한다.
 
 ```
-GET /api/v1/charts?q={검색어}&type={bar|line|pie|scatter}&datasourceId={id}&sort={sort}&page={page}&pageSize={pageSize}
+GET /api/v1/charts?q={검색어}&type={bar|line|pie|scatter}&datasourceId={id}&schema={schema}&relation={relation}&sort={sort}&page={page}&pageSize={pageSize}
 ```
 
 지원 정렬값은 `updated_desc`, `updated_asc`, `name_asc`, `name_desc`이다. 정렬은 클라이언트가 아니라 백엔드 SQL에서 whitelist 기반으로 수행한다. 목록 수가 많아져도 현재 페이지에 필요한 행만 내려받기 위함이다.
