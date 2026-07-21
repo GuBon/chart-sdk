@@ -200,7 +200,12 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
   });
 
-  test('자동 글자는 논리 크기에 반응하고 직접 지정 px는 크기를 바꿔도 유지된다', async ({ page }) => {
+  test('실행 없이 자동 글자는 논리 크기에 반응하고 직접 지정 px는 크기를 바꿔도 유지된다', async ({ page }) => {
+    let builderRuns = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder') builderRuns += 1;
+    });
+
     await page.goto('/charts/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
@@ -224,6 +229,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     await fontSection.getByRole('button', { name: '자동', exact: true }).click();
     await expect(policy).toContainText('현재 제목 14px · 범례 10px · 축 10px · 라벨 10px · 툴팁 10px');
+    expect(builderRuns).toBe(0);
   });
 
   test('팔레트 swatch 선택 후 RGB 사용자지정 값이 미리보기에 반영된다', async ({ page }) => {
