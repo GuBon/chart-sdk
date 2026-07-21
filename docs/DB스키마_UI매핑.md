@@ -1,7 +1,7 @@
 # DB 스키마 ↔ UI 요소 전수 매핑
 
-**문서 버전:** v2.1 (2026-07-16 갱신: 관계 원본 + sampling v6 결과 표본)
-**관련:** Flyway `V1~V4` · PRD v2.6(9장) · API v2.7 · 화면설계서 v3.1 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
+**문서 버전:** v2.3 (2026-07-20 갱신: 공간 Point·테이블 문맥 URL)
+**관련:** Flyway `V1~V4` · PRD v2.8(9장) · API v2.9 · 화면설계서 v3.3 · 다중데이터소스_페더레이션_설계 · `chart-options/optionRegistry.ts`
 **목적:** 모든 화면의 모든 UI 요소가 DB의 어디에 사는지 1:1로 매핑해 **누락 0**을 보장한다.
 
 ---
@@ -75,6 +75,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 수정일 | 📦 | `mc_chart.updated_at` (정렬: idx DESC) |
 | 소유자(인증 후) | 📦/🔁 | `mc_chart.owner_id` → `mc_user` |
 | 편집/임베드 버튼 | ⚙️ | 화면 전환 |
+| 편집 URL의 메인 관계 | 🔁 | `mc_chart.builder_config.table` → `/tables/{datasourceId}/{schema}/{table}/charts/{id}`. 별도 컬럼·마이그레이션 없음 |
 | 삭제 | ⚙️ | `DELETE mc_chart` (cache CASCADE) |
 | 복제(2차) | ⚙️ | `INSERT mc_chart` + 캐시 시드 |
 | 빈 상태 | 🔁 | `count(*)=0` |
@@ -85,7 +86,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 차트명 입력 | 📦 | `mc_chart.name` |
 | #id | 📦 | `mc_chart.id` (신규는 미표시) |
 | 저장/임베드 버튼 | ⚙️ | `INSERT/UPDATE` + 캐시 시드(7.7) |
-| 정의 모드 탭(노코드/SQL) | 📦 | `mc_chart.define_mode` |
+| 노코드 구성 내부 정의 모드 탭(노코드/SQL) | 📦 | `mc_chart.define_mode` |
 | 미저장 이탈 모달 | ⏳ | 클라 dirty 상태 |
 
 ### S2 좌측 · 데이터소스·스키마
@@ -109,6 +110,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
 | 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`과 동시 저장/실행만 금지하며 JOIN과는 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
+| 지도 포인트 좌표 방식 | 🧩 | `builder_config.geoPoint={mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. 공간 타입은 pg_catalog에서 파생하고 좌표값은 실행 시 변환하므로 별도 DB 컬럼·마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
 | [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v6(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
 | [원본 데이터] 탭(raw) | ⏳ | 기준 관계 클릭=schema preview, 구성 변경 후 탭 열기=run-builder `mode:rows` 지연 호출. [실행]과 동시 중복 조회하지 않으며 저장 안 함 |
@@ -124,6 +126,8 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 공통 | 대분류 | 📦 | `mc_chart.chart_type` |
 | 공통 | 중분류(variant) | 🧩 | `options.variant` |
 | 공통 | 제목·가로/세로 위치 | 🧩 | `options.title`·`titleH`·`titleV` |
+| 공통 | 논리 설계 크기 | 🧩 | `options.display.{preset,width,height}`. preset은 small/standard/large/hd/fhd/custom이며 실제 임베드 DOM 크기를 강제하지 않음 |
+| 공통 | 글꼴 모드·배율·요소별 크기 | 🧩 | `options.typography.{mode,scale,titleFontSize,legendFontSize,axisFontSize,dataLabelFontSize,tooltipFontSize}` |
 | 공통 | 설명 | 📦 | `mc_chart.description` (option 미반영) |
 | 공통 | 색 모드·팔레트·개별색 | 🧩 | `options.colorMode`·`palette`·`colorMap` |
 | 공통 | 범례 표시·위치·스크롤 | 🧩 | `options.legend.{show,position,scroll}` (`scroll`은 좌·우 전용, 상·하는 변환기가 한 줄 scroll 자동 적용) |
@@ -141,6 +145,8 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 전용 | 원형 도넛두께·라벨위치·시작각·최소각 | 🧩 | `options.pie.*` |
 | 전용 | 분포 점모양·크기·버블컬럼 | 🧩 | `options.scatter.*` |
 | 후속 | 확장예약(markLine·dataZoom·toolbox·visualMap·그라데이션) | 🧩 | 구현 시 `options`에 키 추가(마이그레이션 0) |
+
+> **편집기 전용 로컬 상태:** 데이터 패널 접힘, 노코드 구성·결과 접힘, 시각화 옵션 접힘, 좌·우 폭, 결과·옵션 높이는 브라우저 `localStorage`에만 저장한다. 화면 맞춤/너비 맞춤/100%·zoom과 전체 화면 포커스 상태도 `mc_chart`나 API에 저장하지 않는다. 반면 `options.display`는 자동 글꼴·레이아웃의 설계 기준이므로 차트 정의에 저장한다.
 
 ### S3 · 임베드 코드(모달)
 | UI 요소 | 저장 | 위치 |

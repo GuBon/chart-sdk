@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v2.7 — 관계 원본(TABLE·VIEW·MATERIALIZED VIEW) + 조인·뷰 결과 표본(sampling v6) (2026-07-16)
-**관련 문서:** PRD v2.6, 화면설계서 v3.1, 노코드 SQL 생성규칙 v2.7, 다중데이터소스_페더레이션_설계
+**문서 버전:** v2.9 — 공간 Point·메인 관계 URL 메타데이터 계약 (2026-07-20)
+**관련 문서:** PRD v2.8, 화면설계서 v3.3, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -164,6 +164,11 @@ POST /api/v1/query/run-builder
 `mode` (선택, 기본 `"aggregate"`):
 - `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
 - `"rows"` — 집계·GROUP BY 없이 `SELECT * + JOIN + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. [실행] 때 중복 호출하지 않고 사용자가 탭을 처음 열 때 지연 호출한다. 표본 추출은 무시한다.
+
+`chartType:"geoscatter"`의 `mode:"aggregate"`는 이름과 달리 원본 좌표 튜플을 반환하는 전용 경로다. `geoPoint` 미지정 또는 `{mode:"columns"}`이면 기존 `xAxis=경도`, `yAxis[0]=위도`, 선택 `yAxis[1]=크기`를 사용한다. `{mode:"spatial",spatialColumn:"location",sizeColumn?:"weight"}`이면 카탈로그가 확인한 SRID 지정 `geometry/geography(Point, SRID)`를 WGS84로 변환해 내부 열 `__chartsdk_longitude`, `__chartsdk_latitude`, 선택 `__chartsdk_size`로 반환한다. 공간 모드는 단일 데이터소스(같은 소스 내 JOIN 가능) 전용이며 표본 추출을 함께 쓰지 않는다.
+
+두 좌표 방식 모두 생성 SQL과 JDBC의 최종 1,000행 제한을 해제하여 JOIN·WHERE 조건에 맞는 좌표를 전부 반환하고 `truncated:false`로 응답한다. 숫자 컬럼 방식은 다중 데이터소스도 지원하지만 공간 컬럼 방식은 DuckDB의 PostGIS 확장 계약이 없으므로 여러 데이터소스 JOIN에서 400으로 거부한다. 기존 쿼리 타임아웃과 DuckDB 메모리 상한은 유지한다. `mode:"rows"`, 관계 미리보기, raw SQL, 다른 차트 타입의 결과 제한은 바뀌지 않는다.
+
 검증 실패는 400(INVALID_IDENTIFIER / AGG_TYPE_MISMATCH / OP_TYPE_MISMATCH / VALUE_PARSE_ERROR / BUCKET_TYPE_MISMATCH) — DB 에러를 노코드 사용자에게 노출하지 않는다.
 2번(raw SQL 실행)은 2차 SQL 탭에서 사용한다.
 
@@ -189,6 +194,7 @@ POST /api/v1/charts/preview
 { "chartType": "bar", "options": { ... }, "rows": { "columns": [...], "rows": [...] } }
 ```
 응답 200: `{ "option": { ... } }` — 받은 `rows`에 `chartType`·`options`만 다시 적용해 ECharts option을 조립한다(**SQL 미실행**, 1·2A와 동일한 운영 Java 변환기). S2에서 **데이터에 영향 없는 옵션 변경**(색·범례·라벨·축 등) 시 호출 — 옵션 변경마다 집계 SQL을 재실행해 운영 DB를 때리지 않기 위함(PRD 7.7). `rows`는 직전 `run-builder` 결과를 클라이언트가 보관했다가 그대로 전달(≤1000행, 수십 KB). 클라이언트는 디바운스(약 150~250ms) 후 호출해 응답을 `setOption` 한다. MSW의 TypeScript 변환기는 프론트 테스트 전용 미러이며 운영 API 계약에는 포함되지 않는다.
+- `options.display`·`options.typography` 변경도 데이터와 무관하므로 2B를 사용한다. 서버는 논리 설계 크기에 맞는 글꼴과 제목·범례·grid·visualMap 여백을 다시 조립한다. Admin의 화면 맞춤/zoom과 데이터·노코드·옵션 패널 접힘은 렌더러 로컬 상태라 요청에 포함하지 않는다.
 - 데이터 구성(테이블·축·조건·정렬·묶기)이 바뀌면 2B가 아니라 **2A `run-builder` 재호출**(rows 갱신 + option 재조립). `options.sortOrder`(표시 정렬)는 rows 재정렬만이라 2B로 충분하다.
 
 ---
@@ -217,11 +223,13 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&sort={정렬
 ```json
 {
   "charts": [
-    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "datasourceId": 2, "updatedAt": "2026-06-10T09:30:00Z" },
-    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "datasourceId": 1, "updatedAt": "2026-06-09T14:00:00Z" }
+    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "datasourceId": 2, "mainTable": { "datasourceId": 2, "schema": "public", "name": "sales" }, "updatedAt": "2026-06-10T09:30:00Z" },
+    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "datasourceId": 1, "mainTable": { "datasourceId": 1, "schema": "public", "name": "sales" }, "updatedAt": "2026-06-09T14:00:00Z" }
   ]
 }
 ```
+
+`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/tables/{datasourceId}/{schema}/{table}/charts/{id}`를 만든다. 메인 관계를 알 수 없는 구 SQL 차트는 `mainTable:null`과 기존 `/charts/{id}`를 사용한다.
 
 ### 3.2 단건 조회 — S2 진입
 
@@ -237,11 +245,12 @@ GET /api/v1/charts/{id}
   "name": "월별 매출",
   "description": "영업부 매출을 월 단위로 집계",
   "datasourceId": 1,
+  "mainTable": { "datasourceId": 1, "schema": "public", "name": "sales" },
   "defineMode": "builder",
   "sqlQuery": "SELECT category, SUM(amount) AS total FROM sales GROUP BY category",
   "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null, "sample": null },
   "chartType": "bar",
-  "options": { "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
+  "options": { "display": { "preset": "standard", "width": 640, "height": 360 }, "typography": { "mode": "auto", "scale": 100 }, "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
   "refreshMode": "ttl",
   "cacheTtlSeconds": 3600,
   "createdAt": "2026-06-01T10:00:00Z",
@@ -250,7 +259,7 @@ GET /api/v1/charts/{id}
 ```
 
 - S2 진입 시 이 응답으로 노코드 상태를 복원한다: `datasourceId`(소스 선택) + `builderConfig`(폼) + `chartType`/`options`(우측 패널). `description`은 nullable.
-- `options` 키는 단일 레지스트리 `chart-options/optionRegistry.ts`(= PRD 9.2)를 따른다 — 중첩 점경로(`xAxis.title`·`yAxis.title`·`legend.show`·`legend.position` 등). 위 예시는 대표 키만 표기한 것이며, 누락 키는 레지스트리 기본값으로 채워진다(변환기 매핑 스펙 참조).
+- `options` 키는 단일 레지스트리 `chart-options/optionRegistry.ts`(= PRD 9.2)를 따른다 — 중첩 점경로(`display.preset`·`typography.mode`·`xAxis.title`·`legend.position` 등). 위 예시는 대표 키만 표기한 것이며, 누락 키는 레지스트리 기본값으로 채워진다(변환기 매핑 스펙 참조). `display`는 저장·응답되는 논리 설계 기준이지 SDK 호스트 DOM의 width/height 명령이 아니다.
 
 S2는 정의 조회와 함께 저장 결과 단건 미리보기를 요청한다.
 
@@ -280,7 +289,7 @@ PUT  /api/v1/charts/{id}     (수정)
   "sqlQuery": "SELECT category, SUM(amount) AS total FROM sales GROUP BY category",
   "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null, "sample": null },
   "chartType": "bar",
-  "options": { "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
+  "options": { "display": { "preset": "standard", "width": 640, "height": 360 }, "typography": { "mode": "auto", "scale": 100 }, "colorMode": "palette", "xAxis": { "title": "카테고리" }, "yAxis": { "title": "매출" }, "legend": { "show": true } },
   "refreshMode": "ttl",
   "cacheTtlSeconds": 3600
 }

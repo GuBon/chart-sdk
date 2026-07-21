@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v2.7 — 관계 원본 + 조인·뷰 결과 표본 계약 v6 (2026-07-16)
-**관련 문서:** PRD v2.6 (7.3·7.7), API 계약서 v2.7 (builderConfig 구조화 참조), 화면설계서 v3.1 (S2 노코드 탭)
+**문서 버전:** v2.8 — PostGIS Point 좌표 투영 계약 (2026-07-20)
+**관련 문서:** PRD v2.8 (7.3·7.7), API 계약서 v2.9 (builderConfig 구조화 참조), 화면설계서 v3.3 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -40,14 +40,15 @@
 |---|---|---|
 | table | ✓ | base 관계(TABLE·VIEW·MATERIALIZED VIEW). 스키마 한정 시 `"schema.name"`(미지정 → public). 추가 관계는 `joins[]`로 조인 (11장) |
 | joins | — | 테이블 조인 배열 (11장). N개 체인, `inner`/`left`. 지정 시 모든 컬럼 참조는 qualified `"핸들.컬럼"`(핸들 기본=테이블 이름, 동명 충돌 시 `users_2` — 스키마·소스는 테이블 선언에서 해석) |
-| xAxis | ✓ | X축 컬럼 1개 (조인 시 qualified) |
+| xAxis | ✓ (공간 Point 제외) | X축 컬럼 1개 (조인 시 qualified). `geoPoint.mode="spatial"`이면 서버가 Point에서 경도를 투영하므로 사용하지 않음 |
 | xAxisBucket | — | `"day"` \| `"week"` \| `"month"` \| null. X축이 날짜 타입일 때만 허용. 지정 시 DATE_TRUNC로 묶어 집계 (3A장) |
-| yAxis | ✓ (1개 이상) | 값 컬럼 + 집계. `agg:"none"`이면 원본값 튜플 모드. 복수면 다중 시리즈 |
+| yAxis | ✓ (공간 Point 제외) | 값 컬럼 + 집계. `agg:"none"`이면 원본값 튜플 모드. 복수면 다중 시리즈. 공간 Point 모드는 `geoPoint.sizeColumn`을 선택 크기값으로 사용 |
 | yAxis[].alias | — | 시리즈 표시명. 미지정 시 자동 생성 ("sum_amount") |
 | where | — | 조건 배열. 전부 AND 결합 (MVP: OR 미지원) |
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
 | sample | — | `{ mode:"auto"\|"manual", size?, method?:"auto"\|"system", rate?, seed }`. 표본은 **갯수(size, 1,000~50,000행)** 기반 — auto는 서버가 방식(INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN)·크기를 결정하고 manual은 size를 지정한다. VIEW·조인은 조회 결과에서 RESULT_RANDOM을 사용한다. `rate`(0.1~100%)·`method:"system"`은 물리 관계의 레거시 SYSTEM 핀 전용. **집계 모드 전용**이며 `agg:"none"`과는 동시 사용 불가 (3C·11.4장) |
+| geoPoint | 지도 포인트 공간 모드만 | `{mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. columns는 xAxis/yAxis 좌표, spatial은 SRID 지정 PostGIS Point 컬럼을 사용한다. spatial에서는 xAxis/yAxis/orderBy/sample을 사용하지 않는다. |
 
 ## 3. 집계(agg) 템플릿
 
@@ -185,7 +186,7 @@ LIMIT 1000
 ## 6. 생성 알고리즘 (의사코드)
 
 ```
-generate(config, datasourceId):
+generate(config, datasourceId, chartType, rawMode):
   schema = loadSchema(datasourceId)                      # information_schema 캐시
   assertExists(schema, config.table)                     # 식별자 화이트리스트
   assertExists(schema, config.table, config.xAxis)
@@ -214,13 +215,16 @@ generate(config, datasourceId):
       + (whereSql ? " WHERE " + whereSql : "")
       + (!allNone ? " GROUP BY " + (config.xAxisBucket ? "1" : quote(xAxis)) : "")
       + (orderSql ? " ORDER BY " + orderSql : "")
-      + " LIMIT " + min(config.limit ?? 1000, 1000)
+      + (chartType == "geoscatter" && !rawMode
+          ? ""
+          : " LIMIT " + min(config.limit ?? 1000, 1000))
   return (sql, binds)
 ```
 
 - quote(name): 큰따옴표로 감싸고 내부 " 는 "" 로 escape. 단 화이트리스트를 통과한 이름만 여기까지 온다(이중 방어).
 - qualify(table): 테이블을 `"schema"."table"` 로 한정한다(스키마 미지정 → public). 컬럼 참조는 `"schema"."table"."column"` 으로 한정된다. 조인 시 컬럼 참조의 테이블 부분은 **핸들**로 표기한다 — 같은 이름 테이블이 서로 다른 소스/스키마로 한 쿼리에 동시 등장하면 서로 다른 핸들(`users`/`users_2`)을 받아 함께 조인 가능하다(SQL 은 소스/스키마로 완전 한정돼 모호하지 않음).
 - 생성 결과 (sql, binds)는 기존 SQL 실행 엔진에 그대로 전달. 실행 엔진은 노코드/수기 SQL을 구분하지 않는다(수기 SQL은 binds가 빈 목록일 뿐).
+- **지도 포인트 예외:** `chartType="geoscatter"`의 차트 실행은 `WHERE`·JOIN 조건에 맞는 경도/위도 행을 모두 반환하므로 SQL의 최종 `LIMIT 1000`과 JDBC 행 제한을 함께 적용하지 않는다. 같은 구성의 `rawMode` 원본 데이터 탭은 조회 성격이 다르므로 계속 1,000행으로 제한한다. 쿼리 타임아웃은 유지된다.
 
 ## 7. 생성 예시
 
@@ -297,6 +301,39 @@ LIMIT 1000
 
 막대/선은 각 `year` 행의 `print` 값을 그대로 그린다. 원형은 첫 컬럼을 name, 두 번째 컬럼을 value로 사용한다. 분포는 `[year, print]` 점으로 사용하되 X축이 숫자 타입이어야 한다. `GROUP BY`와 합계/평균 계산은 없다.
 
+### 예시 6 — 지도 포인트 전량 좌표
+
+```sql
+SELECT "longitude", "latitude", "weight" AS "weight"
+FROM "stores"
+WHERE "region_code" = ?
+```
+
+지도 포인트 차트 실행에는 최종 `LIMIT`이 없다. 사용자가 지정한 지역·기간 등 `WHERE` 조건에 맞는 좌표를 모두 가져오며, 응답의 `truncated`는 `false`다. 원본 데이터 탭의 `SELECT *` 미리보기는 이 예외에 포함되지 않는다.
+
+### 예시 7 — PostGIS 공간 Point 컬럼
+
+```json
+{
+  "table": { "datasourceId": 1, "schema": "public", "name": "stores" },
+  "yAxis": [],
+  "where": [{ "column": "region_code", "op": "eq", "value": "11" }],
+  "geoPoint": { "mode": "spatial", "spatialColumn": "location", "sizeColumn": "weight" }
+}
+```
+
+```sql
+SELECT
+  ST_X(ST_Transform(("public"."stores"."location")::geometry, 4326)) AS "__chartsdk_longitude",
+  ST_Y(ST_Transform(("public"."stores"."location")::geometry, 4326)) AS "__chartsdk_latitude",
+  "public"."stores"."weight" AS "__chartsdk_size"
+FROM "public"."stores"
+WHERE "public"."stores"."region_code" = ?
+  AND "public"."stores"."location" IS NOT NULL
+```
+
+카탈로그 타입이 `geometry/geography(Point|PointZ|PointM|PointZM, 양의 SRID)`인 컬럼만 허용한다. `Polygon`, SRID 없는 generic geometry, 숫자가 아닌 크기값은 실행 전에 거부한다. 같은 데이터소스 안의 JOIN은 가능하지만 여러 데이터소스를 거치는 공간 컬럼은 DuckDB PostGIS 계약이 없으므로 거부한다. 결과 열은 기존 숫자 좌표 방식과 같은 `[경도,위도,(크기)]` 순서라 변환기는 입력 출처를 구분하지 않는다.
+
 ## 8. SQL 탭 전환 규칙 (2차 — SQL 탭 구현 시 활성)
 
 - 노코드 → SQL 전환 시: 생성 SQL을 에디터에 로드하되, 바인딩 자리는 사용자가 읽을 수 있게 리터럴로 표시한 사본을 보여준다(예: WHERE "dept" = '영업'). 단 이 사본은 표시용이며, 노코드 모드로 저장된 차트의 실행은 항상 (sql, binds) 경로다.
@@ -315,6 +352,8 @@ LIMIT 1000
 | in 빈 배열, between 길이≠2 | 400 INVALID_REQUEST |
 | yAxis 0개 | 400 INVALID_REQUEST |
 | pie yAxis 1개 아님 | 400 INVALID_REQUEST |
+| 공간 모드의 컬럼이 SRID 지정 PostGIS Point가 아님 | 400 AGG_TYPE_MISMATCH |
+| 공간 모드 크기값이 숫자가 아니거나 여러 데이터소스에 걸침 | 400 AGG_TYPE_MISMATCH / INVALID_REQUEST |
 | scatter xAxis 숫자 타입 아님 | 400 AGG_TYPE_MISMATCH |
 | scatter에서 agg가 none 아님 | 400 AGG_TYPE_MISMATCH |
 | none과 집계가 한 builderConfig 안에 섞임 | 400 AGG_TYPE_MISMATCH |
