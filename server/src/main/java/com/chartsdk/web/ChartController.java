@@ -1,6 +1,7 @@
 package com.chartsdk.web;
 
 import com.chartsdk.chart.ChartService;
+import com.chartsdk.chart.ChartListQuery;
 import com.chartsdk.web.dto.ChartSaveRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -35,7 +36,7 @@ public class ChartController {
                                     @RequestParam(required = false) String sort,
                                     @RequestParam(required = false) Integer page,
                                     @RequestParam(required = false) Integer pageSize) {
-        return charts.list(q, type, datasourceId, schema, relation, sort, page, pageSize);
+        return charts.list(new ChartListQuery(q, type, datasourceId, schema, relation, sort, page, pageSize));
     }
 
     @GetMapping("/{id}")

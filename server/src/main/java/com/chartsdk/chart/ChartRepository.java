@@ -26,47 +26,46 @@ public class ChartRepository {
         this.mapper = mapper;
     }
 
-    public Map<String, Object> list(Long ownerId, String q, String type, Long datasourceId, String schema, String relation,
-                                    String sort, Integer page, Integer pageSize) {
+    public Map<String, Object> list(Long ownerId, ChartListQuery query) {
         StringBuilder where = new StringBuilder(" FROM mc_chart WHERE 1=1");
         java.util.ArrayList<Object> params = new java.util.ArrayList<>();
         appendOwnerScope(where, params, ownerId);
-        if (q != null && !q.isBlank()) {
+        if (query.q() != null && !query.q().isBlank()) {
             where.append(" AND (name ILIKE ? OR description ILIKE ?)");
-            params.add("%" + q + "%");
-            params.add("%" + q + "%");
+            params.add("%" + query.q() + "%");
+            params.add("%" + query.q() + "%");
         }
-        if (type != null && !type.isBlank()) {
+        if (query.type() != null && !query.type().isBlank()) {
             where.append(" AND chart_type=?");
-            params.add(type);
+            params.add(query.type());
         }
-        if (datasourceId != null) {
+        if (query.datasourceId() != null) {
             // 조인의 보조 소스로 참조한 차트도 데이터소스 화면에 포함한다.
             where.append(" AND EXISTS (SELECT 1 FROM mc_chart_datasource mcd WHERE mcd.chart_id=mc_chart.id AND mcd.datasource_id=?)");
-            params.add(datasourceId);
+            params.add(query.datasourceId());
         }
-        if (relation != null && !relation.isBlank()) {
+        if (query.hasRelation()) {
             // 관계 상세는 builder_config.table의 기준 관계만 대상으로 한다. 조인 관계 전체는 별도 읽기 모델이 필요하다.
             where.append(" AND COALESCE(builder_config->'table'->>'schema', 'public')=?");
-            params.add(schema == null || schema.isBlank() ? "public" : schema);
+            params.add(query.relationSchema());
             where.append(" AND builder_config->'table'->>'name'=?");
-            params.add(relation);
-            if (datasourceId != null) {
+            params.add(query.relation());
+            if (query.datasourceId() != null) {
                 where.append(" AND COALESCE(NULLIF(builder_config->'table'->>'datasourceId', '')::bigint, datasource_id)=?");
-                params.add(datasourceId);
+                params.add(query.datasourceId());
             }
         }
 
-        int safePageSize = clamp(pageSize == null ? 12 : pageSize, 1, 60);
+        int safePageSize = query.resolvedPageSize();
         int total = count(where, params);
         int totalPages = total == 0 ? 1 : (int) Math.ceil((double) total / safePageSize);
-        int safePage = clamp(page == null ? 1 : page, 1, totalPages);
+        int safePage = query.resolvedPage(totalPages);
 
         StringBuilder sql = new StringBuilder("""
                 SELECT id, name, description, chart_type, datasource_id, builder_config::text, updated_at
                 """);
         sql.append(where);
-        sql.append(" ORDER BY ").append(orderBy(sort));
+        sql.append(" ORDER BY ").append(orderBy(query.sort()));
         sql.append(" LIMIT ? OFFSET ?");
 
         java.util.ArrayList<Object> queryParams = new java.util.ArrayList<>(params);
@@ -305,10 +304,6 @@ public class ChartRepository {
     private int count(StringBuilder where, List<Object> params) {
         Integer total = jdbc.queryForObject("SELECT count(*)" + where, Integer.class, params.toArray());
         return total == null ? 0 : total;
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
     }
 
     private static String orderBy(String sort) {

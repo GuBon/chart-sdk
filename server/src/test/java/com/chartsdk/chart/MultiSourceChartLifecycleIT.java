@@ -72,7 +72,7 @@ class MultiSourceChartLifecycleIT {
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> listed = (List<Map<String, Object>>) chartService
-                .list(null, null, null, null, null, null, 1, 12).get("charts");
+                .list(new ChartListQuery(null, null, null, null, null, null, 1, 12)).get("charts");
         assertThat(listed)
                 .filteredOn(chart -> ((Number) chart.get("id")).longValue() == chartId)
                 .singleElement()
@@ -81,14 +81,14 @@ class MultiSourceChartLifecycleIT {
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> referencedBySecondarySource = (List<Map<String, Object>>) chartService
-                .list(null, null, dId, null, null, null, 1, 12).get("charts");
+                .list(new ChartListQuery(null, null, dId, null, null, null, 1, 12)).get("charts");
         assertThat(referencedBySecondarySource)
                 .extracting(chart -> ((Number) chart.get("id")).longValue())
                 .contains(chartId);
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> mainRelationCharts = (List<Map<String, Object>>) chartService
-                .list(null, null, tId, "tandanji", "exercise_logs", null, 1, 12).get("charts");
+                .list(new ChartListQuery(null, null, tId, "tandanji", "exercise_logs", null, 1, 12)).get("charts");
         assertThat(mainRelationCharts)
                 .extracting(chart -> ((Number) chart.get("id")).longValue())
                 .contains(chartId);
