@@ -50,7 +50,7 @@ public class ChartRepository {
         int safePage = clamp(page == null ? 1 : page, 1, totalPages);
 
         StringBuilder sql = new StringBuilder("""
-                SELECT id, name, description, chart_type, datasource_id, updated_at
+                SELECT id, name, description, chart_type, datasource_id, builder_config::text, updated_at
                 """);
         sql.append(where);
         sql.append(" ORDER BY ").append(orderBy(sort));
@@ -226,8 +226,29 @@ public class ChartRepository {
         m.put("description", rs.getString("description"));
         m.put("chartType", rs.getString("chart_type"));
         m.put("datasourceId", rs.getLong("datasource_id"));
+        m.put("mainTable", mainTable(readJson(rs.getString("builder_config")), rs.getLong("datasource_id")));
         m.put("updatedAt", timestampString(rs.getTimestamp("updated_at")));
         return m;
+    }
+
+    private static Map<String, Object> mainTable(Map<String, Object> builderConfig, long fallbackDatasourceId) {
+        Object raw = builderConfig.get("table");
+        if (raw instanceof Map<?, ?> table) {
+            Object rawDatasourceId = table.get("datasourceId");
+            long datasourceId = rawDatasourceId instanceof Number n ? n.longValue() : fallbackDatasourceId;
+            String schema = table.get("schema") instanceof String s && !s.isBlank() ? s : "public";
+            Object name = table.get("name");
+            if (name instanceof String s && !s.isBlank()) {
+                return Map.of("datasourceId", datasourceId, "schema", schema, "name", s);
+            }
+        }
+        if (raw instanceof String relation && !relation.isBlank()) {
+            int separator = relation.indexOf('.');
+            String schema = separator < 0 ? "public" : relation.substring(0, separator);
+            String name = separator < 0 ? relation : relation.substring(separator + 1);
+            return Map.of("datasourceId", fallbackDatasourceId, "schema", schema, "name", name);
+        }
+        return null;
     }
 
     private Map<String, Object> detail(ResultSet rs) throws java.sql.SQLException {
