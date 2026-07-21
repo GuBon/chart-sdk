@@ -32,7 +32,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     await page.goto('/charts/12');
 
-    await expect(page).toHaveURL('/tables/2/public/sales/charts/12');
+    await expect(page).toHaveURL('/data/2/public/sales/charts/12');
 
     const sidePanels = page.locator('aside');
     await expect(sidePanels.last().locator('canvas')).toBeVisible();

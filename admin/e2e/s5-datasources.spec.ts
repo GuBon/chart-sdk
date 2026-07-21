@@ -18,6 +18,32 @@ test.describe('S5 데이터소스 관리', () => {
     await expect(analyticsRow.getByText('연결됨')).toBeVisible();
   });
 
+  test('데이터소스에서 스키마·관계·관련 차트까지 계층적으로 탐색한다', async ({ page }) => {
+    await page.goto('/datasources');
+
+    await page.getByRole('link', { name: 'analytics-db' }).click();
+    await expect(page).toHaveURL('/data/1');
+    await expect(page.getByRole('heading', { name: 'analytics-db' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '이 데이터소스를 사용하는 차트' })).toBeVisible();
+
+    await page.getByRole('link', { name: 'public' }).click();
+    await expect(page).toHaveURL('/data/1/public');
+    const search = page.getByRole('textbox', { name: '관계 검색' });
+    await search.fill('users');
+    await expect(page.getByRole('link', { name: 'users' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'sales' })).toHaveCount(0);
+    await search.clear();
+
+    await page.getByRole('link', { name: 'sales' }).click();
+    await expect(page).toHaveURL('/data/1/public/sales');
+    await expect(page.getByRole('heading', { name: 'sales', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '컬럼명' })).toBeVisible();
+    const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
+    await expect(visitorChart).toBeVisible();
+    await expect(visitorChart.getByRole('link', { name: '편집' }))
+      .toHaveAttribute('href', '/data/1/public/sales/charts/13');
+  });
+
   test('추가 모달은 생성 시 비밀번호를 요구하고 저장 후 목록에 반영한다', async ({ page }) => {
     await page.goto('/datasources');
 

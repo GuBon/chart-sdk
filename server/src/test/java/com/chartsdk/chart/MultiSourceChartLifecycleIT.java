@@ -72,12 +72,26 @@ class MultiSourceChartLifecycleIT {
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> listed = (List<Map<String, Object>>) chartService
-                .list(null, null, null, null, 1, 12).get("charts");
+                .list(null, null, null, null, null, null, 1, 12).get("charts");
         assertThat(listed)
                 .filteredOn(chart -> ((Number) chart.get("id")).longValue() == chartId)
                 .singleElement()
                 .extracting(chart -> chart.get("mainTable"))
                 .isEqualTo(Map.of("datasourceId", tId, "schema", "tandanji", "name", "exercise_logs"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> referencedBySecondarySource = (List<Map<String, Object>>) chartService
+                .list(null, null, dId, null, null, null, 1, 12).get("charts");
+        assertThat(referencedBySecondarySource)
+                .extracting(chart -> ((Number) chart.get("id")).longValue())
+                .contains(chartId);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mainRelationCharts = (List<Map<String, Object>>) chartService
+                .list(null, null, tId, "tandanji", "exercise_logs", null, 1, 12).get("charts");
+        assertThat(mainRelationCharts)
+                .extracting(chart -> ((Number) chart.get("id")).longValue())
+                .contains(chartId);
 
         // 1) junction — 두 소스가 기록된다(§12.1).
         assertThat(meta.queryForObject(
