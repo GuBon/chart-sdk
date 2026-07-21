@@ -1,9 +1,9 @@
 # 차트 솔루션 개발 PRD (Product Requirements Document)
 
-**문서 버전:** v3.0 — 짧은 데이터 탐색·편집 URL과 코드 책임 경계 (2026-07-21)
+**문서 버전:** v3.1 — 데이터소스 이름 기반 탐색·편집 URL (2026-07-21)
 **작성일:** 2026-06-10 (v2.6 갱신: 2026-07-16 — TABLE·VIEW·MATERIALIZED VIEW 및 결과 표본 지원)
 **기반 문서:** 차트 솔루션 개발 인수인계서 (SDK 설계 명세 v1.0)
-**관련 문서:** 화면설계서 v3.4 (Figma 작업용) · API 계약서 v3.1 · 노코드 SQL 생성규칙 v2.8 · 코드구조_가이드 · 다중데이터소스_페더레이션_설계 · 유사서비스 기능비교표 · Flyway V1~V4
+**관련 문서:** 화면설계서 v3.5 (Figma 작업용) · API 계약서 v3.2 · 노코드 SQL 생성규칙 v2.8 · 코드구조_가이드 · 다중데이터소스_페더레이션_설계 · 유사서비스 기능비교표 · Flyway V1~V4
 
 ---
 
@@ -147,8 +147,8 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 - 데이터소스 선택: 차트 생성의 첫 단계로 데이터소스를 선택한다. 스키마 탐색기·노코드 관계 목록은 선택된 소스 기준.
 - 연결된 소스의 스키마 탐색 패널 제공(읽기 전용, `mc_` 관계·시스템 스키마 제외). 고객 DB의 `public` 외 사용자 스키마(예: `analytics`)에 있는 TABLE·VIEW·MATERIALIZED VIEW를 모두 노출하며, VIEW/물리화 뷰 배지와 물리화 뷰 갱신 상태를 표시한다. 식별자는 스키마 한정(`"schema"."name"`)으로 생성해 `search_path` 의존 없이 정확한 관계를 조회한다. 갱신되지 않은 물리화 뷰는 선택하지 못하게 한다. SQL 에러는 DB 메시지·위치 그대로 노출.
 - 요청/응답 형식은 API 계약서를 따른다.
-- 저장된 차트의 정식 편집 URL은 `/data/{datasourceId}/{schema}/{relation}/{chartId}`다. `data` 아래의 위치로 데이터소스→스키마→관계→차트를 표현하므로 중복되는 `tables`, `charts` 구간은 두지 않는다. 메인 관계는 `builder_config.table`에서 파생하며 별도 DB 컬럼을 두지 않는다. 메인 관계를 모르는 SQL 차트는 `/charts/{chartId}`, 신규 초안은 `/charts/new`를 사용한다.
-- 데이터 탐색은 `/data/{datasourceId}`에서 스키마와 이 데이터소스를 기준·조인으로 참조하는 차트를, `/data/{datasourceId}/{schema}`에서 TABLE·View·Materialized View를, `/data/{datasourceId}/{schema}/{relation}`에서 컬럼과 이 관계를 기준으로 만든 차트를 보여준다. 스키마 관계 목록은 대규모 카탈로그에서도 이름 검색을 제공한다.
+- 저장된 차트의 정식 편집 URL은 `/data/{datasourceName}/{schema}/{relation}/{chartId}`다. 사람이 주소만 보고 소스를 알 수 있도록 사용자별 고유 데이터소스 이름을 사용하며 한글·공백은 URL 인코딩한다. `data` 아래의 위치로 데이터소스→스키마→관계→차트를 표현하므로 중복되는 `tables`, `charts` 구간은 두지 않는다. 저장·실행은 계속 숫자 `datasourceId`를 사용한다. 메인 관계를 모르는 SQL 차트는 `/charts/{chartId}`, 신규 초안은 `/charts/new`를 사용한다.
+- 데이터 탐색은 `/data/{datasourceName}`에서 스키마와 이 데이터소스를 기준·조인으로 참조하는 차트를, `/data/{datasourceName}/{schema}`에서 TABLE·View·Materialized View를, `/data/{datasourceName}/{schema}/{relation}`에서 컬럼과 이 관계를 기준으로 만든 차트를 보여준다. 스키마 관계 목록은 대규모 카탈로그에서도 이름 검색을 제공한다. 이름 수정 후에는 새 이름이 정식 URL이 되며 구 이름 주소는 유지하지 않는다.
 
 ### 7.4 임베드 및 사용자 토큰
 

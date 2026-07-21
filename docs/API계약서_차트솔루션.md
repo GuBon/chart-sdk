@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v3.1 — 짧은 데이터 카탈로그·편집 URL 계약 (2026-07-21)
-**관련 문서:** PRD v2.9, 화면설계서 v3.4, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
+**문서 버전:** v3.2 — 데이터소스 이름 기반 카탈로그·편집 URL 계약 (2026-07-21)
+**관련 문서:** PRD v3.1, 화면설계서 v3.5, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -227,15 +227,15 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 ```json
 {
   "charts": [
-    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "datasourceId": 2, "mainTable": { "datasourceId": 2, "schema": "public", "name": "sales" }, "updatedAt": "2026-06-10T09:30:00Z" },
-    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "datasourceId": 1, "mainTable": { "datasourceId": 1, "schema": "public", "name": "sales" }, "updatedAt": "2026-06-09T14:00:00Z" }
+    { "id": 12, "name": "월별 매출", "description": "영업부 매출을 월 단위로 집계", "chartType": "bar", "datasourceId": 2, "mainTable": { "datasourceId": 2, "datasourceName": "sales-db", "schema": "public", "name": "sales" }, "updatedAt": "2026-06-10T09:30:00Z" },
+    { "id": 13, "name": "일별 방문자", "description": null, "chartType": "line", "datasourceId": 1, "mainTable": { "datasourceId": 1, "datasourceName": "analytics-db", "schema": "public", "name": "sales" }, "updatedAt": "2026-06-09T14:00:00Z" }
   ]
 }
 ```
 
-`mainTable`은 `builder_config.table`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceId}/{schema}/{relation}/{chartId}`를 만든다. 메인 관계를 알 수 없는 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
+`mainTable`은 `builder_config.table`과 현재 `mc_datasource.name`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. `datasourceId`는 실행·관계 식별용, `datasourceName`은 URL 표시용이다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceName}/{schema}/{relation}/{chartId}`를 만든다. 메인 관계를 알 수 없는 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
 
-Admin 데이터 탐색 경로는 `/data/{datasourceId}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceId}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceId}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트), `/data/{datasourceId}/{schema}/{relation}/{chartId}`(차트 편집) 순서다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장 권위는 계속 `builder_config.table`과 `mc_chart_datasource`에 있다.
+Admin 데이터 탐색 경로는 `/data/{datasourceName}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceName}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceName}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트), `/data/{datasourceName}/{schema}/{relation}/{chartId}`(차트 편집) 순서다. 이름은 한 URL 구간으로 UTF-8 퍼센트 인코딩한다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장·실행 권위는 계속 숫자 `datasourceId`, `builder_config.table`, `mc_chart_datasource`에 있다. 데이터소스 이름을 수정하면 새 이름이 새 정식 URL이 되며 배포 전 정책상 구 이름 리다이렉트는 두지 않는다.
 
 ### 3.2 단건 조회 — S2 진입
 
@@ -251,7 +251,7 @@ GET /api/v1/charts/{id}
   "name": "월별 매출",
   "description": "영업부 매출을 월 단위로 집계",
   "datasourceId": 1,
-  "mainTable": { "datasourceId": 1, "schema": "public", "name": "sales" },
+  "mainTable": { "datasourceId": 1, "datasourceName": "analytics-db", "schema": "public", "name": "sales" },
   "defineMode": "builder",
   "sqlQuery": "SELECT category, SUM(amount) AS total FROM sales GROUP BY category",
   "builderConfig": { "table": "sales", "xAxis": "category", "xAxisBucket": null, "yAxis": [{ "column": "amount", "agg": "sum" }], "where": [], "orderBy": null, "sample": null },
