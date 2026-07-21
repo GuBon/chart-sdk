@@ -38,8 +38,9 @@ public class ChartService {
         this.runner = runner;
     }
 
-    public Map<String, Object> list(String q, String type, Long datasourceId, String sort, Integer page, Integer pageSize) {
-        return charts.list(ownerId(), q, type, datasourceId, sort, page, pageSize);
+    public Map<String, Object> list(String q, String type, Long datasourceId, String schema, String relation,
+                                    String sort, Integer page, Integer pageSize) {
+        return charts.list(ownerId(), q, type, datasourceId, schema, relation, sort, page, pageSize);
     }
 
     public Map<String, Object> get(long id) {

@@ -26,7 +26,8 @@ public class ChartRepository {
         this.mapper = mapper;
     }
 
-    public Map<String, Object> list(Long ownerId, String q, String type, Long datasourceId, String sort, Integer page, Integer pageSize) {
+    public Map<String, Object> list(Long ownerId, String q, String type, Long datasourceId, String schema, String relation,
+                                    String sort, Integer page, Integer pageSize) {
         StringBuilder where = new StringBuilder(" FROM mc_chart WHERE 1=1");
         java.util.ArrayList<Object> params = new java.util.ArrayList<>();
         appendOwnerScope(where, params, ownerId);
@@ -40,8 +41,20 @@ public class ChartRepository {
             params.add(type);
         }
         if (datasourceId != null) {
-            where.append(" AND datasource_id=?");
+            // 조인의 보조 소스로 참조한 차트도 데이터소스 화면에 포함한다.
+            where.append(" AND EXISTS (SELECT 1 FROM mc_chart_datasource mcd WHERE mcd.chart_id=mc_chart.id AND mcd.datasource_id=?)");
             params.add(datasourceId);
+        }
+        if (relation != null && !relation.isBlank()) {
+            // 관계 상세는 builder_config.table의 기준 관계만 대상으로 한다. 조인 관계 전체는 별도 읽기 모델이 필요하다.
+            where.append(" AND COALESCE(builder_config->'table'->>'schema', 'public')=?");
+            params.add(schema == null || schema.isBlank() ? "public" : schema);
+            where.append(" AND builder_config->'table'->>'name'=?");
+            params.add(relation);
+            if (datasourceId != null) {
+                where.append(" AND COALESCE(NULLIF(builder_config->'table'->>'datasourceId', '')::bigint, datasource_id)=?");
+                params.add(datasourceId);
+            }
         }
 
         int safePageSize = clamp(pageSize == null ? 12 : pageSize, 1, 60);

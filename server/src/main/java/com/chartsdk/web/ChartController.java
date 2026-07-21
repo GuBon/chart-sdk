@@ -30,10 +30,12 @@ public class ChartController {
     public Map<String, Object> list(@RequestParam(required = false) String q,
                                     @RequestParam(required = false) String type,
                                     @RequestParam(required = false) Long datasourceId,
+                                    @RequestParam(required = false) String schema,
+                                    @RequestParam(required = false) String relation,
                                     @RequestParam(required = false) String sort,
                                     @RequestParam(required = false) Integer page,
                                     @RequestParam(required = false) Integer pageSize) {
-        return charts.list(q, type, datasourceId, sort, page, pageSize);
+        return charts.list(q, type, datasourceId, schema, relation, sort, page, pageSize);
     }
 
     @GetMapping("/{id}")
