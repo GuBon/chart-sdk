@@ -1,7 +1,7 @@
 // 개발용 시드 데이터 — S1 화면(183:16)의 카드 구성과 일치시킨다.
 import type { Chart, ChartSummary, Datasource, SchemaTable, User, UserToken } from '@/lib/api/types';
 
-export const charts: ChartSummary[] = [
+export const charts: ChartSummary[] = ([
   // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
   { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-10T09:30:00Z' },
   { id: 13, name: '일별 방문자', description: '서비스 일별 방문자(UV) 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-09T14:00:00Z' },
@@ -18,7 +18,10 @@ export const charts: ChartSummary[] = [
   { id: 22, name: '요일별 주문', description: '요일별 주문 수', chartType: 'bar', datasourceId: 1, updatedAt: '2026-05-13T09:00:00Z' },
   { id: 23, name: '상품별 재고', description: '상품별 재고량', chartType: 'bar', datasourceId: 2, updatedAt: '2026-05-10T09:00:00Z' },
   { id: 24, name: '월별 순이익', description: '월별 순이익 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-05-05T09:00:00Z' },
-];
+] satisfies Array<Omit<ChartSummary, 'mainTable'>>).map((chart) => ({
+  ...chart,
+  mainTable: { datasourceId: chart.datasourceId, schema: 'public', name: 'sales' },
+}));
 
 export const datasources: Datasource[] = [
   { id: 1, name: 'analytics-db', host: 'db.internal', port: 5432, databaseName: 'analytics', dbUser: 'reader', maxPoolSize: 5, lastTestedAt: '2026-06-19T10:00:00Z', lastTestOk: true },
@@ -45,6 +48,7 @@ export const schemaTables: SchemaTable[] = [
       { name: 'dept', type: 'text' },
       { name: 'date', type: 'date' },
       { name: 'customer_id', type: 'int' },
+      { name: 'location', type: 'geometry(Point,4326)' },
     ],
   },
   {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 
 type ResizeDir = 'left' | 'right' | 'up';
@@ -9,9 +9,22 @@ type ResizeDir = 'left' | 'right' | 'up';
 //   left  = 패널이 왼쪽, 오른쪽 경계 핸들(오른쪽 드래그 → 커짐)
 //   right = 패널이 오른쪽, 왼쪽 경계 핸들(왼쪽 드래그 → 커짐)
 //   up    = 패널이 아래, 위쪽 경계 핸들(위로 드래그 → 커짐)
-export function useResizable(initial: number, min: number, max: number, dir: ResizeDir) {
+export function useResizable(initial: number, min: number, max: number, dir: ResizeDir, storageKey?: string) {
   const [size, setSize] = useState(initial);
+  const [restored, setRestored] = useState(false);
   const dragging = useRef(false);
+
+  useEffect(() => {
+    if (storageKey) {
+      const stored = Number(window.localStorage.getItem(storageKey));
+      if (Number.isFinite(stored) && stored > 0) setSize(Math.max(min, Math.min(max, stored)));
+    }
+    setRestored(true);
+  }, [max, min, storageKey]);
+
+  useEffect(() => {
+    if (restored && storageKey) window.localStorage.setItem(storageKey, String(size));
+  }, [restored, size, storageKey]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -33,7 +46,7 @@ export function useResizable(initial: number, min: number, max: number, dir: Res
     window.addEventListener('pointerup', up);
   };
 
-  return { size, onPointerDown, dir };
+  return { size, setSize, onPointerDown, dir };
 }
 
 // 경계선처럼 보이되 ±3px 히트영역을 갖는 드래그 핸들. hover 시 primary 강조.

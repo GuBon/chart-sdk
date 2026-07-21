@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Filter, Search, Table2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ChevronsLeft, Filter, Search, Table2 } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
 import { tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
@@ -27,6 +27,7 @@ interface Props {
   selectedTable: string | null; // 선택된 base 테이블의 tableRefKey
   onChangeDatasource: (id: number) => void;
   onSelectTable: (table: SchemaTable) => void;
+  onCollapse: () => void;
 }
 
 /** 필터 팝오버 메뉴 항목 — 라벨 + 활성 체크 (정렬·스키마 공용) */
@@ -43,7 +44,7 @@ function MenuItem({ label, active, onClick }: { label: string; active: boolean; 
   );
 }
 
-export function SchemaExplorer({ datasources, tables, datasourceId, selectedTable, onChangeDatasource, onSelectTable }: Props) {
+export function SchemaExplorer({ datasources, tables, datasourceId, selectedTable, onChangeDatasource, onSelectTable, onCollapse }: Props) {
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortMode>('schema');
@@ -100,6 +101,20 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-sm font-medium text-text-primary">데이터 패널</span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="데이터 패널 접기"
+            aria-controls="schema-sidebar"
+            className="inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-text-secondary hover:bg-muted hover:text-text-primary"
+          >
+            <ChevronsLeft className="size-3.5" />
+            접기
+          </button>
+        </div>
         <Field label="데이터소스">
           <Select
             id="schema-datasource"

@@ -144,7 +144,8 @@ export const handlers = [
     const id = nextChartId++;
     const chart = { id, ...body, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
-    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId: Number(body.datasourceId) || 1, updatedAt: now }, ...chartList];
+    const builderConfig = body.builderConfig as { table?: unknown } | undefined;
+    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId: Number(body.datasourceId) || 1, mainTable: (builderConfig?.table as never) ?? null, updatedAt: now }, ...chartList];
     return HttpResponse.json(chart, { status: 201 });
   }),
   http.put('/api/v1/charts/:id', async ({ params, request }) => {
@@ -154,7 +155,8 @@ export const handlers = [
     const prev = savedCharts[id] as { createdAt?: string } | undefined;
     const chart = { id, ...body, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
-    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId: Number(body.datasourceId) || c.datasourceId, updatedAt: now } : c));
+    const builderConfig = body.builderConfig as { table?: unknown } | undefined;
+    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId: Number(body.datasourceId) || c.datasourceId, mainTable: (builderConfig?.table as never) ?? c.mainTable ?? null, updatedAt: now } : c));
     return HttpResponse.json(chart);
   }),
 
@@ -219,7 +221,7 @@ export const handlers = [
     if (body.mode === 'rows') return HttpResponse.json(buildRawRows(body.builderConfig));
     const result = buildAggregateRows(body.builderConfig, body.chartType);
     const option = assembleOption(result, body.chartType, body.options);
-    return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig), option });
+    return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig, body.chartType), option });
   }),
 
   http.post('/api/v1/charts/preview', async ({ request }) => {

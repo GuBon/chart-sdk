@@ -29,6 +29,7 @@ interface Props {
   hasResult: boolean;
   onChangeChartType: (next: MajorType, nextOptions: Options) => void;
   onChangeOptions: (next: Options) => void;
+  onCollapse?: () => void;
 }
 
 const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 축', type: '대분류 전용' };
@@ -37,7 +38,7 @@ const TYPE_ICONS: Record<string, typeof BarChart3> = { bar: BarChart3, line: Lin
 const TYPE_LABEL: Record<MajorType, string> = { bar: '막대', line: '선', pie: '원형', scatter: '분포', boxplot: '박스 플롯', heatmap: '히트맵', map: '지도', geoscatter: '지도 포인트' };
 const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
-export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions }: Props) {
+export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions, onCollapse }: Props) {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [resetNotice, setResetNotice] = useState<{
@@ -94,6 +95,11 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
     <div className="flex flex-col">
       <div className="flex items-center justify-between p-4 pb-2">
         <h2 className="text-sm font-semibold text-text-primary">시각화 옵션</h2>
+        {onCollapse && (
+          <button type="button" onClick={onCollapse} aria-label="시각화 옵션 접기" className="flex size-7 items-center justify-center rounded text-text-secondary hover:bg-muted hover:text-text-primary">
+            <ChevronDown className="size-4" />
+          </button>
+        )}
       </div>
       <div className="px-4 pb-2">
         <Input id="option-search" name="optionSearch" icon={<Search className="size-3.5" />} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="옵션 검색" size="sm" disabled={disabled} />

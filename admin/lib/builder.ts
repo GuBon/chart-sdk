@@ -91,6 +91,12 @@ export function tableRefLabel(t: TableRef | SchemaTable): string {
   return t.schema ? `${t.schema}.${t.name}` : t.name;
 }
 
+/** PostGIS가 타입 수정자와 함께 노출한 Point 컬럼. SRID 없는 generic geometry는 좌표계를 확정할 수 없어 제외한다. */
+export function isSpatialPointType(type: string | undefined): boolean {
+  if (!type) return false;
+  return /\b(?:geometry|geography)\s*\(\s*point(?:zm|z|m)?\s*,\s*[1-9]\d*\s*\)/i.test(type);
+}
+
 /** 컬럼 참조 prefix 로 쓰는 테이블 핸들 — 기본은 이름, 동명 충돌 시 저장된 handle(users_2). 백엔드 parseTableRef 와 규약 일치. */
 export function tableHandle(ref: TableRef): string {
   return ref.handle ?? ref.name;
@@ -208,11 +214,28 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
   }
   // 지도 포인트: X=경도, Y1=위도(+선택 Y2=크기값) 원본 좌표 → 집계 없음·표본/버킷 금지·최대 2컬럼.
   if (chartType === 'geoscatter') {
+    const mode = cfg.geoPoint?.mode ?? 'columns';
+    if (mode === 'spatial') {
+      return {
+        ...cfg,
+        xAxis: null,
+        xAxisBucket: null,
+        yAxis: [],
+        orderBy: null,
+        sample: null,
+        geoPoint: {
+          mode: 'spatial',
+          spatialColumn: cfg.geoPoint?.spatialColumn ?? null,
+          sizeColumn: cfg.geoPoint?.sizeColumn ?? null,
+        },
+      };
+    }
     return {
       ...cfg,
       xAxisBucket: null,
       sample: null,
       yAxis: cfg.yAxis.slice(0, 2).map((y) => ({ ...y, agg: 'none' })),
+      geoPoint: { mode: 'columns' },
     };
   }
   return {
@@ -220,6 +243,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     // 원형·지도는 1개 값 컬럼(지역/조각별 단일 값).
     yAxis: chartType === 'pie' || chartType === 'map' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
     sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
+    geoPoint: undefined,
   };
 }
 
@@ -244,15 +268,22 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   // 조인 시 모든 컬럼 참조는 qualified "핸들.컬럼" + 활성 테이블 (11.2)
   if (hasJoins(cfg)) {
     const activeHandles = activeTables(cfg).map(tableHandle);
-    const refs = [cfg.xAxis, ...cfg.yAxis.map((y) => y.column), ...cfg.where.map((w) => w.column)].filter(Boolean) as string[];
+    const refs = [
+      cfg.xAxis,
+      ...cfg.yAxis.map((y) => y.column),
+      cfg.geoPoint?.spatialColumn,
+      cfg.geoPoint?.sizeColumn,
+      ...cfg.where.map((w) => w.column),
+    ].filter(Boolean) as string[];
     for (const r of refs) {
       if (r.indexOf('.') < 0) return '조인 시 컬럼은 "테이블.컬럼" 형식이어야 합니다.';
       if (!activeHandles.includes(parseColumn(r, tableHandle(cfg.table)).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
     }
   }
-  if (!cfg.xAxis) return 'X축 컬럼을 선택하세요.';
-  if (cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
-  if (cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
+  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
+  if (!spatialGeoPoint && !cfg.xAxis) return 'X축 컬럼을 선택하세요.';
+  if (!spatialGeoPoint && cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
+  if (!spatialGeoPoint && cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
   if (chartType === 'map' && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
@@ -263,6 +294,21 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     if (!isNumericType(columnType(cfg.yAxis[0]?.column, cfg, tables))) return '박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.';
   }
   if (chartType === 'geoscatter') {
+    if (spatialGeoPoint) {
+      const pointColumn = cfg.geoPoint?.spatialColumn;
+      if (!pointColumn) return '공간 Point 컬럼을 선택하세요.';
+      if (!isSpatialPointType(columnType(pointColumn, cfg, tables))) {
+        return '지도 포인트 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.';
+      }
+      if (cfg.geoPoint?.sizeColumn && !isNumericType(columnType(cfg.geoPoint.sizeColumn, cfg, tables))) {
+        return '지도 포인트의 크기값 컬럼은 숫자여야 합니다.';
+      }
+      if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
+        return '공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
+      }
+      if (cfg.sample) return '지도 포인트 공간 컬럼 모드에서는 표본 추출을 사용할 수 없습니다.';
+      return null;
+    }
     if (cfg.yAxis.length > 2) return '지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';
     if (cfg.yAxis.some((y) => y.agg !== 'none')) return '지도 포인트는 집계 없이 원본 좌표만 사용합니다.';
     if (!isNumericType(xType)) return '지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.';

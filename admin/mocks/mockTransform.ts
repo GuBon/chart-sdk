@@ -14,6 +14,7 @@ import {
   type SamplingMetadata,
   type SamplingWarningCode,
 } from '@chartsdk/chart-options/sampling';
+import { resolveChartLayoutMetrics, resolveChartTypography } from '@chartsdk/chart-options/display';
 import { schemaTables } from './seed';
 
 type Cols = { name: string; type: string }[];
@@ -21,6 +22,22 @@ type Rows = unknown[][];
 
 const SAMPLE_CATS = ['의류', '식품', '가전', '도서', '생활'];
 const SAMPLE_MONTHS = ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'];
+// PostGIS Point 컬럼 선택부터 ECharts geo 좌표 변환까지 화면에서 확인하는 개발용 공간 표본.
+// 실제 도시 좌표(경도, 위도)와 점 크기값을 고정해 회귀 테스트가 결정적으로 동작하게 한다.
+const SAMPLE_SPATIAL_POINTS: ReadonlyArray<readonly [number, number, number]> = [
+  [126.9780, 37.5665, 95], // 서울
+  [129.0756, 35.1796, 82], // 부산
+  [128.6014, 35.8714, 70], // 대구
+  [126.7052, 37.4563, 76], // 인천
+  [126.8526, 35.1595, 58], // 광주
+  [127.3845, 36.3504, 64], // 대전
+  [129.3114, 35.5384, 55], // 울산
+  [127.2890, 36.4800, 45], // 세종
+  [127.0286, 37.2636, 88], // 수원
+  [127.7298, 37.8813, 41], // 춘천
+  [127.4917, 36.6424, 52], // 청주
+  [126.5312, 33.4996, 60], // 제주
+];
 
 // 식별자 quote. "table.col" → "table"."col", 단일 "col" → "col" (생성규칙 11.2)
 const qident = (s: string) => `"${s.replace(/"/g, '""')}"`;
@@ -77,8 +94,9 @@ function whereSql(w: { column: string; op: string; value?: unknown }): string {
 }
 
 /** 생성된 SQL 문자열(표시용) — 생성규칙 6·7·11장 모사 */
-export function buildGeneratedSql(cfg: BuilderConfig): string {
-  if (!cfg.table || !cfg.xAxis || cfg.yAxis.length === 0) return '';
+export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): string {
+  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
+  if (!cfg.table) return '';
   // 다중 소스면 페더레이션 → ds 별칭 표기(백엔드 §6 모사).
   const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((j) => j.table.datasourceId)]).size >= 2;
   const where = cfg.where.length ? ` WHERE ${cfg.where.map((w) => whereSql(w)).join(' AND ')}` : '';
@@ -91,13 +109,29 @@ export function buildGeneratedSql(cfg: BuilderConfig): string {
     const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + 2; // y0 → 2번째 컬럼
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
+  if (spatialGeoPoint) {
+    if (!cfg.geoPoint?.spatialColumn) return '';
+    const point = qcol(cfg.geoPoint.spatialColumn);
+    const wgs84 = `ST_Transform((${point})::geometry, 4326)`;
+    const selects = [
+      `ST_X(${wgs84}) AS ${qident('__chartsdk_longitude')}`,
+      `ST_Y(${wgs84}) AS ${qident('__chartsdk_latitude')}`,
+      ...(cfg.geoPoint.sizeColumn ? [`${qcol(cfg.geoPoint.sizeColumn)} AS ${qident('__chartsdk_size')}`] : []),
+    ];
+    const spatialWhere = where
+      ? `${where} AND ${point} IS NOT NULL`
+      : ` WHERE ${point} IS NOT NULL`;
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${spatialWhere}`;
+  }
+  if (!cfg.xAxis || cfg.yAxis.length === 0) return '';
   const rawMode = cfg.yAxis.some((y) => y.agg === 'none');
   if (rawMode) {
     const selects = [
       qcol(cfg.xAxis),
       ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
     ];
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}\nLIMIT 1000`;
+    const limit = chartType === 'geoscatter' ? '' : '\nLIMIT 1000';
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}${limit}`;
   }
   const aggSql: Record<string, (expr: string) => string> = {
     sum: (expr) => `SUM(${expr})`,
@@ -381,17 +415,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   }
   // 지도 포인트: 대한민국 범위 내 경도·위도(+선택 크기값) 원본 좌표.
   if (chartType === 'geoscatter') {
-    const hasSize = cfg.yAxis.length >= 2;
+    const spatial = cfg.geoPoint?.mode === 'spatial';
+    const hasSize = spatial ? !!cfg.geoPoint?.sizeColumn : cfg.yAxis.length >= 2;
     const columns: Cols = [
-      { name: cfg.xAxis ? colName(cfg.xAxis) : 'lng', type: 'numeric' },
-      { name: cfg.yAxis[0] ? colName(cfg.yAxis[0].column) : 'lat', type: 'numeric' },
-      ...(hasSize ? [{ name: colName(cfg.yAxis[1].column), type: 'numeric' }] : []),
+      { name: spatial ? '__chartsdk_longitude' : cfg.xAxis ? colName(cfg.xAxis) : 'lng', type: 'numeric' },
+      { name: spatial ? '__chartsdk_latitude' : cfg.yAxis[0] ? colName(cfg.yAxis[0].column) : 'lat', type: 'numeric' },
+      ...(hasSize ? [{ name: spatial ? '__chartsdk_size' : colName(cfg.yAxis[1].column), type: 'numeric' }] : []),
     ];
-    const rows: Rows = Array.from({ length: 12 }, (_, i) => {
-      const lng = 126.2 + (i % 4) * 0.9 + (i % 3) * 0.25;
-      const lat = 35.0 + Math.floor(i / 4) * 1.1 + (i % 2) * 0.4;
-      return hasSize ? [lng, lat, 20 + i * 15] : [lng, lat];
-    });
+    const rows: Rows = SAMPLE_SPATIAL_POINTS.map(([lng, lat, size]) =>
+      hasSize ? [lng, lat, size] : [lng, lat]);
     return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
   }
   if (cfg.yAxis.some((y) => y.agg === 'none')) {
@@ -438,6 +470,10 @@ export function buildRawRows(cfg: BuilderConfig): QueryResult {
 export function buildTablePreview(table: SchemaTable): QueryResult {
   const sampleFor = (type: string, i: number): unknown => {
     const t = type.toLowerCase();
+    if (t.includes('geometry') || t.includes('geography')) {
+      const [lng, lat] = SAMPLE_SPATIAL_POINTS[i % SAMPLE_SPATIAL_POINTS.length];
+      return `POINT(${lng} ${lat})`;
+    }
     if (t.includes('int') || t.includes('numeric')) return (i + 1) * 7;
     if (t.includes('date') || t.includes('time')) return `2026-0${(i % 6) + 1}-15`;
     return ['의류', '식품', '가전', '도서', '생활'][i % 5];
@@ -448,10 +484,6 @@ export function buildTablePreview(table: SchemaTable): QueryResult {
 
 const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
-// 레이아웃 예약 높이(px) — 서버 ChartOptionConverter 와 값 일치(제목·범례·visualMap 겹침 방지).
-const TITLE_H = 26;
-const LEGEND_H = 24;
-const VISUALMAP_H = 36;
 const titleAtBottom = (o: any): boolean => !!o.title && (o.titleV ?? 'top') === 'bottom';
 const presetBase = (preset?: string) =>
   preset === 'compact' ? { left: 8, right: 8, top: 8, bottom: 8 }
@@ -460,12 +492,13 @@ const presetBase = (preset?: string) =>
 /** grid top/bottom 에 제목·범례 예약 높이 가산 (서버 applyMargins 미러). */
 function gridMargins(o: any, includeLegend: boolean): { left: number; right: number; top: number; bottom: number } {
   const b = presetBase(o.grid?.preset);
-  if (!!o.title && (o.titleV ?? 'top') === 'top') b.top += TITLE_H;
-  if (titleAtBottom(o)) b.bottom += TITLE_H;
+  const metrics = resolveChartLayoutMetrics(o);
+  if (!!o.title && (o.titleV ?? 'top') === 'top') b.top += metrics.titleHeight;
+  if (titleAtBottom(o)) b.bottom += metrics.titleHeight;
   if (includeLegend && o.legend?.show !== false) {
     const pos = o.legend?.position ?? 'bottom';
-    if (pos === 'top') b.top += LEGEND_H;
-    if (pos === 'bottom') b.bottom += LEGEND_H;
+    if (pos === 'top') b.top += metrics.legendHeight;
+    if (pos === 'bottom') b.bottom += metrics.legendHeight;
   }
   return b;
 }
@@ -477,30 +510,33 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const seriesCols = result.columns.slice(1);
   const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex);
   const variant: string = o.variant ?? (chartType === 'pie' ? 'pie' : chartType === 'scatter' ? 'scatter' : chartType === 'line' ? 'basic' : 'basic');
+  const typography = resolveChartTypography(o);
+  const metrics = resolveChartLayoutMetrics(o);
 
   // 배경: 서버 변환기와 동일하게 불투명 기본(흰색) — 미리보기가 임베드 결과와 일치하도록.
   const opt: Record<string, any> = { color: palette, backgroundColor: o.backgroundColor ?? '#ffffff' };
 
-  if (o.title) opt.title = { text: o.title, left: o.titleH ?? 'center', top: o.titleV ?? 'top' };
+  if (o.title) opt.title = { text: o.title, left: o.titleH ?? 'center', top: o.titleV ?? 'top', textStyle: { fontSize: typography.title } };
   const itemTooltip = chartType === 'pie' || chartType === 'scatter' || chartType === 'boxplot' || chartType === 'heatmap' || chartType === 'map';
-  opt.tooltip = { trigger: o.tooltip?.trigger ?? (itemTooltip ? 'item' : 'axis'), confine: true };
+  opt.tooltip = { trigger: o.tooltip?.trigger ?? (itemTooltip ? 'item' : 'axis'), confine: true, textStyle: { fontSize: typography.tooltip } };
   if (o.legend?.show !== false) {
     const pos = o.legend?.position ?? 'bottom';
     // 제목이 같은 모서리면 범례를 제목 다음 줄로(규칙 1, 서버 미러).
     const titleTop = !!o.title && (o.titleV ?? 'top') === 'top';
-    const offset = pos === 'top' ? (titleTop ? TITLE_H : 0) : pos === 'bottom' ? (titleAtBottom(o) ? TITLE_H : 0) : 0;
+    const offset = pos === 'top' ? (titleTop ? metrics.titleHeight : 0) : pos === 'bottom' ? (titleAtBottom(o) ? metrics.titleHeight : 0) : 0;
     const horizontalLegend = pos === 'top' || pos === 'bottom';
     opt.legend = {
       show: true,
       [pos]: offset,
       orient: horizontalLegend ? 'horizontal' : 'vertical',
+      textStyle: { fontSize: typography.legend },
       ...(horizontalLegend || o.legend?.scroll === true ? { type: 'scroll' } : {}),
     };
   } else {
     opt.legend = { show: false };
   }
 
-  const label = { show: o.dataLabel === true };
+  const label = { show: o.dataLabel === true, fontSize: typography.dataLabel };
   // 겹치는 데이터 라벨 자동 숨김(규칙 3, 공식 labelLayout).
   const labelLayout = o.dataLabel === true ? { hideOverlap: true } : undefined;
   const horizontal = variant === 'horizontal';
@@ -516,9 +552,9 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       groups.get(cat)!.push(v);
     }
     const cats = [...groups.keys()];
-    opt.tooltip = { trigger: 'item', confine: true };
-    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, boundaryGap: true, splitArea: { show: false }, axisLabel: { rotate: o.xAxis?.rotate ?? 0 } };
-    opt.yAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false } };
+    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
+    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, boundaryGap: true, splitArea: { show: false }, axisLabel: { rotate: o.xAxis?.rotate ?? 0, fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    opt.yAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
     opt.series = [{
       type: 'boxplot',
@@ -546,14 +582,14 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     });
     if (!Number.isFinite(min)) { min = 0; max = 1; }
     if (min === max) max = min + 1;
-    opt.tooltip = { trigger: 'item', confine: true };
+    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
-    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, splitArea: { show: true }, axisLabel: { rotate: o.xAxis?.rotate ?? 0 } };
-    opt.yAxis = { type: 'category', data: yNames, name: o.yAxis?.title, splitArea: { show: true } };
+    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, splitArea: { show: true }, axisLabel: { rotate: o.xAxis?.rotate ?? 0, fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    opt.yAxis = { type: 'category', data: yNames, name: o.yAxis?.title, splitArea: { show: true }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
     const hm = gridMargins(o, false); // heatmap 은 범례 제거 → 제목만 가산
-    opt.grid = { ...hm, bottom: hm.bottom + VISUALMAP_H, containLabel: o.grid?.containLabel !== false };
-    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? TITLE_H : 0);
-    opt.series = [{ type: 'heatmap', name: '값', data, label: { show: o.dataLabel === true } }];
+    opt.grid = { ...hm, bottom: hm.bottom + metrics.visualMapHeight, containLabel: o.grid?.containLabel !== false };
+    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0, typography.legend);
+    opt.series = [{ type: 'heatmap', name: '값', data, label: { show: o.dataLabel === true, fontSize: typography.dataLabel } }];
     return opt;
   }
 
@@ -564,14 +600,14 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     let min = vals.length ? Math.min(...vals) : 0;
     let max = vals.length ? Math.max(...vals) : 1;
     if (min === max) max = min + 1;
-    opt.tooltip = { trigger: 'item', confine: true };
+    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
-    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? TITLE_H : 0);
+    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0, typography.legend);
     opt.series = [{
       type: 'map',
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
       roam: o.map?.roam === true,
-      label: { show: o.dataLabel === true },
+      label: { show: o.dataLabel === true, fontSize: typography.dataLabel },
       ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
       emphasis: { label: { show: true } },
       data,
@@ -588,7 +624,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
     // JSON 전송이라 symbolSize 콜백 불가 → 포인트별 symbolSize 를 데이터 항목에 계산해 넣는다(6~28px sqrt 스케일).
     const sizeOf = (v: number) => (sMax === sMin ? base : Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-    opt.tooltip = { trigger: 'item', confine: true };
+    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
     opt.geo = {
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
@@ -621,7 +657,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
         type: 'pie',
         radius,
         roseType: variant === 'rose' ? 'radius' : undefined,
-        label: { show: o.dataLabel === true, position: o.pie?.labelPosition ?? 'outside' },
+        label: { show: o.dataLabel === true, position: o.pie?.labelPosition ?? 'outside', fontSize: typography.dataLabel },
         data: cats.map((name, i) => ({ name, value: result.rows[i][1], itemStyle: { color: paletteColor(palette, i) } })),
       },
     ];
@@ -629,8 +665,8 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   }
 
   if (chartType === 'scatter') {
-    opt.xAxis = { type: o.xAxis?.scale === 'log' ? 'log' : 'value', name: o.xAxis?.title };
-    opt.yAxis = { type: 'value', name: o.yAxis?.title };
+    opt.xAxis = { type: o.xAxis?.scale === 'log' ? 'log' : 'value', name: o.xAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    opt.yAxis = { type: 'value', name: o.yAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
     opt.series = seriesCols.map((c, s) => ({
       type: 'scatter',
@@ -647,8 +683,8 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   }
 
   // bar / line (직교)
-  const catAxis = { type: 'category', data: cats, name: o.xAxis?.title };
-  const valAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false } };
+  const catAxis = { type: 'category', data: cats, name: o.xAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+  const valAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
   opt.xAxis = horizontal ? valAxis : catAxis;
   opt.yAxis = horizontal ? catAxis : valAxis;
   opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
@@ -720,7 +756,7 @@ function fiveNumberSummary(values: number[]): [number, number, number, number, n
 }
 
 /** heatmap·map 공용 visualMap — 팔레트[0]을 상단(고강도) 색으로, 밝은 중립을 하단으로. */
-function visualMapConfig(min: number, max: number, palette: string[], bottom = 0): Record<string, unknown> {
+function visualMapConfig(min: number, max: number, palette: string[], bottom = 0, fontSize = 12): Record<string, unknown> {
   return {
     min,
     max,
@@ -728,6 +764,7 @@ function visualMapConfig(min: number, max: number, palette: string[], bottom = 0
     orient: 'horizontal',
     left: 'center',
     bottom, // 제목이 하단이면 그 위로 올려 겹침 방지(규칙 1)
+    textStyle: { fontSize },
     inRange: { color: ['#f7f7f7', paletteColor(palette, 0)] },
   };
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Play, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsLeft, Play, X } from 'lucide-react';
 import type { BuilderConfig, ChartType, Datasource, JoinSpec, SchemaTable, TableRef, WhereCond, YAxisField } from '@/lib/api';
 import {
   BUCKET_CHOICES,
@@ -18,6 +18,8 @@ import {
   createSampleSeed,
   emptyJoin,
   isDateType,
+  isNumericType,
+  isSpatialPointType,
   orderTargets,
   tableHandle,
   tableRefKey,
@@ -45,6 +47,7 @@ interface Props {
   tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
   browseDatasourceId: number | null; // 사이드바에서 선택한 탐색 소스 — 테이블/조인 드롭다운을 이 소스로 필터
   datasources: Datasource[];
+  onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
   running: boolean;
@@ -53,7 +56,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, datasources, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, datasources, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -62,6 +65,12 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const isBoxplot = chartType === 'boxplot';
   const isMap = chartType === 'map';
   const isGeoScatter = chartType === 'geoscatter';
+  const geoPointMode = config.geoPoint?.mode ?? 'columns';
+  const spatialGeoPoint = isGeoScatter && geoPointMode === 'spatial';
+  const spatialPointOptions = colOptions
+    .filter((column) => isSpatialPointType(column.type))
+    .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
+  const numericOptions = colOptions.filter((column) => isNumericType(column.type));
   // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]). 버킷·표본은 원본값 모드에서 숨김.
   const maxSeries = isPie || isMap || isBoxplot ? 1 : isGeoScatter ? 2 : Infinity;
   const hideBucket = isScatter || isBoxplot || isGeoScatter;
@@ -73,7 +82,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const validationIssue = builderValidationIssue(config, chartType, tables);
   const warning = builderWarning(config);
   const canRun = !validationIssue;
-  const firstCol = colOptions[0]?.value ?? '';
+  const firstCol = (isGeoScatter ? numericOptions[0] : colOptions[0])?.value ?? '';
 
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
@@ -104,7 +113,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
     const t = findByKey(key);
     if (!t) return;
     // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    onChange({ table: refOf(t), joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null });
+    onChange({ table: refOf(t), joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null, geoPoint: undefined });
   };
 
   const changeXAxis = (xAxis: string) => {
@@ -151,6 +160,25 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
     const next = selectableBrowseTables.find((t) => !used.has(tableRefKey(t)));
     if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))] });
   };
+
+  const changeGeoPointMode = (mode: 'columns' | 'spatial') => {
+    if (mode === 'spatial') {
+      patch({
+        xAxis: null,
+        xAxisBucket: null,
+        yAxis: [],
+        orderBy: null,
+        sample: null,
+        geoPoint: {
+          mode: 'spatial',
+          spatialColumn: config.geoPoint?.spatialColumn ?? spatialPointOptions[0]?.value ?? null,
+          sizeColumn: config.geoPoint?.sizeColumn ?? null,
+        },
+      });
+      return;
+    }
+    patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, sample: null, geoPoint: { mode: 'columns' } });
+  };
   const unusedTable = !!config.table && selectableBrowseTables.some((t) => !usedKeys().has(tableRefKey(t)));
   const sampleSourceHint = joins.length > 0
     ? '조인 결과에서 무작위 행 표본'
@@ -165,19 +193,63 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canRun && !running) onRun();
       }}
     >
-      {/* 구성 헤더 */}
-      <div className="flex h-12 items-center gap-3 border-b border-border px-4">
-        <span className="text-sm font-medium text-text-primary">노코드 구성</span>
-        <div className="flex-1" />
-        {validationIssue ? (
-          <span className="text-xs text-danger">{validationIssue}</span>
-        ) : warning ? (
-          <span className="text-xs text-amber-600">{warning}</span>
-        ) : null}
-        <span className="text-xs text-text-tertiary">Ctrl + Enter</span>
-        <Button id="builder-run" size="sm" icon={<Play className="size-3.5" />} disabled={!canRun || running} onClick={onRun}>
-          {running ? '실행 중…' : '실행'}
-        </Button>
+      {/* 구성 헤더 + 내부 정의 모드 탭 */}
+      <div className="border-b border-border">
+        <div className="flex h-12 items-center gap-3 px-4">
+          <span className="shrink-0 whitespace-nowrap text-sm font-medium text-text-primary">노코드 구성</span>
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="노코드 구성·결과 접기"
+            aria-controls="data-builder-workspace"
+            className="inline-flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[11px] font-medium text-text-secondary hover:bg-muted hover:text-text-primary"
+          >
+            <ChevronsLeft className="size-3.5" />
+            <span className="hidden xl:inline">접기</span>
+          </button>
+          <div className="flex-1" />
+          {validationIssue ? (
+            <span className="min-w-0 truncate text-xs text-danger" title={validationIssue}>{validationIssue}</span>
+          ) : warning ? (
+            <span className="min-w-0 truncate text-xs text-amber-600" title={warning}>{warning}</span>
+          ) : null}
+        </div>
+        <div className="flex h-10 items-stretch gap-1 px-2 xl:px-4">
+          <div role="tablist" aria-label="차트 정의 방식" className="flex min-w-0 items-stretch gap-1">
+            <button
+              type="button"
+              role="tab"
+              aria-selected="true"
+              className="flex shrink-0 items-center whitespace-nowrap border-b-2 border-primary px-2 text-sm font-medium text-text-primary"
+            >
+              노코드
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected="false"
+              disabled
+              title="SQL · 준비 중"
+              className="flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-2 text-sm text-text-tertiary"
+            >
+              SQL
+              <span className="hidden rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary xl:inline">준비 중</span>
+            </button>
+          </div>
+          <div className="flex-1" />
+          <span className="hidden shrink-0 self-center whitespace-nowrap text-xs text-text-tertiary 2xl:inline">Ctrl + Enter</span>
+          <Button
+            id="builder-run"
+            size="sm"
+            className="shrink-0 self-center"
+            icon={<Play className="size-3.5" />}
+            aria-label={running ? '실행 중' : '실행'}
+            disabled={!canRun || running}
+            onClick={onRun}
+          >
+            <span className="hidden xl:inline">{running ? '실행 중…' : '실행'}</span>
+          </Button>
+        </div>
       </div>
 
       {/* 구성 폼 */}
@@ -236,7 +308,55 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           </Row>
         )}
 
-        <Row label={xLabel}>
+        {isGeoScatter && (
+          <Row label="좌표 방식">
+            <div className="w-60">
+              <Select
+                id="builder-geo-point-mode"
+                aria-label="좌표 방식"
+                value={geoPointMode}
+                onChange={(e) => changeGeoPointMode(e.target.value as 'columns' | 'spatial')}
+                options={[
+                  { value: 'columns', label: '경도 · 위도 컬럼' },
+                  { value: 'spatial', label: '공간 Point 컬럼' },
+                ]}
+              />
+            </div>
+          </Row>
+        )}
+
+        {spatialGeoPoint && (
+          <>
+            <Row label="공간 Point">
+              <div className="w-72">
+                <Select
+                  id="builder-spatial-point-column"
+                  aria-label="공간 Point 컬럼"
+                  value={config.geoPoint?.spatialColumn ?? ''}
+                  onChange={(e) => patch({ geoPoint: { ...config.geoPoint!, mode: 'spatial', spatialColumn: e.target.value || null } })}
+                  options={spatialPointOptions}
+                  placeholder="geometry/geography Point 선택"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">SRID가 지정된 PostGIS Point를 WGS84 경도·위도로 변환합니다</span>
+            </Row>
+            <Row label="점 크기">
+              <div className="w-60">
+                <Select
+                  id="builder-spatial-size-column"
+                  aria-label="점 크기 컬럼"
+                  value={config.geoPoint?.sizeColumn ?? ''}
+                  onChange={(e) => patch({ geoPoint: { ...config.geoPoint!, mode: 'spatial', sizeColumn: e.target.value || null } })}
+                  options={numericOptions}
+                  placeholder="사용 안 함"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">선택 사항 · 숫자가 클수록 점을 크게 표시</span>
+            </Row>
+          </>
+        )}
+
+        {!spatialGeoPoint && <Row label={xLabel}>
           <div className="w-60">
             <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder={isMap ? '지역명 컬럼' : '컬럼 선택'} />
           </div>
@@ -255,9 +375,9 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               </div>
             </div>
           )}
-        </Row>
+        </Row>}
 
-        <Row label={yLabel}>
+        {!spatialGeoPoint && <Row label={yLabel}>
           <div className="flex flex-col gap-2">
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -286,7 +406,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               </span>
             </div>
           </div>
-        </Row>
+        </Row>}
 
         <Row label="조건">
           <div className="flex flex-col gap-2">
@@ -310,7 +430,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           </div>
         </Row>
 
-        <Row label="정렬">
+        {!spatialGeoPoint && <Row label="정렬">
           <div className="w-40">
             <Select
               aria-label="정렬 기준"
@@ -330,7 +450,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               />
             </div>
           )}
-        </Row>
+        </Row>}
 
         {!hideSampleRow && (
         <Row label="표본 추출">

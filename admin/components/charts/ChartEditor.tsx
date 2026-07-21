@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronUp, ChevronsRight } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable } from '@/lib/api';
 import { builderValidationIssue, emptyBuilder, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey } from '@/lib/builder';
+import { chartEditPath } from '@/lib/chartRoutes';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -14,7 +15,7 @@ import { ResizeHandle, useResizable } from '@/components/ui/Resizable';
 import { SchemaExplorer } from './SchemaExplorer';
 import { NocodeBuilder } from './NocodeBuilder';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
-import { ChartPreview } from './ChartPreview';
+import { ChartPreviewPanel } from './ChartPreviewPanel';
 import { OptionPanel } from './OptionPanel';
 import { EmbedModal } from './EmbedModal';
 
@@ -22,6 +23,50 @@ import { EmbedModal } from './EmbedModal';
 const COLUMN_OPTION_KEYS = ['description', 'refreshMode', 'cacheTtlSeconds'] as const;
 const LEFT_PANEL_DEFAULT_WIDTH = 320;
 const RIGHT_PANEL_DEFAULT_WIDTH = 440;
+
+function useStoredBoolean(key: string, initial: boolean) {
+  const [value, setValue] = useState(initial);
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    const stored = window.localStorage.getItem(key);
+    if (stored === 'true' || stored === 'false') setValue(stored === 'true');
+    setRestored(true);
+  }, [key]);
+  useEffect(() => {
+    if (restored) window.localStorage.setItem(key, String(value));
+  }, [key, restored, value]);
+  return [value, setValue] as const;
+}
+
+function CollapsedPanelRail({
+  label,
+  controls,
+  testId,
+  onExpand,
+}: {
+  label: string;
+  controls: string;
+  testId: string;
+  onExpand: () => void;
+}) {
+  return (
+    <div className="flex w-10 shrink-0 border-r border-border bg-bg-panel">
+      <button
+        type="button"
+        data-testid={testId}
+        onClick={onExpand}
+        aria-label={`${label} 펼치기`}
+        aria-controls={controls}
+        aria-expanded={false}
+        title={`${label} 펼치기`}
+        className="group flex w-full flex-col items-center gap-2.5 py-3 text-text-secondary hover:bg-muted hover:text-text-primary"
+      >
+        <ChevronsRight className="size-3.5 shrink-0" />
+        <span className="text-[11px] font-medium tracking-[0.08em] [writing-mode:vertical-rl]">{label}</span>
+      </button>
+    </div>
+  );
+}
 
 function splitOptions(o: Options): { jsonb: Options; cols: Record<string, unknown> } {
   const jsonb: Options = { ...o };
@@ -33,6 +78,11 @@ function splitOptions(o: Options): { jsonb: Options; cols: Record<string, unknow
     }
   }
   return { jsonb, cols };
+}
+
+/** 정식 편집 URL만 교체한다. 같은 ChartEditor를 다시 마운트하지 않아 로드 직후 사용자 변경을 덮어쓰지 않는다. */
+function replaceEditorPath(path: string) {
+  if (window.location.pathname !== path) window.history.replaceState(window.history.state, '', path);
 }
 
 /** 단건 저장 미리보기의 캐시 rows를 편집기 실행 결과 상태로 복원한다. 구 서버 응답은 option만 사용한다. */
@@ -84,6 +134,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
   const [embedOpen, setEmbedOpen] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false);
+  const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false);
+  const [optionEditorCollapsed, setOptionEditorCollapsed] = useStoredBoolean('chartsdk.editor.optionEditorCollapsed', false);
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
@@ -119,10 +172,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           const c = definitionResult.value;
           setName(c.name);
           setDatasourceId(c.datasourceId);
-          setBuilder(migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId));
+          const restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
+          setBuilder(restoredBuilder);
           setChartType(c.chartType);
           setOptions({ ...defaultsFor(c.chartType), ...c.options });
           setGeneratedSql(c.sqlQuery || null);
+          const canonicalPath = chartEditPath(c.id, restoredBuilder.table);
+          replaceEditorPath(canonicalPath);
         } else {
           setToast('차트를 불러오지 못했습니다.');
         }
@@ -153,9 +209,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   }, [chartType, options, result]);
 
   // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
-  const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left');
-  const rightPanel = useResizable(RIGHT_PANEL_DEFAULT_WIDTH, 280, 560, 'right');
-  const resultsPanel = useResizable(288, 120, 560, 'up');
+  const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth');
+  const rightPanel = useResizable(RIGHT_PANEL_DEFAULT_WIDTH, 280, 720, 'right', 'chartsdk.editor.rightWidth');
+  const resultsPanel = useResizable(288, 120, 560, 'up', 'chartsdk.editor.resultsHeight');
+  const optionEditor = useResizable(280, 120, 720, 'up', 'chartsdk.editor.optionHeight');
 
   const invalidateRaw = () => {
     rawRequestId.current += 1;
@@ -201,7 +258,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
     // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null });
+    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined });
     resetResults();
     setDirty(true);
     // 원본 미리보기는 부가 기능 — 실패해도 테이블 선택은 유지(미처리 rejection·크래시 방지).
@@ -306,8 +363,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       if (savedId == null) {
         const created = await chartsApi.create(input);
         setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
+        replaceEditorPath(chartEditPath(created.id, builder.table));
       } else {
         await chartsApi.update(savedId, input);
+        replaceEditorPath(chartEditPath(savedId, builder.table));
       }
       setDirty(false);
       setToast('저장되었습니다');
@@ -323,6 +382,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const goList = () => {
     if (dirty) setLeaveOpen(true);
     else router.push('/');
+  };
+
+  const changeOptions = (next: Options) => {
+    setOptions(next);
+    if (!result) setOption(null);
+    setDirty(true);
   };
 
   return (
@@ -352,108 +417,138 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </Button>
       </header>
 
-      {/* 정의 모드 탭 */}
-      <nav className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-bg-panel px-4">
-        <span className="flex h-full items-center border-b-2 border-primary px-2 text-sm font-medium text-text-primary">노코드</span>
-        <span className="flex h-full items-center gap-1.5 px-2 text-sm text-text-tertiary">
-          SQL
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary">준비 중</span>
-        </span>
-      </nav>
-
       {/* 3분할 Body */}
       <div className="flex flex-1 overflow-hidden">
-        <aside style={{ width: leftPanel.size }} className="shrink-0 overflow-y-auto border-r border-border bg-bg-panel">
-          <SchemaExplorer
-            datasources={datasources}
-            tables={tables.filter((t) => t.datasourceId === datasourceId)}
-            datasourceId={datasourceId}
-            selectedTable={builder.table ? tableRefKey(builder.table) : null}
-            onChangeDatasource={changeDatasource}
-            onSelectTable={selectTable}
+        {leftCollapsed ? (
+          <CollapsedPanelRail
+            label="데이터 패널"
+            controls="schema-sidebar"
+            testId="schema-sidebar-rail"
+            onExpand={() => setLeftCollapsed(false)}
           />
-        </aside>
-        <ResizeHandle dir="left" onPointerDown={leftPanel.onPointerDown} />
+        ) : (
+          <>
+            <aside id="schema-sidebar" data-testid="schema-sidebar" style={{ width: leftPanel.size }} className="shrink-0 overflow-y-auto border-r border-border bg-bg-panel">
+              <SchemaExplorer
+                datasources={datasources}
+                tables={tables.filter((t) => t.datasourceId === datasourceId)}
+                datasourceId={datasourceId}
+                selectedTable={builder.table ? tableRefKey(builder.table) : null}
+                onChangeDatasource={changeDatasource}
+                onSelectTable={selectTable}
+                onCollapse={() => setLeftCollapsed(true)}
+              />
+            </aside>
+            <ResizeHandle dir="left" onPointerDown={leftPanel.onPointerDown} />
+          </>
+        )}
 
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <NocodeBuilder
-              config={builder}
-              chartType={chartType}
-              tables={tables}
-              browseDatasourceId={datasourceId}
-              datasources={datasources}
-              onChange={(b) => {
-                // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
-                setBuilder(normalizeBuilderForChartType(b, chartType));
-                setDirty(true);
-                setResult(null);
-                invalidateRaw();
-                setGeneratedSql(null);
-                setOption(null);
-                setRunError(null);
-                setInitialPreviewLoading(false);
-                setInitialPreviewError(null);
-              }}
-              onRun={runBuilder}
-              running={running}
-              generatedSql={generatedSql}
-              sqlOpen={sqlOpen}
-              onToggleSql={() => setSqlOpen((v) => !v)}
+        {builderCollapsed ? (
+          <CollapsedPanelRail
+            label="노코드 구성·결과"
+            controls="data-builder-workspace"
+            testId="data-builder-workspace-rail"
+            onExpand={() => setBuilderCollapsed(false)}
+          />
+        ) : (
+          <>
+            <section id="data-builder-workspace" data-testid="data-builder-workspace" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <NocodeBuilder
+                  config={builder}
+                  chartType={chartType}
+                  tables={tables}
+                  browseDatasourceId={datasourceId}
+                  datasources={datasources}
+                  onCollapse={() => setBuilderCollapsed(true)}
+                  onChange={(b) => {
+                    // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
+                    setBuilder(normalizeBuilderForChartType(b, chartType));
+                    setDirty(true);
+                    setResult(null);
+                    invalidateRaw();
+                    setGeneratedSql(null);
+                    setOption(null);
+                    setRunError(null);
+                    setInitialPreviewLoading(false);
+                    setInitialPreviewError(null);
+                  }}
+                  onRun={runBuilder}
+                  running={running}
+                  generatedSql={generatedSql}
+                  sqlOpen={sqlOpen}
+                  onToggleSql={() => setSqlOpen((v) => !v)}
+                />
+              </div>
+              <ResizeHandle dir="up" onPointerDown={resultsPanel.onPointerDown} />
+              <div style={{ height: resultsPanel.size }} className="shrink-0 border-t border-border">
+                <ResultsPanel
+                  result={result}
+                  raw={raw}
+                  tab={resultTab}
+                  onTab={changeResultTab}
+                  running={resultTab === 'raw' ? rawRunning : running}
+                  error={resultTab === 'raw' ? rawError : runError}
+                />
+              </div>
+            </section>
+
+            <ResizeHandle dir="right" onPointerDown={rightPanel.onPointerDown} />
+          </>
+        )}
+
+        <aside
+          data-testid="visual-editor-workspace"
+          style={builderCollapsed ? { flex: '1 1 0%', width: 'auto' } : { width: rightPanel.size }}
+          className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-border bg-bg-panel"
+        >
+          <div className="min-h-[180px] flex-1">
+            <ChartPreviewPanel
+              option={option}
+              options={options}
+              loading={initialPreviewLoading}
+              error={initialPreviewError}
+              wide={builderCollapsed}
+              onChangeOptions={changeOptions}
             />
           </div>
-          <ResizeHandle dir="up" onPointerDown={resultsPanel.onPointerDown} />
-          <div style={{ height: resultsPanel.size }} className="shrink-0 border-t border-border">
-            <ResultsPanel
-              result={result}
-              raw={raw}
-              tab={resultTab}
-              onTab={changeResultTab}
-              running={resultTab === 'raw' ? rawRunning : running}
-              error={resultTab === 'raw' ? rawError : runError}
-            />
-          </div>
-        </section>
 
-        <ResizeHandle dir="right" onPointerDown={rightPanel.onPointerDown} />
-        <aside style={{ width: rightPanel.size }} className="flex shrink-0 flex-col overflow-y-auto border-l border-border bg-bg-panel">
-          <div className="shrink-0 border-b border-border p-4">
-            <p className="mb-3 text-sm font-medium text-text-primary">차트 미리보기</p>
-            <div className="h-48">
-              {option ? (
-                <ChartPreview option={option} />
-              ) : (
-                <div className="flex h-full items-center justify-center rounded-md bg-muted/40 text-xs text-text-tertiary">
-                  {initialPreviewLoading
-                    ? '저장된 미리보기를 불러오는 중…'
-                    : initialPreviewError ?? '실행하면 미리보기가 표시됩니다.'}
-                </div>
-              )}
-            </div>
-          </div>
-          <OptionPanel
-            chartType={chartType}
-            options={options}
-            columns={result?.columns ?? []}
-            hasResult={!!result}
-            onChangeChartType={(to, next) => {
-              // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
-              // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
-              const normalized = normalizeBuilderForChartType(builder, to);
-              const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
-              setChartType(to);
-              setOptions(next);
-              setBuilder(normalized);
-              if (builderChanged) resetResults();
-              else if (!result) setOption(null);
-              setDirty(true);
-            }}
-            onChangeOptions={(next) => {
-              setOptions(next);
-              if (!result) setOption(null);
-              setDirty(true);
-            }}
-          />
+          {optionEditorCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setOptionEditorCollapsed(false)}
+              className="flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary"
+            >
+              <ChevronUp className="size-3.5" />
+              시각화 옵션 펼치기
+            </button>
+          ) : (
+            <>
+              <ResizeHandle dir="up" onPointerDown={optionEditor.onPointerDown} />
+              <div data-testid="visual-option-editor" style={{ height: optionEditor.size, maxHeight: '50%' }} className="shrink-0 overflow-y-auto border-t border-border">
+                <OptionPanel
+                  chartType={chartType}
+                  options={options}
+                  columns={result?.columns ?? []}
+                  hasResult={!!result}
+                  onCollapse={() => setOptionEditorCollapsed(true)}
+                  onChangeChartType={(to, next) => {
+                    // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
+                    // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
+                    const normalized = normalizeBuilderForChartType(builder, to);
+                    const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
+                    setChartType(to);
+                    setOptions(next);
+                    setBuilder(normalized);
+                    if (builderChanged) resetResults();
+                    else if (!result) setOption(null);
+                    setDirty(true);
+                  }}
+                  onChangeOptions={changeOptions}
+                />
+              </div>
+            </>
+          )}
         </aside>
       </div>
 
