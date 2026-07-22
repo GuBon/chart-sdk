@@ -5,6 +5,7 @@ node_modules/
 dist/
 admin/.next/
 admin/.next-e2e/
+admin/.next-*/
 admin/out/
 sdk/dist/
 admin/public/sdk.js
