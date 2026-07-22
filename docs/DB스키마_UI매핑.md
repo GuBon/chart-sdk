@@ -64,7 +64,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 |---|---|---|
 | 검색 입력(이름·설명) | ⏳→📦 | 쿼리 파라미터 `q` → 대상 `mc_chart.name`·`description` (사용자 범위 `owner_id` + ILIKE, pg_trgm GIN) |
 | 종류 필터(막대/선/원형/분포) | ⏳→📦 | 쿼리 파라미터 `type` → `mc_chart.chart_type` (owner 범위 내 필터) |
-| 데이터소스 필터 | ⏳→📦 | 쿼리 파라미터 `datasourceId` → `mc_chart_datasource` 존재 여부. 기준 관계와 조인 보조 소스를 모두 포함 |
+| 데이터 계층 필터 | ⏳→📦 | `/data/{datasourceName}[/{schema}[/{relation}]]` 화면 문맥을 API의 `datasourceId`·`schema`·`relation`으로 변환. 데이터소스는 `mc_chart_datasource`, 스키마·관계는 `builder_config.table`과 `joins[].table`을 조회해 기준·조인 참조를 모두 포함 |
 | 정렬(수정일·이름) | ⏳→📦 | 쿼리 파라미터 `sort` → `mc_chart.updated_at`·`name` (기본 updated_at DESC, idx_mc_chart_owner_updated) |
 | 카드 썸네일 | 📦/⏳ | `mc_chart_cache.thumbnail`(후속) / MVP는 차트종류 일러스트(⏳) |
 | 차트명 | 📦 | `mc_chart.name` |

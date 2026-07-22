@@ -110,7 +110,6 @@ LIMIT 1000
 SELECT "category", AVG("amount") AS "avg_amount"
 FROM "sales" TABLESAMPLE SYSTEM (10) REPEATABLE (48291)
 GROUP BY "category"
-LIMIT 1000
 ```
 
 위 SQL은 SYSTEM을 강제한 호환 경로의 예시다. 기본 INDEX_RANDOM은 무작위 PK 배열을 `unnest(?)`한 뒤 base 테이블과 등가 조인하는 CTE를 사용한다.
@@ -123,7 +122,6 @@ SELECT "category",
        COUNT("amount") AS "count_amount"
 FROM "sales" TABLESAMPLE SYSTEM (10) REPEATABLE (48291)
 GROUP BY "category"
-LIMIT 1000
 ```
 
 - **방식 결정(서버):** `SamplingPlanner`가 관계 종류와 조인 유무를 먼저 보고, 물리 테이블일 때만 PK·행수(reltuples)·키 밀도를 카탈로그 쿼리로 조사한다.
@@ -224,7 +222,7 @@ generate(config, datasourceId, chartType, rawMode):
 - quote(name): 큰따옴표로 감싸고 내부 " 는 "" 로 escape. 단 화이트리스트를 통과한 이름만 여기까지 온다(이중 방어).
 - qualify(table): 테이블을 `"schema"."table"` 로 한정한다(스키마 미지정 → public). 컬럼 참조는 `"schema"."table"."column"` 으로 한정된다. 조인 시 컬럼 참조의 테이블 부분은 **핸들**로 표기한다 — 같은 이름 테이블이 서로 다른 소스/스키마로 한 쿼리에 동시 등장하면 서로 다른 핸들(`users`/`users_2`)을 받아 함께 조인 가능하다(SQL 은 소스/스키마로 완전 한정돼 모호하지 않음).
 - 생성 결과 (sql, binds)는 기존 SQL 실행 엔진에 그대로 전달. 실행 엔진은 노코드/수기 SQL을 구분하지 않는다(수기 SQL은 binds가 빈 목록일 뿐).
-- **지도 포인트 예외:** `chartType="geoscatter"`의 차트 실행은 `WHERE`·JOIN 조건에 맞는 경도/위도 행을 모두 반환하므로 SQL의 최종 `LIMIT 1000`과 JDBC 행 제한을 함께 적용하지 않는다. 같은 구성의 `rawMode` 원본 데이터 탭은 조회 성격이 다르므로 계속 1,000행으로 제한한다. 쿼리 타임아웃은 유지된다.
+- **전체 결과 계약:** 모든 실제 차트 실행은 SQL 최종 `LIMIT 1000`과 JDBC 행 제한을 적용하지 않는다. 표본 미지정 시 조건·집계 결과 전체를 반환하고, 사용자가 `sample`을 지정한 경우에만 표본 계획이 입력 행을 줄인다. 같은 구성의 `rawMode` 원본 데이터 탭은 조회 성격이 다르므로 계속 1,000행으로 제한한다. 쿼리 타임아웃은 유지된다.
 
 ## 7. 생성 예시
 
@@ -237,7 +235,6 @@ generate(config, datasourceId, chartType, rawMode):
 SELECT "category", SUM("amount") AS "sum_amount"
 FROM "sales"
 GROUP BY "category"
-LIMIT 1000
 ```
 
 ### 예시 2 — 다중 시리즈 + 조건 + 정렬
@@ -255,7 +252,6 @@ FROM "sales"
 WHERE "dept" = ? AND "date" BETWEEN ? AND ?
 GROUP BY "month"
 ORDER BY 1 ASC
-LIMIT 1000
 ```
 바인딩: ["영업", 2026-01-01, 2026-06-30]
 
@@ -280,7 +276,6 @@ SELECT DATE_TRUNC('month', "date") AS "date", SUM("amount") AS "매출"
 FROM "sales"
 GROUP BY 1
 ORDER BY 1 ASC
-LIMIT 1000
 ```
 변환기 라벨: 2026-01, 2026-02, … (month → YYYY-MM)
 
@@ -296,7 +291,6 @@ LIMIT 1000
 SELECT "year", "print" AS "print"
 FROM "sales"
 ORDER BY 1 ASC
-LIMIT 1000
 ```
 
 막대/선은 각 `year` 행의 `print` 값을 그대로 그린다. 원형은 첫 컬럼을 name, 두 번째 컬럼을 value로 사용한다. 분포는 `[year, print]` 점으로 사용하되 X축이 숫자 타입이어야 한다. `GROUP BY`와 합계/평균 계산은 없다.
@@ -309,7 +303,7 @@ FROM "stores"
 WHERE "region_code" = ?
 ```
 
-지도 포인트 차트 실행에는 최종 `LIMIT`이 없다. 사용자가 지정한 지역·기간 등 `WHERE` 조건에 맞는 좌표를 모두 가져오며, 응답의 `truncated`는 `false`다. 원본 데이터 탭의 `SELECT *` 미리보기는 이 예외에 포함되지 않는다.
+지도 포인트도 모든 차트와 같은 전체 결과 계약을 사용하므로 최종 `LIMIT`이 없다. 사용자가 지정한 지역·기간 등 `WHERE` 조건에 맞는 좌표를 모두 가져오며, 응답의 `truncated`는 `false`다. 원본 데이터 탭의 `SELECT *` 미리보기는 별도 조회이므로 계속 제한한다.
 
 ### 예시 7 — PostGIS 공간 Point 컬럼
 
@@ -407,7 +401,6 @@ FROM "sales"
 LEFT JOIN "orders" ON "sales"."id" = "orders"."sale_id"
 INNER JOIN "products" ON "orders"."prod_id" = "products"."id"
 GROUP BY "products"."category"
-LIMIT 1000
 ```
 - `FROM "base"` 뒤에 `joins` **순서대로** `[INNER|LEFT] JOIN "table" ON "a"."x" = "b"."y"`.
 - SELECT·GROUP BY·ORDER BY·WHERE 의 식별자는 전부 `"테이블"."컬럼"` qualified quote. 별칭은 두지 않는다(테이블명 그대로 — 단순·명확).

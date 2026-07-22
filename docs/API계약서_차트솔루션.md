@@ -127,7 +127,7 @@ Content-Type: application/json
 ### 처리 (서버)
 
 1. SELECT 검증 (그 외 구문 → 400 SQL_NOT_SELECT)
-2. 읽기 전용 계정으로 실행, 타임아웃(기본 10초), 행 제한(기본 1000행)
+2. 읽기 전용 계정으로 실행, 타임아웃(기본 10초). `chartType`이 없으면 데이터 점검용으로 최대 1,000행, `chartType`이 있으면 실제 차트 계약에 따라 전체 결과
 3. 컬럼 메타 + 행 데이터 반환
 
 ### 응답 200
@@ -157,6 +157,8 @@ POST /api/v1/query/run-builder
 ```
 서버가 builderConfig를 검증(노코드 SQL 생성규칙 9·11장) → SQL+바인딩 생성 → 실행. 응답은 2번과 동일 형태 + "generatedSql" 필드(표시용 리터럴 사본) 포함.
 
+`mode:"aggregate"`의 실제 차트 결과에는 고정 행 제한을 적용하지 않는다. 표본 미지정 시 조건·집계 결과 전체를 반환하며, 결과를 줄이는 유일한 제품 기능은 사용자가 명시한 `sample`이다. `mode:"rows"` 원본 데이터 미리보기만 최대 1,000행으로 제한한다.
+
 `builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample`을 함께 지정하면 JOIN과 WHERE를 적용한 행 집합을 모집단 CTE로 만들고, 그 결과에서 `RESULT_RANDOM` 표본을 뽑은 뒤 집계한다. 앱은 이 기능을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
 `builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 분포는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
@@ -167,7 +169,7 @@ POST /api/v1/query/run-builder
 
 `chartType:"geoscatter"`의 `mode:"aggregate"`는 이름과 달리 원본 좌표 튜플을 반환하는 전용 경로다. `geoPoint` 미지정 또는 `{mode:"columns"}`이면 기존 `xAxis=경도`, `yAxis[0]=위도`, 선택 `yAxis[1]=크기`를 사용한다. `{mode:"spatial",spatialColumn:"location",sizeColumn?:"weight"}`이면 카탈로그가 확인한 SRID 지정 `geometry/geography(Point, SRID)`를 WGS84로 변환해 내부 열 `__chartsdk_longitude`, `__chartsdk_latitude`, 선택 `__chartsdk_size`로 반환한다. 공간 모드는 단일 데이터소스(같은 소스 내 JOIN 가능) 전용이며 표본 추출을 함께 쓰지 않는다.
 
-두 좌표 방식 모두 생성 SQL과 JDBC의 최종 1,000행 제한을 해제하여 JOIN·WHERE 조건에 맞는 좌표를 전부 반환하고 `truncated:false`로 응답한다. 숫자 컬럼 방식은 다중 데이터소스도 지원하지만 공간 컬럼 방식은 DuckDB의 PostGIS 확장 계약이 없으므로 여러 데이터소스 JOIN에서 400으로 거부한다. 기존 쿼리 타임아웃과 DuckDB 메모리 상한은 유지한다. `mode:"rows"`, 관계 미리보기, raw SQL, 다른 차트 타입의 결과 제한은 바뀌지 않는다.
+두 좌표 방식도 다른 차트와 같은 전체 결과 계약을 사용해 JOIN·WHERE 조건에 맞는 좌표를 전부 반환하고 `truncated:false`로 응답한다. 숫자 컬럼 방식은 다중 데이터소스도 지원하지만 공간 컬럼 방식은 DuckDB의 PostGIS 확장 계약이 없으므로 여러 데이터소스 JOIN에서 400으로 거부한다. 기존 쿼리 타임아웃과 DuckDB 메모리 상한은 유지한다. `mode:"rows"`와 관계 미리보기의 1,000행 제한은 바뀌지 않는다.
 
 검증 실패는 400(INVALID_IDENTIFIER / AGG_TYPE_MISMATCH / OP_TYPE_MISMATCH / VALUE_PARSE_ERROR / BUCKET_TYPE_MISMATCH) — DB 에러를 노코드 사용자에게 노출하지 않는다.
 2번(raw SQL 실행)은 2차 SQL 탭에서 사용한다.
@@ -193,7 +195,7 @@ POST /api/v1/query/run-builder
 POST /api/v1/charts/preview
 { "chartType": "bar", "options": { ... }, "rows": { "columns": [...], "rows": [...] } }
 ```
-응답 200: `{ "option": { ... } }` — 받은 `rows`에 `chartType`·`options`만 다시 적용해 ECharts option을 조립한다(**SQL 미실행**, 1·2A와 동일한 운영 Java 변환기). S2에서 **데이터에 영향 없는 옵션 변경**(색·범례·라벨·축 등) 시 호출 — 옵션 변경마다 집계 SQL을 재실행해 운영 DB를 때리지 않기 위함(PRD 7.7). `rows`는 직전 `run-builder` 결과를 클라이언트가 보관했다가 그대로 전달(≤1000행, 수십 KB). 클라이언트는 디바운스(약 150~250ms) 후 호출해 응답을 `setOption` 한다. MSW의 TypeScript 변환기는 프론트 테스트 전용 미러이며 운영 API 계약에는 포함되지 않는다.
+응답 200: `{ "option": { ... } }` — 받은 `rows`에 `chartType`·`options`만 다시 적용해 ECharts option을 조립한다(**SQL 미실행**, 1·2A와 동일한 운영 Java 변환기). S2에서 **데이터에 영향 없는 옵션 변경**(색·범례·라벨·축 등) 시 호출 — 옵션 변경마다 집계 SQL을 재실행해 운영 DB를 때리지 않기 위함(PRD 7.7). `rows`는 직전 `run-builder`의 전체 결과를 클라이언트가 보관했다가 그대로 전달한다. 클라이언트는 디바운스(약 150~250ms) 후 호출해 응답을 `setOption` 한다. MSW의 TypeScript 변환기는 프론트 테스트 전용 미러이며 운영 API 계약에는 포함되지 않는다.
 - `options.display`·`options.typography` 변경도 데이터와 무관하므로 2B를 사용한다. 서버는 논리 설계 크기에 맞는 글꼴과 제목·범례·grid·visualMap 여백을 다시 조립한다. Admin의 화면 맞춤/zoom과 데이터·노코드·옵션 패널 접힘은 렌더러 로컬 상태라 요청에 포함하지 않는다.
 - 데이터 구성(테이블·축·조건·정렬·묶기)이 바뀌면 2B가 아니라 **2A `run-builder` 재호출**(rows 갱신 + option 재조립). `options.sortOrder`(표시 정렬)는 rows 재정렬만이라 2B로 충분하다.
 
@@ -214,13 +216,13 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 | `q` | 문자열 | 이름·설명 부분일치(ILIKE). DB는 `pg_trgm` GIN 인덱스로 최적화 |
 | `type` | `bar`\|`line`\|`pie`\|`scatter` | 대분류(`chart_type`) 필터. 미지정 시 전체 |
 | `datasourceId` | 정수 | 데이터소스 참조 필터. 기준 관계뿐 아니라 `mc_chart_datasource`에 기록된 조인 보조 소스도 포함. 미지정 시 전체 |
-| `schema` | 문자열 | `relation`과 함께 쓰는 기준 관계 스키마. 미지정 시 `public` |
-| `relation` | 문자열 | `builder_config.table.name` 기준 관계 필터. `datasourceId`와 함께 관계 상세의 관련 차트를 조회 |
+| `schema` | 문자열 | `datasourceId`와 함께 스키마 범위의 관련 차트를 조회. `builder_config.table`과 `joins[].table`을 모두 포함 |
+| `relation` | 문자열 | `schema`·`datasourceId`와 함께 관계 범위의 관련 차트를 조회. 기준 관계와 조인 관계를 모두 포함하며 `schema` 미지정 시 `public` |
 | `sort` | `updated_desc`(기본)\|`updated_asc`\|`name_asc`\|`name_desc` | 정렬 |
 | `page` | 1 이상의 정수 | 페이지 번호. 기본 1 |
 | `pageSize` | 1~60 정수 | 페이지 크기. 기본 12 |
 
-- 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. 데이터소스 필터는 `mc_chart_datasource`의 PK `(chart_id,datasource_id)`를 이용한 `EXISTS`로 조인 보조 소스까지 찾는다. 관계 필터는 현재 별도 읽기 모델 없이 `builder_config.table` JSONB의 기준 관계를 조회한다.
+- 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. 데이터소스 필터는 `mc_chart_datasource`의 PK `(chart_id,datasource_id)`를 이용한 `EXISTS`로 조인 보조 소스까지 찾는다. 스키마·관계 필터는 `builder_config.table`과 `builder_config.joins[].table` JSONB 참조를 함께 조회한다.
 
 응답 200:
 
@@ -235,7 +237,7 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 
 `mainTable`은 `builder_config.table`과 현재 `mc_datasource.name`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. `datasourceId`는 실행·관계 식별용, `datasourceName`은 URL 표시용이다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceName}/{schema}/{relation}/{chartId}`를 만든다. 메인 관계를 알 수 없는 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
 
-Admin 데이터 탐색 경로는 `/data/{datasourceName}`(해당 소스를 참조하는 차트와 스키마), `/data/{datasourceName}/{schema}`(TABLE·View·Materialized View 목록), `/data/{datasourceName}/{schema}/{relation}`(컬럼과 그 관계가 기준인 차트), `/data/{datasourceName}/{schema}/{relation}/{chartId}`(차트 편집) 순서다. 이름은 한 URL 구간으로 UTF-8 퍼센트 인코딩한다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장·실행 권위는 계속 숫자 `datasourceId`, `builder_config.table`, `mc_chart_datasource`에 있다. 데이터소스 이름을 수정하면 새 이름이 새 정식 URL이 되며 배포 전 정책상 구 이름 리다이렉트는 두지 않는다.
+Admin 데이터 탐색 경로는 `/data/{datasourceName}`, `/data/{datasourceName}/{schema}`, `/data/{datasourceName}/{schema}/{relation}` 순서이며 각 경로의 기본 화면은 그 범위의 차트 목록이다. 데이터소스·스키마·관계 범위는 모두 기준 관계와 조인 관계 참조를 포함하고 같은 검색·종류·정렬·페이지네이션 UI를 사용한다. 메타데이터는 각 경로의 `?view=schema`, `?view=relations`, `?view=columns` 탭에서 탐색하며 `/data/{datasourceName}/{schema}/{relation}/{chartId}`는 차트 편집 경로다. 이름은 한 URL 구간으로 UTF-8 퍼센트 인코딩한다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장·실행 권위는 계속 숫자 `datasourceId`, `builder_config.table`, `mc_chart_datasource`에 있다. 데이터소스 이름을 수정하면 새 이름이 새 정식 URL이 되며 배포 전 정책상 구 이름 리다이렉트는 두지 않는다.
 
 ### 3.2 단건 조회 — S2 진입
 
