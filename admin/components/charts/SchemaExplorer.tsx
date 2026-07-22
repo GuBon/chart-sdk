@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, ChevronsLeft, Filter, Search, Table2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, ChevronsLeft, Filter, Search, Table2, X } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
 import { tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
@@ -25,9 +25,13 @@ interface Props {
   datasources: Datasource[];
   tables: SchemaTable[];
   datasourceId: number | null;
-  selectedTable: string | null; // 선택된 base 테이블의 tableRefKey
+  selectedTable: string | null;
+  selection: { label: string } | null;
+  disabledTableKeys: Set<string>;
+  focusRequestKey: number;
   onChangeDatasource: (id: number) => void;
   onSelectTable: (table: SchemaTable) => void;
+  onCancelSelection: () => void;
   onCollapse: () => void;
 }
 
@@ -45,13 +49,26 @@ function MenuItem({ label, active, onClick }: { label: string; active: boolean; 
   );
 }
 
-export function SchemaExplorer({ datasources, tables, datasourceId, selectedTable, onChangeDatasource, onSelectTable, onCollapse }: Props) {
+export function SchemaExplorer({
+  datasources,
+  tables,
+  datasourceId,
+  selectedTable,
+  selection,
+  disabledTableKeys,
+  focusRequestKey,
+  onChangeDatasource,
+  onSelectTable,
+  onCancelSelection,
+  onCollapse,
+}: Props) {
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortMode>('schema');
   const [sortOpen, setSortOpen] = useState(false);
   const [schemaFilter, setSchemaFilter] = useState<string | null>(null); // null = 전체
   const [page, setPage] = useState(1);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // 현재 소스의 스키마 목록(데이터에서 유도). 1개뿐이면 필터 섹션을 숨긴다.
   const schemas = [...new Set(tables.map((t) => t.schema))];
@@ -85,6 +102,11 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
   useEffect(() => setPage(1), [query, sort, schemaFilter, datasourceId]);
   // 소스가 바뀌면 이전 소스의 스키마 필터는 무효 — 전체로 리셋.
   useEffect(() => setSchemaFilter(null), [datasourceId]);
+  useEffect(() => {
+    if (!selection || focusRequestKey <= 0) return;
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  }, [focusRequestKey, selection]);
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -103,7 +125,7 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
     <div className="flex h-full flex-col">
       <div className="border-b border-border p-4">
         <div className="mb-3 flex items-center gap-2">
-          <span className="text-sm font-medium text-text-primary">데이터 패널</span>
+          <span className="whitespace-nowrap text-sm font-medium text-text-primary">데이터 패널</span>
           <div className="flex-1" />
           <button
             type="button"
@@ -130,15 +152,31 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
       </div>
 
       <div className="px-4 pb-2 pt-4">
-        <p className="text-sm font-medium text-text-primary">테이블·View·컬럼</p>
-        <p className="mt-1 text-xs text-text-tertiary">읽기 전용 조회</p>
+        <p className="truncate whitespace-nowrap text-sm font-medium text-text-primary">테이블·View·컬럼</p>
       </div>
+
+      {selection && (
+        <div className="mx-3 mb-2 flex h-8 items-center gap-2 rounded-md border border-primary/40 bg-blue-50 px-2.5" data-testid="table-selection-banner">
+            <p className="min-w-0 flex-1 truncate whitespace-nowrap text-[13px] font-medium text-blue-900" role="status" aria-live="polite">
+              {selection.label}
+            </p>
+            <button
+              type="button"
+              aria-label="테이블 선택 취소"
+              onClick={onCancelSelection}
+              className="rounded p-0.5 text-blue-700 hover:bg-blue-100 hover:text-blue-900"
+            >
+              <X className="size-3.5" />
+            </button>
+        </div>
+      )}
 
       {/* 검색 + 정렬 — 정렬은 인풋 우측 안쪽 필터 아이콘의 팝오버 메뉴 (화면설계 S2 사이드바) */}
       <div className="px-3 pb-2">
         {/* relative 기준을 인풋과 정확히 일치시킨다(패딩 포함 시 top-1/2 가 어긋남) */}
         <div className="relative">
           <Input
+            ref={searchRef}
             id="schema-search"
             name="schemaSearch"
             icon={<Search className="size-3.5" />}
@@ -195,17 +233,30 @@ export function SchemaExplorer({ datasources, tables, datasourceId, selectedTabl
             const open = expanded.has(key);
             const active = selectedTable === key;
             const unavailable = !isRelationSelectable(t);
+            const alreadyUsed = disabledTableKeys.has(key);
+            const disabled = unavailable || alreadyUsed;
             const relationLabel = t.relationType === 'TABLE' ? null : relationBadgeLabel(t);
             return (
               <div key={key}>
                 <button
                   type="button"
-                  onClick={() => selectTable(t)}
-                  disabled={unavailable}
-                  title={unavailable ? 'REFRESH가 필요한 Materialized View입니다.' : undefined}
+                  onClick={() => {
+                    if (selection) selectTable(t);
+                    else toggle(key);
+                  }}
+                  disabled={disabled}
+                  title={
+                    unavailable
+                      ? 'REFRESH가 필요한 Materialized View입니다.'
+                      : alreadyUsed
+                        ? '현재 구성에서 이미 사용 중인 항목입니다.'
+                        : selection
+                          ? `${selection.label}: ${t.schema}.${t.name}`
+                          : '컬럼 목록 열기'
+                  }
                   className={cn(
-                    'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
-                    active ? 'bg-muted font-medium text-text-primary' : 'text-text-primary',
+                    'flex w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
+                    active ? 'bg-blue-50 font-medium text-blue-900 ring-1 ring-inset ring-primary/30' : 'text-text-primary',
                   )}
                 >
                   <span

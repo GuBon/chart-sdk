@@ -1,7 +1,7 @@
 import type { QueryResult } from '@/lib/api';
 import type { SamplingGroupCount } from '@chartsdk/chart-options/sampling';
 
-// 결과/원본 데이터 공통 표(258:232). 세로 스크롤, 1,000행 초과 시 안내.
+// 결과/원본 데이터 공통 표(258:232). 원본 미리보기가 제한된 경우에만 1,000행 안내를 표시한다.
 export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGroups?: SamplingGroupCount[] }) {
   const sampleCountByKey = new Map(sampleGroups?.map((group) => [String(group.key ?? ''), group.sampleCount]));
   const showSampleCount = sampleCountByKey.size > 0;

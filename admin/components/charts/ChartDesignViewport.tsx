@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartDesignSize, PreviewFitMode } from '@chartsdk/chart-options/display';
+import type { MapBounds } from '@chartsdk/chart-options/geo';
 import { ChartPreview } from './ChartPreview';
 import { cn } from '@/lib/cn';
 
@@ -12,6 +13,8 @@ interface Props {
   zoom: number;
   className?: string;
   testId?: string;
+  mapViewportEditing?: boolean;
+  onMapBoundsChange?: (bounds: MapBounds | null) => void;
 }
 
 const VIEWPORT_PADDING = 24;
@@ -20,7 +23,7 @@ const VIEWPORT_PADDING = 24;
  * ECharts는 논리 설계 크기로 렌더하고, 바깥 래퍼만 CSS scale한다.
  * 따라서 FHD를 화면 맞춤으로 축소해도 글꼴·여백·말줄임 계산은 1920×1080 기준으로 검수할 수 있다.
  */
-export function ChartDesignViewport({ option, designSize, fitMode, zoom, className, testId = 'chart-design-viewport' }: Props) {
+export function ChartDesignViewport({ option, designSize, fitMode, zoom, className, testId = 'chart-design-viewport', mapViewportEditing = false, onMapBoundsChange }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
@@ -72,7 +75,7 @@ export function ChartDesignViewport({ option, designSize, fitMode, zoom, classNa
             transform: `scale(${scale})`,
           }}
         >
-          <ChartPreview option={option} />
+          <ChartPreview option={option} mapViewportEditing={mapViewportEditing} onMapBoundsChange={onMapBoundsChange} />
         </div>
       </div>
     </div>

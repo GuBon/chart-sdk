@@ -13,17 +13,30 @@ import {
   type Options,
 } from '@chartsdk/chart-options';
 import { resolveChartTypography } from '@chartsdk/chart-options/display';
+import type { MapBounds } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { chartTypeLabel } from '@/lib/chartTypes';
 import { OptionControl, TypographyPolicy, coercePaletteIndex } from './OptionControl';
+import { MapViewportControl } from './MapViewportControl';
+
+export type OptionDockPreference = 'auto' | 'right' | 'bottom';
+export type OptionDock = Exclude<OptionDockPreference, 'auto'>;
 
 interface Props {
   chartType: MajorType;
   options: Options;
   columns: { name: string; type: string }[];
+  rows: unknown[][];
   hasResult: boolean;
+  dockPreference: OptionDockPreference;
+  actualDock: OptionDock;
   onChangeChartType: (next: MajorType, nextOptions: Options) => void;
   onChangeOptions: (next: Options) => void;
+  onChangeDockPreference: (next: OptionDockPreference) => void;
+  mapViewportEditing: boolean;
+  currentMapBounds: MapBounds | null;
+  onMapViewportEditingChange: (editing: boolean) => void;
   onCollapse?: () => void;
 }
 
@@ -31,7 +44,22 @@ const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 
 const ZONE_ORDER = ['common', 'axis', 'type'];
 
 /** optionRegistry를 검색·존·섹션으로 구성한다. 개별 입력 종류의 렌더링은 OptionControl이 담당한다. */
-export function OptionPanel({ chartType, options, columns, hasResult, onChangeChartType, onChangeOptions, onCollapse }: Props) {
+export function OptionPanel({
+  chartType,
+  options,
+  columns,
+  rows,
+  hasResult,
+  dockPreference,
+  actualDock,
+  onChangeChartType,
+  onChangeOptions,
+  onChangeDockPreference,
+  mapViewportEditing,
+  currentMapBounds,
+  onMapViewportEditingChange,
+  onCollapse,
+}: Props) {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [resetNotice, setResetNotice] = useState<{ message: string; prevType: MajorType; prevOptions: Options } | null>(null);
@@ -81,11 +109,28 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
     <div className="flex flex-col">
       <div className="flex items-center justify-between p-4 pb-2">
         <h2 className="text-sm font-semibold text-text-primary">시각화 옵션</h2>
-        {onCollapse && (
-          <button type="button" onClick={onCollapse} aria-label="시각화 옵션 접기" className="flex size-7 items-center justify-center rounded text-text-secondary hover:bg-muted hover:text-text-primary">
-            <ChevronDown className="size-4" />
-          </button>
-        )}
+        <div className="flex items-center gap-1.5">
+          <Select
+            data-testid="option-dock-select"
+            aria-label="옵션 패널 배치"
+            title={dockPreference === 'auto'
+              ? `자동 배치 · 현재 ${actualDock === 'right' ? '오른쪽' : '아래쪽'}`
+              : `${actualDock === 'right' ? '오른쪽' : '아래쪽'}에 고정됨`}
+            value={dockPreference}
+            options={[
+              { value: 'auto', label: '자동' },
+              { value: 'right', label: '오른쪽 고정' },
+              { value: 'bottom', label: '아래쪽 고정' },
+            ]}
+            onChange={(event) => onChangeDockPreference(event.target.value as OptionDockPreference)}
+            className="h-7 w-[126px] py-0 pl-2.5 pr-7 text-xs"
+          />
+          {onCollapse && (
+            <button type="button" onClick={onCollapse} aria-label="시각화 옵션 접기" className="flex size-7 items-center justify-center rounded text-text-secondary hover:bg-muted hover:text-text-primary">
+              <ChevronDown className="size-4" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="px-4 pb-2">
         <Input id="option-search" name="optionSearch" icon={<Search className="size-3.5" />} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="옵션 검색" size="sm" disabled={disabled} />
@@ -126,7 +171,19 @@ export function OptionPanel({ chartType, options, columns, hasResult, onChangeCh
                   {open && (
                     <div className="mt-2.5 flex flex-col gap-2.5">
                       {section === '글꼴' && <TypographyPolicy typography={typography} />}
-                      {sectionDefinitions.map((definition) => (
+                      {sectionDefinitions.map((definition) => definition.control === 'mapViewport' ? (
+                        <MapViewportControl
+                          key={definition.key}
+                          chartType={chartType}
+                          value={valueOf(definition)}
+                          regionNames={chartType === 'map' ? rows.flatMap((row) => typeof row[0] === 'string' ? [row[0]] : []) : []}
+                          disabled={disabled}
+                          editing={mapViewportEditing}
+                          currentBounds={currentMapBounds}
+                          onChange={(value) => setValue(definition, value)}
+                          onEditingChange={onMapViewportEditingChange}
+                        />
+                      ) : (
                         <OptionControl
                           key={definition.key}
                           def={definition}

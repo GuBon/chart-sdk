@@ -16,16 +16,14 @@ import {
   columnsForBuilder,
   createSampleConfig,
   createSampleSeed,
-  emptyJoin,
   isDateType,
   isNumericType,
+  isSpatialAreaType,
   isSpatialPointType,
   orderTargets,
   tableHandle,
   tableRefKey,
-  tableRefLabel,
   updateSampleMode,
-  withUniqueHandle,
 } from '@/lib/builder';
 import { DEFAULT_SAMPLE_SEED, DEFAULT_SAMPLE_SIZE, MAX_SAMPLE_SIZE, MIN_SAMPLE_SIZE, isFullScanTable } from '@chartsdk/chart-options/sampling';
 import { Select } from '@/components/ui/Select';
@@ -33,6 +31,8 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
 import { isRelationSelectable } from '@/lib/relations';
+import { cn } from '@/lib/cn';
+import type { TableSelectionTarget } from '@/lib/tableSelection';
 
 // 표본 크기 입력 옆 안내 — 전체 추정 행수(reltuples)는 정확치가 아니라 "약 N행"으로 표기. 작으면 전량 정확 계산.
 function sampleTotalHint(estimatedRowCount?: number): string {
@@ -46,8 +46,9 @@ interface Props {
   config: BuilderConfig;
   chartType: ChartType;
   tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
-  browseDatasourceId: number | null; // 사이드바에서 선택한 탐색 소스 — 테이블/조인 드롭다운을 이 소스로 필터
   datasources: Datasource[];
+  tableSelectionTarget: TableSelectionTarget | null;
+  onRequestTableSelection: (target: TableSelectionTarget) => void;
   onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
@@ -57,7 +58,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, datasources, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -68,14 +69,21 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const isGeoScatter = chartType === 'geoscatter';
   const geoPointMode = config.geoPoint?.mode ?? 'columns';
   const spatialGeoPoint = isGeoScatter && geoPointMode === 'spatial';
+  const geoAreaMode = config.geoArea?.mode ?? 'regions';
+  const spatialGeoArea = isMap && geoAreaMode === 'spatial';
+  const spatialGeometry = spatialGeoPoint || spatialGeoArea;
   const spatialPointOptions = colOptions
     .filter((column) => isSpatialPointType(column.type))
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
+  const spatialAreaOptions = colOptions
+    .filter((column) => isSpatialAreaType(column.type))
+    .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
+  const areaNameOptions = colOptions.filter((column) => !/\b(?:geometry|geography)\b/i.test(column.type));
   const numericOptions = colOptions.filter((column) => isNumericType(column.type));
   // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]). 버킷·표본은 원본값 모드에서 숨김.
   const maxSeries = isPie || isMap || isBoxplot ? 1 : isGeoScatter ? 2 : Infinity;
   const hideBucket = isScatter || isBoxplot || isGeoScatter;
-  const hideSampleRow = isScatter || isBoxplot || isGeoScatter;
+  const hideSampleRow = isScatter || isBoxplot || isGeoScatter || spatialGeoArea;
   const rawY = isScatter || isBoxplot || isGeoScatter; // Y 기본 집계 없음
   const xLabel = isMap ? '지역' : isBoxplot ? '카테고리' : isGeoScatter ? '경도' : 'X축';
   const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 · 집계';
@@ -88,34 +96,9 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
   // ── 다중 소스 테이블 참조 헬퍼 ──
-  const refOf = (t: SchemaTable): TableRef => ({ datasourceId: t.datasourceId, schema: t.schema, name: t.name });
   const findByKey = (key: string) => tables.find((t) => tableRefKey(t) === key);
   const dsName = (id: number) => datasources.find((d) => d.id === id)?.name ?? `ds${id}`;
-  const sourceLabel = (t: SchemaTable) => `${dsName(t.datasourceId)} · ${tableRefLabel(t)}`;
-  // 탐색 소스의 테이블만 드롭다운 옵션으로. 사이드바가 소스를 정하고, 드롭다운은 그 소스의 테이블만 노출.
-  const browseTables = tables.filter((t) => t.datasourceId === browseDatasourceId);
-  const selectableBrowseTables = browseTables.filter(isRelationSelectable);
-  // browse 소스 테이블 − exclude. 현재 선택값이 목록 밖(타 소스 base/조인)이면 선택 유지용으로 앞에 추가(출처 표기).
-  const tableOptionsFor = (currentKey: string | null, exclude: Set<string>) => {
-    const opts = selectableBrowseTables
-      .filter((t) => !exclude.has(tableRefKey(t)))
-      .map((t) => ({ value: tableRefKey(t), label: tableRefLabel(t) }));
-    if (currentKey && !opts.some((o) => o.value === currentKey)) {
-      const cur = findByKey(currentKey);
-      if (cur) opts.unshift({ value: currentKey, label: sourceLabel(cur) });
-    }
-    return opts;
-  };
-  const tableOptions = tableOptionsFor(config.table ? tableRefKey(config.table) : null, new Set());
   const baseSchemaTable = config.table ? findByKey(tableRefKey(config.table)) : undefined;
-
-  // 테이블 변경 시 컬럼·조인 참조가 모두 무효 → 구성 초기화 (드롭다운 직접 선택은 의도적 변경이라 모달 없음)
-  const changeTable = (key: string) => {
-    const t = findByKey(key);
-    if (!t) return;
-    // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    onChange({ table: refOf(t), joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: config.sample ?? null, geoPoint: undefined });
-  };
 
   const changeXAxis = (xAxis: string) => {
     const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
@@ -144,23 +127,9 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
   // 조인 컬럼 참조는 테이블 핸들로 qualified — 백엔드가 핸들을 소스로 해석(§11.2). 동명 테이블은 핸들이 달라 구분됨.
   const qualOpts = (refs: TableRef[]) =>
     refs.flatMap((ref) => colsOf(ref).map((c) => ({ value: `${tableHandle(ref)}.${c.name}`, label: `${tableHandle(ref)}.${c.name}` })));
-  const usedKeys = () => new Set(activeTables(config).map(tableRefKey));
-  // 이 조인이 참조할 수 있는 앞선 테이블들(핸들 부여 시 겹침 검사 대상) — 자기 자신 제외.
-  const othersExcept = (i: number): TableRef[] =>
-    [config.table, ...joins.filter((_, idx) => idx !== i).map((x) => x.table)].filter(Boolean) as TableRef[];
   const setJoin = (i: number, p: Partial<JoinSpec>) => patch({ joins: joins.map((j, idx) => (idx === i ? { ...j, ...p } : j)) });
   const setJoinOn = (i: number, side: 'leftColumn' | 'rightColumn', col: string) => setJoin(i, { on: { ...joins[i].on, [side]: col } });
-  const changeJoinTable = (i: number, key: string) => {
-    const t = findByKey(key);
-    // 동명 테이블이 겹치면 유일 핸들 부여(users_2) → 컬럼 참조가 어느 테이블인지 구분. 컬럼 참조는 초기화(새 테이블).
-    if (t) setJoin(i, { table: withUniqueHandle(refOf(t), othersExcept(i)), on: { leftColumn: '', rightColumn: '' } });
-  };
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
-  const addJoin = () => {
-    const used = usedKeys();
-    const next = selectableBrowseTables.find((t) => !used.has(tableRefKey(t)));
-    if (next) patch({ joins: [...joins, emptyJoin(withUniqueHandle(refOf(next), activeTables(config)))] });
-  };
 
   const changeGeoPointMode = (mode: 'columns' | 'spatial') => {
     if (mode === 'spatial') {
@@ -180,7 +149,28 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
     }
     patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, sample: null, geoPoint: { mode: 'columns' } });
   };
-  const unusedTable = !!config.table && selectableBrowseTables.some((t) => !usedKeys().has(tableRefKey(t)));
+  const changeGeoAreaMode = (mode: 'regions' | 'spatial') => {
+    if (mode === 'spatial') {
+      patch({
+        xAxis: null,
+        xAxisBucket: null,
+        yAxis: [],
+        orderBy: null,
+        sample: null,
+        geoArea: {
+          mode: 'spatial',
+          spatialColumn: config.geoArea?.spatialColumn ?? spatialAreaOptions[0]?.value ?? null,
+          nameColumn: config.geoArea?.nameColumn ?? areaNameOptions[0]?.value ?? null,
+          valueColumn: config.geoArea?.valueColumn ?? numericOptions[0]?.value ?? null,
+        },
+      });
+      return;
+    }
+    patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, sample: null, geoArea: { mode: 'regions' } });
+  };
+  const unusedTable = !!config.table && tables.some(
+    (t) => isRelationSelectable(t) && !activeTables(config).some((ref) => tableRefKey(ref) === tableRefKey(t)),
+  );
   const sampleSourceHint = joins.length > 0
     ? '조인 결과에서 무작위 행 표본'
     : baseSchemaTable?.relationType === 'VIEW'
@@ -256,16 +246,14 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
       {/* 구성 폼 */}
       <div className="flex flex-col gap-4 p-4">
         <Row label="원본">
-          <div className="w-72">
-            <Select
-              id="builder-table"
-              aria-label="테이블"
-              value={config.table ? tableRefKey(config.table) : ''}
-              onChange={(e) => changeTable(e.target.value)}
-              options={tableOptions}
-              placeholder="테이블·View 선택"
-            />
-          </div>
+          <TableSelectionField
+            testId="base-table-selector"
+            label="원본 테이블"
+            table={baseSchemaTable}
+            datasourceName={baseSchemaTable ? dsName(baseSchemaTable.datasourceId) : null}
+            active={tableSelectionTarget?.kind === 'base'}
+            onClick={() => onRequestTableSelection({ kind: 'base' })}
+          />
         </Row>
 
         {/* 테이블 조인 (생성규칙 11장) — base 다음, 컬럼 참조는 qualified */}
@@ -274,15 +262,18 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
             <div className="flex flex-col gap-2">
               {joins.map((j, i) => {
                 const priorTables: TableRef[] = [config.table!, ...joins.slice(0, i).map((x) => x.table)];
-                const usedExceptSelf = new Set(
-                  activeTables(config).filter((t) => tableRefKey(t) !== tableRefKey(j.table)).map(tableRefKey),
-                );
-                const tableOpts = tableOptionsFor(tableRefKey(j.table), usedExceptSelf);
+                const joinSchemaTable = findByKey(tableRefKey(j.table));
                 return (
                   <div key={i} className="flex items-center gap-2">
-                    <div className="w-48">
-                      <Select aria-label="조인 테이블" value={tableRefKey(j.table)} onChange={(e) => changeJoinTable(i, e.target.value)} options={tableOpts} />
-                    </div>
+                    <TableSelectionField
+                      testId={`join-table-selector-${i}`}
+                      label={`${i + 1}번째 조인 테이블`}
+                      table={joinSchemaTable}
+                      datasourceName={joinSchemaTable ? dsName(joinSchemaTable.datasourceId) : null}
+                      active={tableSelectionTarget?.kind === 'join' && tableSelectionTarget.index === i}
+                      compact
+                      onClick={() => onRequestTableSelection({ kind: 'join', index: i })}
+                    />
                     <div className="w-24">
                       <Select aria-label="조인 종류" value={j.type} onChange={(e) => setJoin(i, { type: e.target.value as JoinSpec['type'] })} options={JOIN_TYPE_CHOICES} />
                     </div>
@@ -300,8 +291,26 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
                   </div>
                 );
               })}
+              {tableSelectionTarget?.kind === 'newJoin' && (
+                <div className="flex items-center gap-2" data-testid="new-join-table-selector">
+                  <TableSelectionField
+                    label={`${joins.length + 1}번째 조인 테이블`}
+                    table={undefined}
+                    datasourceName={null}
+                    active
+                    compact
+                    onClick={() => onRequestTableSelection({ kind: 'newJoin' })}
+                  />
+                </div>
+              )}
               <div>
-                <Button variant="secondary" size="sm" className="h-7" onClick={addJoin} disabled={!unusedTable}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-7"
+                  onClick={() => onRequestTableSelection({ kind: 'newJoin' })}
+                  disabled={!unusedTable || joins.length >= MAX_JOINS || tableSelectionTarget?.kind === 'newJoin'}
+                >
                   + 조인 추가
                 </Button>
               </div>
@@ -324,6 +333,67 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
               />
             </div>
           </Row>
+        )}
+
+        {isMap && (
+          <Row label="지도 경계">
+            <div className="w-60">
+              <Select
+                id="builder-geo-area-mode"
+                aria-label="지도 경계 방식"
+                value={geoAreaMode}
+                onChange={(e) => changeGeoAreaMode(e.target.value as 'regions' | 'spatial')}
+                options={[
+                  { value: 'regions', label: '내장 행정구역' },
+                  { value: 'spatial', label: '공간 Polygon 컬럼' },
+                ]}
+              />
+            </div>
+          </Row>
+        )}
+
+        {spatialGeoArea && (
+          <>
+            <Row label="공간 경계">
+              <div className="w-72">
+                <Select
+                  id="builder-spatial-area-column"
+                  aria-label="공간 Polygon 컬럼"
+                  value={config.geoArea?.spatialColumn ?? ''}
+                  onChange={(e) => patch({ geoArea: { ...config.geoArea!, mode: 'spatial', spatialColumn: e.target.value || null } })}
+                  options={spatialAreaOptions}
+                  placeholder="geometry/geography Polygon 선택"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">Polygon·MultiPolygon을 WGS84 GeoJSON 경계로 변환합니다</span>
+            </Row>
+            <Row label="영역 이름">
+              <div className="w-60">
+                <Select
+                  id="builder-spatial-area-name"
+                  aria-label="영역 이름 컬럼"
+                  value={config.geoArea?.nameColumn ?? ''}
+                  onChange={(e) => patch({ geoArea: { ...config.geoArea!, mode: 'spatial', nameColumn: e.target.value || null } })}
+                  options={areaNameOptions}
+                  placeholder="이름 컬럼 선택"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">라벨·툴팁에 표시할 고유 이름을 권장합니다</span>
+            </Row>
+            <Row label="영역 값">
+              <div className="w-60">
+                <Select
+                  id="builder-spatial-area-value"
+                  aria-label="영역 값 컬럼"
+                  value={config.geoArea?.valueColumn ?? ''}
+                  onChange={(e) => patch({ geoArea: { ...config.geoArea!, mode: 'spatial', valueColumn: e.target.value || null } })}
+                  options={numericOptions}
+                  placeholder="숫자 컬럼 선택"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">색상 강도(visualMap)에 사용할 숫자 원본값입니다</span>
+            </Row>
+          </>
         )}
 
         {spatialGeoPoint && (
@@ -357,7 +427,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           </>
         )}
 
-        {!spatialGeoPoint && <Row label={xLabel}>
+        {!spatialGeometry && <Row label={xLabel}>
           <div className="w-60">
             <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder={isMap ? '지역명 컬럼' : '컬럼 선택'} />
           </div>
@@ -378,7 +448,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           )}
         </Row>}
 
-        {!spatialGeoPoint && <Row label={yLabel}>
+        {!spatialGeometry && <Row label={yLabel}>
           <div className="flex flex-col gap-2">
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -431,7 +501,7 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
           </div>
         </Row>
 
-        {!spatialGeoPoint && <Row label="정렬">
+        {!spatialGeometry && <Row label="정렬">
           <div className="w-40">
             <Select
               aria-label="정렬 기준"
@@ -532,6 +602,49 @@ export function NocodeBuilder({ config, chartType, tables, browseDatasourceId, d
         )}
       </div>
     </div>
+  );
+}
+
+function TableSelectionField({
+  testId,
+  label,
+  table,
+  datasourceName,
+  active,
+  compact = false,
+  onClick,
+}: {
+  testId?: string;
+  label: string;
+  table: SchemaTable | undefined;
+  datasourceName: string | null;
+  active: boolean;
+  compact?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={`${label} ${table ? '변경' : '선택'}`}
+      aria-pressed={active}
+      onClick={onClick}
+      title={table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : label}
+      className={cn(
+        'relative flex h-8 items-center rounded-md border bg-bg-panel pl-3 text-left text-[13px] text-text-primary outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20',
+        compact ? 'w-48' : 'w-72',
+        active ? 'border-primary pr-16 ring-2 ring-primary/15' : 'border-border pr-8',
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+        {table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : '테이블·View 선택'}
+      </span>
+      {active ? (
+        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium text-primary">선택 중</span>
+      ) : (
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-secondary" />
+      )}
+    </button>
   );
 }
 

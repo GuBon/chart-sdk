@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { Maximize2 } from 'lucide-react';
 import { setPath, type Options } from '@chartsdk/chart-options';
+import type { MajorType } from '@chartsdk/chart-options';
+import type { MapBounds } from '@chartsdk/chart-options/geo';
 import {
   CHART_SIZE_PRESETS,
   resolveChartDesignSize,
@@ -13,17 +15,21 @@ import { Select } from '@/components/ui/Select';
 import { ChartDesignViewport } from './ChartDesignViewport';
 import { ChartFocusDialog } from './ChartFocusDialog';
 import { PreviewFitControls } from './PreviewFitControls';
+import { mapViewportStatus } from './MapViewportControl';
 
 interface Props {
   option: Record<string, unknown> | null;
   options: Options;
+  chartType: MajorType;
   loading: boolean;
   error: string | null;
   wide: boolean;
+  mapViewportEditing: boolean;
+  onMapBoundsChange: (bounds: MapBounds | null) => void;
   onChangeOptions: (next: Options) => void;
 }
 
-export function ChartPreviewPanel({ option, options, loading, error, wide, onChangeOptions }: Props) {
+export function ChartPreviewPanel({ option, options, chartType, loading, error, wide, mapViewportEditing, onMapBoundsChange, onChangeOptions }: Props) {
   const [fitMode, setFitMode] = useState<PreviewFitMode>('contain');
   const [zoom, setZoom] = useState(100);
   const [focusOpen, setFocusOpen] = useState(false);
@@ -48,6 +54,11 @@ export function ChartPreviewPanel({ option, options, loading, error, wide, onCha
             <h2 className="text-sm font-medium text-text-primary">차트 미리보기</h2>
             <p className="truncate text-[11px] text-text-tertiary">논리 캔버스 {designSize.width}×{designSize.height}</p>
           </div>
+          {(chartType === 'map' || chartType === 'geoscatter') && (
+            <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(options.map?.viewport)}`}>
+              표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(options.map?.viewport)}
+            </span>
+          )}
           <div className="flex-1" />
           <button
             type="button"
@@ -78,7 +89,14 @@ export function ChartPreviewPanel({ option, options, loading, error, wide, onCha
 
       <div className="min-h-0 flex-1">
         {option ? (
-          <ChartDesignViewport option={option} designSize={designSize} fitMode={fitMode} zoom={zoom} />
+          <ChartDesignViewport
+            option={option}
+            designSize={designSize}
+            fitMode={fitMode}
+            zoom={zoom}
+            mapViewportEditing={mapViewportEditing}
+            onMapBoundsChange={onMapBoundsChange}
+          />
         ) : (
           <div className="flex h-full items-center justify-center bg-muted/40 px-4 text-center text-xs text-text-tertiary">
             {loading ? '저장된 미리보기를 불러오는 중…' : error ?? '실행하면 미리보기가 표시됩니다.'}

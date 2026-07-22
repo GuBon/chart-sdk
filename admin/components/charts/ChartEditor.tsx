@@ -4,10 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronUp, ChevronsRight } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
+import type { MapBounds } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
-import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable } from '@/lib/api';
-import { builderValidationIssue, emptyBuilder, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey } from '@/lib/builder';
+import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
+import { activeTables, builderValidationIssue, emptyBuilder, emptyJoin, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
+import { tableSelectionLabel, type TableSelectionTarget } from '@/lib/tableSelection';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -16,7 +18,7 @@ import { SchemaExplorer } from './SchemaExplorer';
 import { NocodeBuilder } from './NocodeBuilder';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
 import { ChartPreviewPanel } from './ChartPreviewPanel';
-import { OptionPanel } from './OptionPanel';
+import { OptionPanel, type OptionDock, type OptionDockPreference } from './OptionPanel';
 import { EmbedModal } from './EmbedModal';
 
 // optionRegistry storage='column' 키 (chartType 은 별도 state). 저장 시 options JSONB 에서 분리.
@@ -25,6 +27,9 @@ const LEFT_PANEL_DEFAULT_WIDTH = 320;
 const RIGHT_PANEL_DEFAULT_WIDTH = 440;
 const PANEL_COLLAPSE_THRESHOLD = 48;
 const PANEL_RESTORE_MIN_WIDTH = 200;
+const OPTION_DOCK_RIGHT_AT = 840;
+const OPTION_DOCK_BOTTOM_AT = 760;
+const OPTION_DOCK_MANUAL_MIN_WIDTH = 640;
 
 function useStoredBoolean(key: string, initial: boolean) {
   const [value, setValue] = useState(initial);
@@ -38,6 +43,20 @@ function useStoredBoolean(key: string, initial: boolean) {
     if (restored) window.localStorage.setItem(key, String(value));
   }, [key, restored, value]);
   return [value, setValue] as const;
+}
+
+function useStoredOptionDockPreference(key: string) {
+  const [value, setValue] = useState<OptionDockPreference>('auto');
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    const stored = window.localStorage.getItem(key);
+    if (stored === 'auto' || stored === 'right' || stored === 'bottom') setValue(stored);
+    setRestored(true);
+  }, [key]);
+  useEffect(() => {
+    if (restored) window.localStorage.setItem(key, value);
+  }, [key, restored, value]);
+  return [value, setValue, restored] as const;
 }
 
 function CollapsedPanelRail({
@@ -130,17 +149,24 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const rawRequestId = useRef(0);
   const editorBodyRef = useRef<HTMLDivElement>(null);
   const builderWorkspaceRef = useRef<HTMLElement>(null);
+  const visualWorkspaceRef = useRef<HTMLElement>(null);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [pendingBaseTable, setPendingBaseTable] = useState<SchemaTable | null>(null);
+  const [tableSelectionTarget, setTableSelectionTarget] = useState<TableSelectionTarget | null>(null);
+  const [tableSelectionFocusKey, setTableSelectionFocusKey] = useState(0);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
   const [embedOpen, setEmbedOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false);
   const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false);
   const [optionEditorCollapsed, setOptionEditorCollapsed] = useStoredBoolean('chartsdk.editor.optionEditorCollapsed', false);
+  const [optionDockPreference, setOptionDockPreference, optionDockPreferenceRestored] = useStoredOptionDockPreference('chartsdk.editor.optionDock');
+  const [autoOptionDock, setAutoOptionDock] = useState<OptionDock>('bottom');
+  const [mapViewportEditing, setMapViewportEditing] = useState(false);
+  const [currentMapBounds, setCurrentMapBounds] = useState<MapBounds | null>(null);
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
@@ -163,6 +189,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   useEffect(() => {
     if (chartId == null) return;
     let cancelled = false;
+    setTableSelectionTarget(null);
     setInitialPreviewLoading(true);
     setInitialPreviewError(null);
     setResult(null);
@@ -226,6 +253,50 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   });
   const resultsPanel = useResizable(288, 120, 560, 'up', 'chartsdk.editor.resultsHeight');
   const optionEditor = useResizable(280, 120, 720, 'up', 'chartsdk.editor.optionHeight');
+  const optionEditorWidth = useResizable(400, 320, 520, 'right', 'chartsdk.editor.optionWidth');
+  const rightPanelSize = rightPanel.size;
+  const setRightPanelSize = rightPanel.setSize;
+
+  useEffect(() => {
+    const workspace = visualWorkspaceRef.current;
+    if (!workspace) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      setAutoOptionDock((current) => {
+        if (width >= OPTION_DOCK_RIGHT_AT) return 'right';
+        if (width <= OPTION_DOCK_BOTTOM_AT) return 'bottom';
+        return current;
+      });
+    });
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, []);
+
+  // 오른쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 우측 작업영역을 먼저 확보한다.
+  useEffect(() => {
+    if (!optionDockPreferenceRestored || optionDockPreference !== 'right' || builderCollapsed) return;
+    if (rightPanelSize >= OPTION_DOCK_BOTTOM_AT) return;
+    const editorWidth = editorBodyRef.current?.clientWidth;
+    if (editorWidth == null) return;
+    const leftWidth = leftCollapsed ? 40 : leftPanel.size;
+    const availableWidth = editorWidth - leftWidth - PANEL_RESTORE_MIN_WIDTH;
+    if (availableWidth >= OPTION_DOCK_MANUAL_MIN_WIDTH) {
+      setRightPanelSize(Math.min(OPTION_DOCK_RIGHT_AT, availableWidth));
+    } else {
+      setBuilderCollapsed(true);
+    }
+  }, [
+    builderCollapsed,
+    leftCollapsed,
+    leftPanel.size,
+    optionDockPreference,
+    optionDockPreferenceRestored,
+    rightPanelSize,
+    setRightPanelSize,
+    setBuilderCollapsed,
+  ]);
+
+  const actualOptionDock: OptionDock = optionDockPreference === 'auto' ? autoOptionDock : optionDockPreference;
 
   useEffect(() => {
     if (builderCollapsed) return;
@@ -263,10 +334,50 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setRunError(null);
     setInitialPreviewLoading(false);
     setInitialPreviewError(null);
+    setMapViewportEditing(false);
+    setCurrentMapBounds(null);
   };
 
   // 사이드바 데이터소스 = 탐색 컨텍스트. 소스 변경은 드롭다운 필터만 바꾸고 구성은 보존(비파괴).
   const changeDatasource = (id: number) => setDatasourceId(id);
+
+  const requestTableSelection = (target: TableSelectionTarget) => {
+    setPendingBaseTable(null);
+    setTableSelectionTarget(target);
+
+    const currentRef = target.kind === 'base'
+      ? builder.table
+      : target.kind === 'join'
+        ? builder.joins?.[target.index]?.table
+        : null;
+    if (currentRef) setDatasourceId(currentRef.datasourceId);
+
+    setLeftCollapsed(false);
+    setTableSelectionFocusKey((key) => key + 1);
+  };
+
+  const cancelTableSelection = () => {
+    setPendingBaseTable(null);
+    setTableSelectionTarget(null);
+  };
+
+  useEffect(() => {
+    if (!tableSelectionTarget) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      cancelTableSelection();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [tableSelectionTarget]);
+
+  const applyBuilderChange = (next: BuilderConfig) => {
+    setBuilder(normalizeBuilderForChartType(next, chartType));
+    setTableSelectionTarget(null);
+    setDirty(true);
+    resetResults();
+  };
 
   // 실행·저장에 쓰는 primary 데이터소스는 base 테이블에서 파생(사이드바 탐색 소스와 무관).
   const primaryDatasourceId = builder.table?.datasourceId ?? datasourceId;
@@ -292,26 +403,69 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
     // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined });
+    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined, geoArea: undefined });
+    setTableSelectionTarget(null);
     resetResults();
     setDirty(true);
     // 원본 미리보기는 부가 기능 — 실패해도 테이블 선택은 유지(미처리 rejection·크래시 방지).
     await previewBaseTable(t);
   };
 
-  // 사이드바 트리 클릭. base 가 이미 있고 다른 테이블이면 초기화 경고 모달, 없거나 같은 테이블이면 즉시.
+  // 왼쪽 목록의 선택 결과를 현재 선택 대상(base/기존 조인/새 조인)에 적용한다.
   const selectTable = async (t: SchemaTable) => {
-    if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
-      // 같은 base 재클릭 → 미리보기만(실패 무시)
-      await previewBaseTable(t);
+    if (!tableSelectionTarget) return;
+
+    const refOf = (table: SchemaTable): TableRef => ({ datasourceId: table.datasourceId, schema: table.schema, name: table.name });
+    if (tableSelectionTarget.kind === 'base') {
+      if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
+        setTableSelectionTarget(null);
+        await previewBaseTable(t);
+        return;
+      }
+      if (builder.table) {
+        setPendingBaseTable(t);
+        return;
+      }
+      await applyBaseTable(t);
       return;
     }
-    if (builder.table) {
-      setPendingBaseTable(t); // 다른 테이블 → 확인 모달(구성 초기화 경고)
+
+    if (!builder.table) return;
+    const joins = builder.joins ?? [];
+    if (tableSelectionTarget.kind === 'newJoin') {
+      const table = withUniqueHandle(refOf(t), activeTables(builder));
+      applyBuilderChange({ ...builder, joins: [...joins, emptyJoin(table)] });
       return;
     }
-    await applyBaseTable(t);
+
+    const index = tableSelectionTarget.index;
+    const others = [builder.table, ...joins.filter((_, joinIndex) => joinIndex !== index).map((join) => join.table)];
+    const table = withUniqueHandle(refOf(t), others);
+    applyBuilderChange({
+      ...builder,
+      joins: joins.map((join, joinIndex) =>
+        joinIndex === index ? { ...join, table, on: { leftColumn: '', rightColumn: '' } } : join,
+      ),
+    });
   };
+
+  const selectionLabel = tableSelectionTarget
+    ? tableSelectionLabel(tableSelectionTarget, builder.joins?.length ?? 0)
+    : null;
+  const selectedTableKey = tableSelectionTarget?.kind === 'join'
+    ? builder.joins?.[tableSelectionTarget.index]?.table
+      ? tableRefKey(builder.joins[tableSelectionTarget.index].table)
+      : null
+    : tableSelectionTarget?.kind === 'newJoin'
+      ? null
+      : builder.table
+        ? tableRefKey(builder.table)
+        : null;
+  const disabledTableKeys = new Set(
+    activeTables(builder)
+      .map(tableRefKey)
+      .filter((key) => key !== selectedTableKey),
+  );
 
   const runBuilder = async () => {
     const issue = builderValidationIssue(builder, chartType, tables);
@@ -467,10 +621,19 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 datasources={datasources}
                 tables={tables.filter((t) => t.datasourceId === datasourceId)}
                 datasourceId={datasourceId}
-                selectedTable={builder.table ? tableRefKey(builder.table) : null}
+                selectedTable={selectedTableKey}
+                selection={tableSelectionTarget && selectionLabel
+                  ? { label: selectionLabel }
+                  : null}
+                disabledTableKeys={tableSelectionTarget ? disabledTableKeys : new Set()}
+                focusRequestKey={tableSelectionFocusKey}
                 onChangeDatasource={changeDatasource}
                 onSelectTable={selectTable}
-                onCollapse={() => setLeftCollapsed(true)}
+                onCancelSelection={cancelTableSelection}
+                onCollapse={() => {
+                  cancelTableSelection();
+                  setLeftCollapsed(true);
+                }}
               />
             </aside>
             <ResizeHandle dir="left" onPointerDown={leftPanel.onPointerDown} />
@@ -492,20 +655,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   config={builder}
                   chartType={chartType}
                   tables={tables}
-                  browseDatasourceId={datasourceId}
                   datasources={datasources}
+                  tableSelectionTarget={tableSelectionTarget}
+                  onRequestTableSelection={requestTableSelection}
                   onCollapse={() => setBuilderCollapsed(true)}
                   onChange={(b) => {
                     // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
-                    setBuilder(normalizeBuilderForChartType(b, chartType));
-                    setDirty(true);
-                    setResult(null);
-                    invalidateRaw();
-                    setGeneratedSql(null);
-                    setOption(null);
-                    setRunError(null);
-                    setInitialPreviewLoading(false);
-                    setInitialPreviewError(null);
+                    applyBuilderChange(b);
                   }}
                   onRun={runBuilder}
                   running={running}
@@ -532,45 +688,77 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         )}
 
         <aside
+          ref={visualWorkspaceRef}
           data-testid="visual-editor-workspace"
+          data-option-dock={actualOptionDock}
+          data-option-dock-preference={optionDockPreference}
           style={builderCollapsed ? { flex: '1 1 0%', width: 'auto' } : { width: rightPanel.size }}
           className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-border bg-bg-panel"
         >
-          <div className="min-h-[180px] flex-1">
-            <ChartPreviewPanel
-              option={option}
-              options={options}
-              loading={initialPreviewLoading}
-              error={initialPreviewError}
-              wide={builderCollapsed}
-              onChangeOptions={changeOptions}
-            />
-          </div>
+          <div className={`flex min-h-0 flex-1 ${actualOptionDock === 'right' ? 'flex-row' : 'flex-col'}`}>
+            <div className="min-h-[180px] min-w-0 flex-1">
+              <ChartPreviewPanel
+                option={option}
+                options={options}
+                chartType={chartType}
+                loading={initialPreviewLoading}
+                error={initialPreviewError}
+                wide={builderCollapsed}
+                mapViewportEditing={mapViewportEditing}
+                onMapBoundsChange={setCurrentMapBounds}
+                onChangeOptions={changeOptions}
+              />
+            </div>
 
-          {optionEditorCollapsed ? (
-            <button
-              type="button"
-              onClick={() => setOptionEditorCollapsed(false)}
-              className="flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary"
-            >
-              <ChevronUp className="size-3.5" />
-              시각화 옵션 펼치기
-            </button>
-          ) : (
-            <>
-              <ResizeHandle dir="up" onPointerDown={optionEditor.onPointerDown} />
-              <div data-testid="visual-option-editor" style={{ height: optionEditor.size, maxHeight: '50%' }} className="shrink-0 overflow-y-auto border-t border-border">
+            {optionEditorCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setOptionEditorCollapsed(false)}
+                className={actualOptionDock === 'right'
+                  ? 'flex w-10 shrink-0 flex-col items-center justify-center gap-1.5 border-l border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'
+                  : 'flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'}
+              >
+                <ChevronUp className={`size-3.5 ${actualOptionDock === 'right' ? '-rotate-90' : ''}`} />
+                <span className={actualOptionDock === 'right' ? '[writing-mode:vertical-rl]' : ''}>시각화 옵션 펼치기</span>
+              </button>
+            ) : (
+              <>
+                <ResizeHandle
+                  dir={actualOptionDock === 'right' ? 'right' : 'up'}
+                  onPointerDown={actualOptionDock === 'right' ? optionEditorWidth.onPointerDown : optionEditor.onPointerDown}
+                />
+                <div
+                  data-testid="visual-option-editor"
+                  style={actualOptionDock === 'right'
+                    ? { width: optionEditorWidth.size }
+                    : { height: optionEditor.size, maxHeight: '50%' }}
+                  className={actualOptionDock === 'right'
+                    ? 'min-h-0 shrink-0 overflow-y-auto border-l border-border'
+                    : 'shrink-0 overflow-y-auto border-t border-border'}
+                >
                 <OptionPanel
                   chartType={chartType}
                   options={options}
                   columns={result?.columns ?? []}
+                  rows={result?.rows ?? []}
                   hasResult={!!result}
+                  dockPreference={optionDockPreference}
+                  actualDock={actualOptionDock}
+                  onChangeDockPreference={setOptionDockPreference}
+                  mapViewportEditing={mapViewportEditing}
+                  currentMapBounds={currentMapBounds}
+                  onMapViewportEditingChange={(editing) => {
+                    if (editing) setCurrentMapBounds(null);
+                    setMapViewportEditing(editing);
+                  }}
                   onCollapse={() => setOptionEditorCollapsed(true)}
                   onChangeChartType={(to, next) => {
                     // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
                     // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
                     const normalized = normalizeBuilderForChartType(builder, to);
                     const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
+                    setMapViewportEditing(false);
+                    setCurrentMapBounds(null);
                     setChartType(to);
                     setOptions(next);
                     setBuilder(normalized);
@@ -580,22 +768,23 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   }}
                   onChangeOptions={changeOptions}
                 />
-              </div>
-            </>
-          )}
+                </div>
+              </>
+            )}
+          </div>
         </aside>
       </div>
 
-      {/* 기준 테이블 변경 확인 모달 (사이드바 트리 클릭 시) */}
+      {/* 기준 테이블 변경 확인 모달 */}
       {pendingBaseTable != null && (
         <Modal
           title="기준 테이블을 바꿀까요?"
           width={460}
           divided={false}
-          onClose={() => setPendingBaseTable(null)}
+          onClose={cancelTableSelection}
           footer={
             <>
-              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setPendingBaseTable(null)}>
+              <Button variant="secondary" size="sm" className="h-[34px]" onClick={cancelTableSelection}>
                 취소
               </Button>
               <Button size="sm" className="h-[34px]" onClick={() => { const t = pendingBaseTable; setPendingBaseTable(null); if (t) void applyBaseTable(t); }}>
