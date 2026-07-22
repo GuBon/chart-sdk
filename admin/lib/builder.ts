@@ -97,6 +97,12 @@ export function isSpatialPointType(type: string | undefined): boolean {
   return /\b(?:geometry|geography)\s*\(\s*point(?:zm|z|m)?\s*,\s*[1-9]\d*\s*\)/i.test(type);
 }
 
+/** SRID가 명시된 PostGIS Polygon/MultiPolygon 컬럼. */
+export function isSpatialAreaType(type: string | undefined): boolean {
+  if (!type) return false;
+  return /\b(?:geometry|geography)\s*\(\s*(?:multi)?polygon(?:zm|z|m)?\s*,\s*[1-9]\d*\s*\)/i.test(type);
+}
+
 /** 컬럼 참조 prefix 로 쓰는 테이블 핸들 — 기본은 이름, 동명 충돌 시 저장된 handle(users_2). 백엔드 parseTableRef 와 규약 일치. */
 export function tableHandle(ref: TableRef): string {
   return ref.handle ?? ref.name;
@@ -228,6 +234,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
           spatialColumn: cfg.geoPoint?.spatialColumn ?? null,
           sizeColumn: cfg.geoPoint?.sizeColumn ?? null,
         },
+        geoArea: undefined,
       };
     }
     return {
@@ -236,14 +243,43 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
       sample: null,
       yAxis: cfg.yAxis.slice(0, 2).map((y) => ({ ...y, agg: 'none' })),
       geoPoint: { mode: 'columns' },
+      geoArea: undefined,
+    };
+  }
+  if (chartType === 'map') {
+    const mode = cfg.geoArea?.mode ?? 'regions';
+    if (mode === 'spatial') {
+      return {
+        ...cfg,
+        xAxis: null,
+        xAxisBucket: null,
+        yAxis: [],
+        orderBy: null,
+        sample: null,
+        geoPoint: undefined,
+        geoArea: {
+          mode: 'spatial',
+          spatialColumn: cfg.geoArea?.spatialColumn ?? null,
+          nameColumn: cfg.geoArea?.nameColumn ?? null,
+          valueColumn: cfg.geoArea?.valueColumn ?? null,
+        },
+      };
+    }
+    return {
+      ...cfg,
+      yAxis: cfg.yAxis.slice(0, 1),
+      sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
+      geoPoint: undefined,
+      geoArea: { mode: 'regions' },
     };
   }
   return {
     ...cfg,
-    // 원형·지도는 1개 값 컬럼(지역/조각별 단일 값).
-    yAxis: chartType === 'pie' || chartType === 'map' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    // 원형은 조각별 단일 값 컬럼.
+    yAxis: chartType === 'pie' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
     sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
     geoPoint: undefined,
+    geoArea: undefined,
   };
 }
 
@@ -273,6 +309,9 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       ...cfg.yAxis.map((y) => y.column),
       cfg.geoPoint?.spatialColumn,
       cfg.geoPoint?.sizeColumn,
+      cfg.geoArea?.spatialColumn,
+      cfg.geoArea?.nameColumn,
+      cfg.geoArea?.valueColumn,
       ...cfg.where.map((w) => w.column),
     ].filter(Boolean) as string[];
     for (const r of refs) {
@@ -281,11 +320,12 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     }
   }
   const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
-  if (!spatialGeoPoint && !cfg.xAxis) return 'X축 컬럼을 선택하세요.';
-  if (!spatialGeoPoint && cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
-  if (!spatialGeoPoint && cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
+  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
+  if (!spatialGeoPoint && !spatialGeoArea && !cfg.xAxis) return 'X축 컬럼을 선택하세요.';
+  if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
+  if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
-  if (chartType === 'map' && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
+  if (chartType === 'map' && !spatialGeoArea && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
   const rawSeriesCount = cfg.yAxis.filter((y) => y.agg === 'none').length;
   if (chartType === 'boxplot') {
@@ -313,6 +353,23 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     if (cfg.yAxis.some((y) => y.agg !== 'none')) return '지도 포인트는 집계 없이 원본 좌표만 사용합니다.';
     if (!isNumericType(xType)) return '지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.';
     if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.';
+  }
+  if (spatialGeoArea) {
+    const areaColumn = cfg.geoArea?.spatialColumn;
+    const nameColumn = cfg.geoArea?.nameColumn;
+    const valueColumn = cfg.geoArea?.valueColumn;
+    if (!areaColumn) return '공간 Polygon 컬럼을 선택하세요.';
+    if (!isSpatialAreaType(columnType(areaColumn, cfg, tables))) {
+      return '동적 지도 경계는 SRID가 지정된 geometry/geography Polygon 또는 MultiPolygon 타입이어야 합니다.';
+    }
+    if (!nameColumn) return '영역 이름 컬럼을 선택하세요.';
+    if (!valueColumn) return '영역 값 컬럼을 선택하세요.';
+    if (!isNumericType(columnType(valueColumn, cfg, tables))) return '동적 지도의 값 컬럼은 숫자여야 합니다.';
+    if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
+      return '공간 Polygon 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
+    }
+    if (cfg.sample) return '공간 Polygon 지도에서는 표본 추출을 사용할 수 없습니다.';
+    return null;
   }
   if (chartType === 'scatter' && !isNumericType(xType)) return '분포 차트는 숫자 X축 컬럼이 필요합니다.';
   if (chartType === 'scatter' && cfg.yAxis.some((y) => y.agg !== 'none')) return '분포 차트는 집계 없이 원본값만 사용할 수 있습니다.';

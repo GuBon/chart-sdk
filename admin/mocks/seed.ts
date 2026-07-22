@@ -60,6 +60,8 @@ export const schemaTables: SchemaTable[] = [
       { name: 'date', type: 'date' },
       { name: 'customer_id', type: 'int' },
       { name: 'location', type: 'geometry(Point,4326)' },
+      { name: 'service_area', type: 'geometry(Polygon,4326)' },
+      { name: 'service_area_geog', type: 'geography(MultiPolygon,4326)' },
     ],
   },
   {

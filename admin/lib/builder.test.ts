@@ -13,6 +13,7 @@ import {
   hasJoins,
   isDateType,
   isNumericType,
+  isSpatialAreaType,
   isSpatialPointType,
   migrateBuilderConfig,
   migrateTableRef,
@@ -39,6 +40,7 @@ const SALES: SchemaTable = {
     { name: 'location', type: 'geometry(Point,4326)' },
     { name: 'location_geog', type: 'geography(Point,4326)' },
     { name: 'service_area', type: 'geometry(Polygon,4326)' },
+    { name: 'service_area_geog', type: 'geography(MultiPolygon,4326)' },
   ],
 };
 const USERS1: SchemaTable = {
@@ -79,6 +81,13 @@ describe('타입 판정', () => {
     expect(isDateType('time')).toBe(true);
     expect(isDateType('text')).toBe(false);
     expect(isDateType(undefined)).toBe(false);
+  });
+
+  it('공간 영역 타입은 SRID가 있는 Polygon과 MultiPolygon만 인식한다', () => {
+    expect(isSpatialAreaType('geometry(Polygon,4326)')).toBe(true);
+    expect(isSpatialAreaType('geography(MultiPolygon, 4326)')).toBe(true);
+    expect(isSpatialAreaType('geometry(Point,4326)')).toBe(false);
+    expect(isSpatialAreaType('geometry')).toBe(false);
   });
   it('isNumericType 은 정수·실수 계열을 인식한다', () => {
     expect(isNumericType('int')).toBe(true);
@@ -186,6 +195,7 @@ describe('columnsForBuilder', () => {
       'location',
       'location_geog',
       'service_area',
+      'service_area_geog',
     ]);
     expect(opts.find((o) => o.value === 'amount')?.type).toBe('numeric');
   });
@@ -416,5 +426,33 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     };
     expect(builderValidationIssue(crossSource, 'geoscatter', TABLES))
       .toBe('공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.');
+  });
+
+  it('map 공간 Polygon 모드는 경계·이름·숫자값 컬럼을 검증하고 X/Y를 비운다', () => {
+    const spatial = bar({
+      xAxis: null,
+      yAxis: [],
+      geoArea: { mode: 'spatial', spatialColumn: 'service_area', nameColumn: 'category', valueColumn: 'amount' },
+    });
+    expect(builderValidationIssue(spatial, 'map', TABLES)).toBeNull();
+
+    const geography = { ...spatial, geoArea: { ...spatial.geoArea!, spatialColumn: 'service_area_geog' } };
+    expect(builderValidationIssue(geography, 'map', TABLES)).toBeNull();
+
+    const normalized = normalizeBuilderForChartType({ ...spatial, xAxis: 'category', yAxis: [{ column: 'amount', agg: 'sum' }] }, 'map');
+    expect(normalized).toMatchObject({ xAxis: null, yAxis: [], orderBy: null, sample: null, geoArea: spatial.geoArea });
+
+    expect(builderValidationIssue({ ...spatial, geoArea: { ...spatial.geoArea!, spatialColumn: 'location' } }, 'map', TABLES))
+      .toBe('동적 지도 경계는 SRID가 지정된 geometry/geography Polygon 또는 MultiPolygon 타입이어야 합니다.');
+    expect(builderValidationIssue({ ...spatial, geoArea: { ...spatial.geoArea!, valueColumn: 'category' } }, 'map', TABLES))
+      .toBe('동적 지도의 값 컬럼은 숫자여야 합니다.');
+
+    const crossSource = {
+      ...spatial,
+      joins: [{ table: users2Ref, type: 'left' as const, on: { leftColumn: 'sales.customer_id', rightColumn: 'users.id' } }],
+      geoArea: { mode: 'spatial' as const, spatialColumn: 'sales.service_area', nameColumn: 'sales.category', valueColumn: 'sales.amount' },
+    };
+    expect(builderValidationIssue(crossSource, 'map', TABLES))
+      .toBe('공간 Polygon 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.');
   });
 });

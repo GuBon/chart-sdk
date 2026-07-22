@@ -51,6 +51,14 @@ export interface GeoPointConfig {
   sizeColumn?: string | null; // 공간 컬럼 모드의 선택적 점 크기 숫자 컬럼
 }
 
+/** 지도 경계 입력. regions는 내장 행정구역, spatial은 DB Polygon/MultiPolygon 컬럼이다. */
+export interface GeoAreaConfig {
+  mode: 'regions' | 'spatial';
+  spatialColumn?: string | null; // PostGIS geometry/geography(Polygon|MultiPolygon, SRID)
+  nameColumn?: string | null; // ECharts feature 이름과 툴팁에 사용할 컬럼(고유값 권장)
+  valueColumn?: string | null; // visualMap에 사용할 숫자 원본값
+}
+
 /**
  * 소스·스키마 한정 테이블 참조(다중 데이터소스 페더레이션). 백엔드 §12.3 과 1:1 — 컬럼 참조는 "handle.col" 문자열.
  * handle: 한 차트 내 이 테이블의 유일 식별자. 기본은 name, 서로 다른 소스/스키마의 동명 테이블이 겹칠 때만 접미(users_2)로 구분.
@@ -87,6 +95,7 @@ export interface BuilderConfig {
   limit?: number;
   sample?: SampleConfig | null; // 집계 모드 전용. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
   geoPoint?: GeoPointConfig; // geoscatter 전용. 미지정은 레거시 경도(X)+위도(Y) 방식.
+  geoArea?: GeoAreaConfig; // map 전용. 미지정/regions는 내장 행정구역 방식.
 }
 
 /** S1 목록 카드 */

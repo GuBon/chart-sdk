@@ -15,6 +15,7 @@ import {
   type SamplingWarningCode,
 } from '@chartsdk/chart-options/sampling';
 import { resolveChartLayoutMetrics, resolveChartTypography } from '@chartsdk/chart-options/display';
+import { EMBEDDED_MAPS_KEY, MAP_VIEWPORT_KEY } from '@chartsdk/chart-options/geo';
 import { schemaTables } from './seed';
 
 type Cols = { name: string; type: string }[];
@@ -37,6 +38,13 @@ const SAMPLE_SPATIAL_POINTS: ReadonlyArray<readonly [number, number, number]> = 
   [127.7298, 37.8813, 41], // 춘천
   [127.4917, 36.6424, 52], // 청주
   [126.5312, 33.4996, 60], // 제주
+];
+
+// 동적 Polygon 지도 미리보기용 단순 경계. 실제 서버는 DB 도형을 ST_AsGeoJSON으로 변환한다.
+const SAMPLE_SPATIAL_AREAS: ReadonlyArray<readonly [string, number, Record<string, unknown>]> = [
+  ['서울 권역', 95, { type: 'Polygon', coordinates: [[[126.76, 37.42], [127.18, 37.42], [127.18, 37.72], [126.76, 37.72], [126.76, 37.42]]] }],
+  ['중부 권역', 72, { type: 'Polygon', coordinates: [[[127.15, 36.20], [128.15, 36.20], [128.15, 37.15], [127.15, 37.15], [127.15, 36.20]]] }],
+  ['남부 권역', 58, { type: 'MultiPolygon', coordinates: [[[[127.60, 34.70], [129.25, 34.70], [129.25, 35.90], [127.60, 35.90], [127.60, 34.70]]]] }],
 ];
 
 // 식별자 quote. "table.col" → "table"."col", 단일 "col" → "col" (생성규칙 11.2)
@@ -96,6 +104,7 @@ function whereSql(w: { column: string; op: string; value?: unknown }): string {
 /** 생성된 SQL 문자열(표시용) — 생성규칙 6·7·11장 모사 */
 export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): string {
   const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
+  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
   if (!cfg.table) return '';
   // 다중 소스면 페더레이션 → ds 별칭 표기(백엔드 §6 모사).
   const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((j) => j.table.datasourceId)]).size >= 2;
@@ -109,6 +118,18 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + 2; // y0 → 2번째 컬럼
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
+  if (spatialGeoArea) {
+    if (!cfg.geoArea?.spatialColumn || !cfg.geoArea.nameColumn || !cfg.geoArea.valueColumn) return '';
+    const area = qcol(cfg.geoArea.spatialColumn);
+    const wgs84 = `ST_Transform((${area})::geometry, 4326)`;
+    const selects = [
+      `CAST(${qcol(cfg.geoArea.nameColumn)} AS text) AS ${qident('__chartsdk_area_name')}`,
+      `${qcol(cfg.geoArea.valueColumn)} AS ${qident('__chartsdk_area_value')}`,
+      `ST_AsGeoJSON(${wgs84}, 6) AS ${qident('__chartsdk_geojson')}`,
+    ];
+    const spatialWhere = where ? `${where} AND ${area} IS NOT NULL` : ` WHERE ${area} IS NOT NULL`;
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${spatialWhere}`;
+  }
   if (spatialGeoPoint) {
     if (!cfg.geoPoint?.spatialColumn) return '';
     const point = qcol(cfg.geoPoint.spatialColumn);
@@ -130,8 +151,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
       qcol(cfg.xAxis),
       ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
     ];
-    const limit = chartType === 'geoscatter' ? '' : '\nLIMIT 1000';
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}${limit}`;
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}`;
   }
   const aggSql: Record<string, (expr: string) => string> = {
     sum: (expr) => `SUM(${expr})`,
@@ -192,8 +212,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     return `WITH ${ctes.join(',\n')}
 SELECT ${selects.join(', ')}
 FROM ${sample}
-GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}
-LIMIT 1000`;
+GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}`;
   }
 
   const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
@@ -231,12 +250,12 @@ LIMIT 1000`;
       + `${qident('__chartsdk_keys')} AS MATERIALIZED (SELECT 1 + floor(random() * ${population})::bigint AS ${qident('v')} FROM ${qident('__chartsdk_seed')} CROSS JOIN generate_series(1, ${indexPlan.sampleSize})),\n`
       + `${qident('__chartsdk_sample')} AS (SELECT ${qident('__chartsdk_base')}.* FROM ${qident('__chartsdk_keys')} JOIN ${qtable(cfg.table, multi)} ${qident('__chartsdk_base')} ON ${qident('__chartsdk_base')}.${qident('id')} = ${qident('__chartsdk_keys')}.${qident('v')}),\n`
       + `${qident('__chartsdk_n')} AS (SELECT COUNT(*) AS ${qident('sampled')} FROM ${qident('__chartsdk_sample')}) `;
-    return `${cte}SELECT ${selects.join(', ')}\nFROM ${qident('__chartsdk_sample')}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+    return `${cte}SELECT ${selects.join(', ')}\nFROM ${qident('__chartsdk_sample')}${where}\nGROUP BY ${group}${orderSql()}`;
   }
   const systemSample = plan?.approximate && plan.method === 'SYSTEM'
     ? ` TABLESAMPLE SYSTEM (${plan.executionRate}) REPEATABLE (${plan.seed})`
     : '';
-  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${systemSample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}\nLIMIT 1000`;
+  return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${systemSample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}`;
 }
 
 /** 표본 비율 0.1~100, 소수점 한 자리 정규화 (생성규칙 3C·9장) */
@@ -397,6 +416,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   }
   // 지도: 시·도 라벨 + 값 1개.
   if (chartType === 'map') {
+    if (cfg.geoArea?.mode === 'spatial') {
+      const columns: Cols = [
+        { name: '__chartsdk_area_name', type: 'text' },
+        { name: '__chartsdk_area_value', type: 'numeric' },
+        { name: '__chartsdk_geojson', type: 'text' },
+      ];
+      const rows: Rows = SAMPLE_SPATIAL_AREAS.map(([name, value, geometry]) => [name, value, JSON.stringify(geometry)]);
+      return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
+    }
     const valName = cfg.yAxis[0] ? aliasOf(cfg.yAxis[0]) : 'value';
     const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' }, { name: valName, type: 'numeric' }];
     const sampling = samplingForConfig(cfg, SAMPLE_REGIONS);
@@ -595,6 +623,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
 
   // ── 지도 — 지역별 값=색(visualMap). map.name 으로 시도/시군구 선택 ──
   if (chartType === 'map') {
+    const spatial = result.columns.some((column) => column.name === '__chartsdk_geojson');
     const data = result.rows.map((r) => ({ name: String(r[0] ?? ''), value: Number(r[1]) || 0 }));
     const vals = data.map((d) => d.value);
     let min = vals.length ? Math.min(...vals) : 0;
@@ -603,15 +632,33 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
     opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0, typography.legend);
+    let mapName = o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido';
+    if (spatial) {
+      const features = result.rows.flatMap((row) => {
+        try {
+          const geometry = JSON.parse(String(row[2] ?? '')) as Record<string, unknown>;
+          if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return [];
+          return [{ type: 'Feature', properties: { name: String(row[0] ?? '') }, geometry }];
+        } catch {
+          return [];
+        }
+      });
+      const fingerprint = JSON.stringify(features);
+      let hash = 2166136261;
+      for (let i = 0; i < fingerprint.length; i++) hash = Math.imul(hash ^ fingerprint.charCodeAt(i), 16777619);
+      mapName = `chartsdk-dynamic-mock-${(hash >>> 0).toString(16)}`;
+      opt[EMBEDDED_MAPS_KEY] = [{ name: mapName, geoJSON: { type: 'FeatureCollection', features } }];
+    }
     opt.series = [{
       type: 'map',
-      map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
+      map: mapName,
       roam: o.map?.roam === true,
       label: { show: o.dataLabel === true, fontSize: typography.dataLabel },
       ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
       emphasis: { label: { show: true } },
       data,
     }];
+    opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
 
@@ -647,6 +694,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
         return { value: [lng, lat, v], symbolSize: sizeOf(v) };
       }),
     }];
+    opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
 

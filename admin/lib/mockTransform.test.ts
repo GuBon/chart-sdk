@@ -55,7 +55,7 @@ describe('mock 변환기 표본 집계 계약', () => {
 
     expect(buildGeneratedSql(config, 'geoscatter')).toContain('WHERE "amount" >= ?');
     expect(buildGeneratedSql(config, 'geoscatter')).not.toContain('LIMIT 1000');
-    expect(buildGeneratedSql(config, 'scatter')).toContain('LIMIT 1000');
+    expect(buildGeneratedSql(config, 'scatter')).not.toContain('LIMIT 1000');
   });
 
   it('공간 Point 지도 포인트 SQL은 WGS84 경도·위도와 선택 크기값으로 투영한다', () => {
@@ -73,6 +73,27 @@ describe('mock 변환기 표본 집계 계약', () => {
     expect(sql).toContain('WHERE "dept" = ? AND "location" IS NOT NULL');
     expect(sql).not.toContain('LIMIT 1000');
     expect(buildAggregateRows(config, 'geoscatter').columns).toHaveLength(3);
+  });
+
+  it('공간 Polygon 지도 SQL과 미리보기 option은 동적 GeoJSON 경계를 전달한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [], xAxis: null, xAxisBucket: null, yAxis: [],
+      where: [{ column: 'amount', op: 'gt', value: 0 }], orderBy: null,
+      geoArea: { mode: 'spatial', spatialColumn: 'service_area', nameColumn: 'category', valueColumn: 'amount' },
+    };
+
+    const sql = buildGeneratedSql(config, 'map');
+    expect(sql).toContain('ST_AsGeoJSON(ST_Transform(("service_area")::geometry, 4326), 6) AS "__chartsdk_geojson"');
+    expect(sql).toContain('CAST("category" AS text) AS "__chartsdk_area_name"');
+    expect(sql).toContain('WHERE "amount" > ? AND "service_area" IS NOT NULL');
+    expect(sql).not.toContain('LIMIT 1000');
+
+    const rows = buildAggregateRows(config, 'map');
+    const option = assembleOption(rows, 'map', {});
+    const series = (option.series as Array<Record<string, unknown>>)[0];
+    expect(series.map).toMatch(/^chartsdk-dynamic-mock-/);
+    expect((option.__chartsdkMaps as unknown[])).toHaveLength(1);
   });
 
   it.each(samplingCases)('$name', ({ agg, rate, sampledValue, expectedValue, extrapolated }) => {
