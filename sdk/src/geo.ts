@@ -3,6 +3,7 @@
 // `${apiBase}/maps/{name}.json` 에서 1회 fetch 해 echarts.registerMap 한다(방식 A: SDK 는 데이터만 가져와 등록).
 // 이미 등록됐거나 진행 중이면 재요청하지 않는다(모듈 캐시).
 import * as echarts from 'echarts/core';
+import { applyMapViewport, takeEmbeddedMaps } from '@chartsdk/chart-options/geo';
 
 const inFlight = new Map<string, Promise<void>>();
 
@@ -48,5 +49,10 @@ function registerOne(apiBase: string, name: string): Promise<void> {
 
 /** option 의 map 시리즈에 필요한 GeoJSON 을 모두 등록. map 차트가 없으면 즉시 반환. */
 export async function ensureMapsRegistered(apiBase: string, option: Record<string, unknown>): Promise<void> {
+  // 동적 DB Polygon 지도는 option에 GeoJSON이 함께 온다. 먼저 등록하고 내부 메타데이터는 setOption 전에 제거한다.
+  for (const embedded of takeEmbeddedMaps(option)) {
+    if (!echarts.getMap(embedded.name)) echarts.registerMap(embedded.name, embedded.geoJSON as never);
+  }
   await Promise.all(mapNames(option).map((n) => registerOne(apiBase, n)));
+  applyMapViewport(option, (name) => echarts.getMap(name));
 }

@@ -53,6 +53,7 @@ export type Control =
   | 'colorMap'   // 항목별 컬러 피커 (실행 후 동적)
   | 'columnRef'  // 결과 컬럼 참조 셀렉트 (버블 크기 등, 실행 후 동적)
   | 'seriesTypes' // 시리즈별 막대/선 지정 (혼합 차트, 실행 후 동적)
+  | 'mapViewport' // 지도 표시 영역(데이터·지역·지도 조정·좌표)
   | 'button';    // 액션 (저장 안 됨)
 
 /** 옵션 값 저장 위치 */
@@ -634,6 +635,12 @@ export const OPTION_REGISTRY: OptionDef[] = [
     echarts: '@map.name',
     choices: [{ value: 'kr-sido', label: '시도' }, { value: 'kr-sigungu', label: '시군구' }],
     help: '시군구 지도는 지역명이 "시도명 시군구명"(예: 부산광역시 중구) 정식 표기여야 매칭된다',
+  },
+  {
+    key: 'map.viewport', zone: 'type', section: '지도', label: '표시 영역',
+    control: 'mapViewport', appliesTo: ['map', 'geoscatter'], default: { mode: 'data' },
+    echarts: '@map.viewport',
+    help: '데이터 전체 자동 맞춤 또는 현재 Polygon 지역·지도 조정·WGS84 좌표로 초기 표시 영역을 저장',
   },
   {
     key: 'map.roam', zone: 'type', section: '지도', label: '확대·이동',
