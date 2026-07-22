@@ -30,7 +30,7 @@ import java.util.Map;
  * 다중 소스 페더레이션 실행 엔진(설계 §3). per-op 무상태: DuckDB in-memory 연결을 열어 필요한 데이터소스를
  * read-only ATTACH 하고 페더레이션 SQL 을 1회 실행한 뒤 닫는다. 계산 경로(저장/새로고침/미리보기)에서만 호출된다.
  *
- * <p>가드: read-only ATTACH · 쿼리 타임아웃 · 메모리 상한 · 기본 생성 SQL의 LIMIT 1000.
+ * <p>가드: read-only ATTACH · 쿼리 타임아웃 · 메모리 상한. 미리보기는 행 수를 제한하고 실제 차트는 전체 결과를 반환한다.
  * 지도 포인트 빌더는 WHERE 범위의 좌표를 전량 반환하므로 최종 LIMIT만 적용하지 않는다. 자격증명은
  * libpq+SQL 이중 이스케이프로 안전 삽입하고, 로그에는 {@link #maskedAttachSql}(비밀번호 마스킹)만 남긴다(§10).
  */

@@ -51,7 +51,7 @@ class FederatedSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "ds5"."public"."customers"."region", SUM("ds2"."sales"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" INNER JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" GROUP BY "ds5"."public"."customers"."region" LIMIT 1000\
+                SELECT "ds5"."public"."customers"."region", SUM("ds2"."sales"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" INNER JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" GROUP BY "ds5"."public"."customers"."region"\
                 """);
         assertThat(sql.params()).isEmpty();
     }
@@ -70,7 +70,7 @@ class FederatedSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "ds5"."public"."customers"."region", SUM("ds2"."sales"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" LEFT JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" WHERE "ds2"."sales"."orders"."amount" >= ? GROUP BY "ds5"."public"."customers"."region" LIMIT 1000\
+                SELECT "ds5"."public"."customers"."region", SUM("ds2"."sales"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" LEFT JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" WHERE "ds2"."sales"."orders"."amount" >= ? GROUP BY "ds5"."public"."customers"."region"\
                 """);
         assertThat(sql.params()).containsExactly(1000L);
     }
@@ -131,7 +131,7 @@ class FederatedSqlBuilderTest {
         ), "line", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT DATE_TRUNC('month', "ds2"."sales"."orders"."ordered_at") AS "ordered_at", SUM("ds2"."sales"."orders"."amount") AS "매출" FROM "ds2"."sales"."orders" INNER JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" GROUP BY 1 ORDER BY 1 ASC LIMIT 1000\
+                SELECT DATE_TRUNC('month', "ds2"."sales"."orders"."ordered_at") AS "ordered_at", SUM("ds2"."sales"."orders"."amount") AS "매출" FROM "ds2"."sales"."orders" INNER JOIN "ds5"."public"."customers" ON "ds2"."sales"."orders"."user_id" = "ds5"."public"."customers"."id" GROUP BY 1 ORDER BY 1 ASC\
                 """);
     }
 
@@ -179,7 +179,7 @@ class FederatedSqlBuilderTest {
 
         // 두 orders 가 각자의 소스로 완전 한정돼 SQL 자체가 모호하지 않다(별칭 불필요).
         assertThat(sql.text()).isEqualTo("""
-                SELECT "ds2"."sales"."orders"."id", SUM("ds9"."public"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" INNER JOIN "ds9"."public"."orders" ON "ds2"."sales"."orders"."user_id" = "ds9"."public"."orders"."id" GROUP BY "ds2"."sales"."orders"."id" LIMIT 1000\
+                SELECT "ds2"."sales"."orders"."id", SUM("ds9"."public"."orders"."amount") AS "total" FROM "ds2"."sales"."orders" INNER JOIN "ds9"."public"."orders" ON "ds2"."sales"."orders"."user_id" = "ds9"."public"."orders"."id" GROUP BY "ds2"."sales"."orders"."id"\
                 """);
     }
 

@@ -38,9 +38,11 @@ public class QueryController {
     public Map<String, Object> run(@Valid @RequestBody QueryRunRequest body) {
         String sql = body.sql().trim();
         assertSelectOnly(sql);
-        QueryRows rows = queries.execute(body.datasourceId(), sql);
-        Map<String, Object> result = rowsResult(rows);
         String chartType = str(body.chartType());
+        QueryRows rows = chartType == null
+                ? queries.execute(body.datasourceId(), sql)
+                : queries.executeUnbounded(body.datasourceId(), sql, List.of());
+        Map<String, Object> result = rowsResult(rows);
         if (chartType != null) {
             result.put("option", converter.convert(rows, chartType, options(body)));
         }

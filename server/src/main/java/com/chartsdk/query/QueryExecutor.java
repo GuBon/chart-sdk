@@ -16,7 +16,8 @@ import java.util.Map;
 /**
  * 모든 고객 DB 조회의 단일 실행 경로. 읽기 전용·타임아웃·행 제한 정책·에러코드 매핑을 한 곳에서 강제한다
  * (노코드 빌더·raw SQL·스키마 미리보기가 공유 — 별도 실행 경로를 만들지 않는다, 노코드 SQL생성규칙 §1.1).
- * 기본은 1,000행 제한이며 지도 포인트 빌더만 같은 경로에서 JDBC 행 제한을 해제한다.
+ * 데이터 미리보기·검증 조회는 기본 1,000행으로 제한한다. 실제 차트 계산은 전체 결과가 렌더 계약이므로
+ * {@link #executeUnbounded(long, String, List)}를 사용하고, 사용자가 선택한 표본추출만 결과 범위를 줄인다.
  */
 @Service
 public class QueryExecutor {
@@ -38,7 +39,7 @@ public class QueryExecutor {
         return execute(datasourceId, sql, params, MAX_ROWS);
     }
 
-    /** 지도 포인트처럼 결과 행 전체가 계약인 빌더 쿼리용. 쿼리 타임아웃은 일반 실행과 동일하게 유지한다. */
+    /** 실제 차트처럼 결과 행 전체가 계약인 쿼리용. 쿼리 타임아웃은 일반 실행과 동일하게 유지한다. */
     public QueryRows executeUnbounded(long datasourceId, String sql, List<Object> params) {
         return execute(datasourceId, sql, params, 0);
     }

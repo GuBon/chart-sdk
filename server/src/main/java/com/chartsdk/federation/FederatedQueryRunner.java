@@ -12,6 +12,7 @@ import com.chartsdk.query.SamplingPlanner;
 import com.chartsdk.query.SchemaCatalog;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -46,7 +47,7 @@ public class FederatedQueryRunner {
 
     /** builderConfig 로부터 SQL 생성 + 실행(미리보기·저장 시드·수동 새로고침의 재생성 경로). */
     public BuiltResult runBuilder(long primaryDatasourceId, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        boolean unboundedPoints = "geoscatter".equals(chartType) && !rawMode;
+        boolean unboundedChart = !rawMode;
         Set<Long> refs = BuilderSqlBuilder.referencedDatasources(cfg);
         if (refs.size() >= 2) {
             FederatedCatalog catalog = federation.catalog(refs);
@@ -55,7 +56,7 @@ public class FederatedQueryRunner {
             BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
                     catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
             SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                    unboundedPoints
+                    unboundedChart
                             ? federation.executeUnbounded(refs, sql.text(), sql.params())
                             : federation.execute(refs, sql.text(), sql.params()),
                     sql.sampling());
@@ -66,7 +67,7 @@ public class FederatedQueryRunner {
         SamplePlan plan = planner.plan(dsId, cfg, rawMode); // 관계 종류·조인 유무·PK·행수·밀도로 RESULT_RANDOM 포함 실행 방식 결정
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
         SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                unboundedPoints
+                unboundedChart
                         ? queries.executeUnbounded(dsId, sql.text(), sql.params())
                         : queries.execute(dsId, sql.text(), sql.params()),
                 sql.sampling());
@@ -76,8 +77,8 @@ public class FederatedQueryRunner {
     /** 저장된 리터럴 SQL 실행(저장 시드·수동 새로고침의 재실행 경로). 소스 수로 라우팅. */
     public QueryRows runStored(Set<Long> datasourceIds, long primaryDatasourceId, String storedSql) {
         if (datasourceIds != null && datasourceIds.size() >= 2) {
-            return federation.execute(datasourceIds, storedSql);
+            return federation.executeUnbounded(datasourceIds, storedSql, List.of());
         }
-        return queries.execute(primaryDatasourceId, storedSql);
+        return queries.executeUnbounded(primaryDatasourceId, storedSql, List.of());
     }
 }

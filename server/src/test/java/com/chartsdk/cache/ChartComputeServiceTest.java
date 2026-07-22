@@ -46,6 +46,10 @@ class ChartComputeServiceTest {
         return new CachedChartRows(new QueryRows(List.of(), List.of(), 0, false, 1), Instant.now());
     }
 
+    private static CachedChartRows truncatedSnapshot() {
+        return new CachedChartRows(new QueryRows(List.of(), List.of(), 1_000, true, 1), Instant.now());
+    }
+
     @Test
     void multiSourceServesCacheSnapshotWithoutFederating() {
         doReturn(true).when(compute).isMultiSource(1L);
@@ -78,6 +82,17 @@ class ChartComputeServiceTest {
         assertThat(compute.serve(1L, "ttl", 3600, 0, null)).isNotNull();
 
         verify(compute, times(1)).refreshSingleFlight(1L, true, null);
+    }
+
+    @Test
+    void legacyThousandRowTruncatedCacheIsRecomputed() {
+        doReturn(false).when(compute).isMultiSource(1L);
+        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(truncatedSnapshot()));
+        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, true, null);
+
+        assertThat(compute.serve(1L, "manual", 3600, 0, null).rows().truncated()).isFalse();
+
+        verify(compute).refreshSingleFlight(1L, true, null);
     }
 
     @Test

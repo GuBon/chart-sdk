@@ -54,7 +54,7 @@ class BuilderSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "public"."sales"."category", SUM("public"."sales"."amount") AS "total" FROM "public"."sales" WHERE "public"."sales"."category" ILIKE ? AND "public"."sales"."amount" >= ? GROUP BY "public"."sales"."category" ORDER BY 2 DESC LIMIT 1000\
+                SELECT "public"."sales"."category", SUM("public"."sales"."amount") AS "total" FROM "public"."sales" WHERE "public"."sales"."category" ILIKE ? AND "public"."sales"."amount" >= ? GROUP BY "public"."sales"."category" ORDER BY 2 DESC\
                 """);
         assertThat(sql.params()).containsExactly("%foo%", 100L);
     }
@@ -229,7 +229,7 @@ class BuilderSqlBuilderTest {
         ), "line", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "public"."sales"."ordered_at", "public"."sales"."amount" AS "amount" FROM "public"."sales" ORDER BY 1 ASC LIMIT 1000\
+                SELECT "public"."sales"."ordered_at", "public"."sales"."amount" AS "amount" FROM "public"."sales" ORDER BY 1 ASC\
                 """);
         assertThat(sql.params()).isEmpty();
     }
@@ -243,7 +243,7 @@ class BuilderSqlBuilderTest {
         ), "pie", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "public"."sales"."category", "public"."sales"."amount" AS "amount" FROM "public"."sales" LIMIT 1000\
+                SELECT "public"."sales"."category", "public"."sales"."amount" AS "amount" FROM "public"."sales"\
                 """);
         assertThat(sql.params()).isEmpty();
     }
@@ -458,7 +458,7 @@ class BuilderSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "tandanji"."events"."user_id", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" GROUP BY "tandanji"."events"."user_id" LIMIT 1000\
+                SELECT "tandanji"."events"."user_id", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" GROUP BY "tandanji"."events"."user_id"\
                 """);
         assertThat(sql.params()).isEmpty();
     }
@@ -473,7 +473,7 @@ class BuilderSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "public"."events"."label", COUNT("public"."events"."id") AS "cnt" FROM "public"."events" GROUP BY "public"."events"."label" LIMIT 1000\
+                SELECT "public"."events"."label", COUNT("public"."events"."id") AS "cnt" FROM "public"."events" GROUP BY "public"."events"."label"\
                 """);
     }
 
@@ -486,7 +486,7 @@ class BuilderSqlBuilderTest {
                 "yAxis", List.of(Map.of("column", "amount", "agg", "none"))
         ), "line", false);
         assertThat(ok.text()).isEqualTo("""
-                SELECT "tandanji"."events"."user_id", "tandanji"."events"."amount" AS "amount" FROM "tandanji"."events" LIMIT 1000\
+                SELECT "tandanji"."events"."user_id", "tandanji"."events"."amount" AS "amount" FROM "tandanji"."events"\
                 """);
 
         assertThatThrownBy(() -> BuilderSqlBuilder.generate(multiSchema, Map.of(
@@ -512,7 +512,7 @@ class BuilderSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "tandanji"."users"."name", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" INNER JOIN "tandanji"."users" ON "tandanji"."events"."user_id" = "tandanji"."users"."id" GROUP BY "tandanji"."users"."name" LIMIT 1000\
+                SELECT "tandanji"."users"."name", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" INNER JOIN "tandanji"."users" ON "tandanji"."events"."user_id" = "tandanji"."users"."id" GROUP BY "tandanji"."users"."name"\
                 """);
     }
 
@@ -527,7 +527,7 @@ class BuilderSqlBuilderTest {
         ), "line", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT DATE_TRUNC('month', "tandanji"."events"."created_at") AS "created_at", SUM("tandanji"."events"."amount") AS "매출" FROM "tandanji"."events" GROUP BY 1 ORDER BY 1 ASC LIMIT 1000\
+                SELECT DATE_TRUNC('month', "tandanji"."events"."created_at") AS "created_at", SUM("tandanji"."events"."amount") AS "매출" FROM "tandanji"."events" GROUP BY 1 ORDER BY 1 ASC\
                 """);
     }
 
@@ -547,7 +547,7 @@ class BuilderSqlBuilderTest {
         ), "bar", false);
 
         assertThat(sql.text()).isEqualTo("""
-                SELECT "public"."events"."label", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" INNER JOIN "public"."events" ON "tandanji"."events"."user_id" = "public"."events"."id" GROUP BY "public"."events"."label" LIMIT 1000\
+                SELECT "public"."events"."label", SUM("tandanji"."events"."amount") AS "total" FROM "tandanji"."events" INNER JOIN "public"."events" ON "tandanji"."events"."user_id" = "public"."events"."id" GROUP BY "public"."events"."label"\
                 """);
     }
 }

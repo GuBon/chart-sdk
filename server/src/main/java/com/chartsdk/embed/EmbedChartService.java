@@ -41,7 +41,7 @@ public class EmbedChartService {
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
         response.put("rowCount", rows.rows().rowCount());
-        response.put("truncated", rows.rows().truncated()); // 1000행 절단 노출(G5) — 임베드도 "상위 N개" 안내 가능
+        response.put("truncated", rows.rows().truncated()); // 신규 차트 계산은 전체 결과이며, 레거시/제한 결과 호환 메타데이터는 유지한다.
         response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
         if (rows.sampling() != null) rows.sampling().putInto(response);
         return response;

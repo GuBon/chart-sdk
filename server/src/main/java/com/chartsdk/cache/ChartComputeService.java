@@ -135,8 +135,9 @@ public class ChartComputeService {
         }
     }
 
-    /** sampling 계약이 없는 구 캐시는 표본 차트에서 미스로 처리해 현재 생성기로 자동 재계산한다. */
+    /** 구 1,000행 절단 캐시와 sampling 계약이 없는 구 표본 캐시는 미스로 처리해 현재 실행 계약으로 재계산한다. */
     private Optional<CachedChartRows> matchingSampling(Optional<CachedChartRows> cached, SamplingMetadata sampling) {
+        cached = cached.filter(rows -> !rows.rows().truncated());
         if (sampling == null) return cached.filter(rows -> rows.sampling() == null);
         return cached.filter(rows -> rows.sampling() != null && rows.sampling().matchesDefinition(sampling));
     }

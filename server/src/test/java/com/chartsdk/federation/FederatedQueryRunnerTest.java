@@ -25,6 +25,60 @@ class FederatedQueryRunnerTest {
     private static final QueryRows EMPTY = new QueryRows(List.of(), List.of(), 0, false, 1);
 
     @Test
+    void routesOrdinaryBuilderChartsThroughUnboundedExecution() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        Map<String, Object> config = Map.of(
+                "table", Map.of("datasourceId", 1L, "schema", "public", "name", "points"),
+                "xAxis", "longitude",
+                "yAxis", List.of(Map.of("column", "latitude", "agg", "sum")));
+        when(queries.catalog(1L)).thenReturn(singleCatalog());
+        when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
+        when(queries.executeUnbounded(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+
+        FederatedQueryRunner.BuiltResult result =
+                new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "bar", false);
+
+        verify(queries).executeUnbounded(eq(1L), anyString(), anyList());
+        assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
+    }
+
+    @Test
+    void keepsRawDataPreviewBounded() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        Map<String, Object> config = Map.of(
+                "table", Map.of("datasourceId", 1L, "schema", "public", "name", "points"));
+        when(queries.catalog(1L)).thenReturn(singleCatalog());
+        when(planner.plan(1L, config, true)).thenReturn(SamplePlan.none());
+        when(queries.execute(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+
+        FederatedQueryRunner.BuiltResult result =
+                new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "bar", true);
+
+        verify(queries).execute(eq(1L), anyString(), anyList());
+        assertThat(result.sql().text()).endsWith("LIMIT 1000");
+    }
+
+    @Test
+    void routesStoredChartSqlThroughUnboundedExecution() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        when(queries.executeUnbounded(1L, "SELECT * FROM chart_data", List.of())).thenReturn(EMPTY);
+        when(federation.executeUnbounded(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of())).thenReturn(EMPTY);
+        FederatedQueryRunner runner = new FederatedQueryRunner(queries, federation, planner);
+
+        assertThat(runner.runStored(Set.of(1L), 1L, "SELECT * FROM chart_data")).isSameAs(EMPTY);
+        assertThat(runner.runStored(Set.of(1L, 2L), 1L, "SELECT * FROM joined_chart")).isSameAs(EMPTY);
+
+        verify(queries).executeUnbounded(1L, "SELECT * FROM chart_data", List.of());
+        verify(federation).executeUnbounded(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of());
+    }
+
+    @Test
     void routesSingleSourceGeoScatterThroughUnboundedExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);

@@ -210,8 +210,7 @@ public final class BuilderSqlBuilder {
             groupBy = " GROUP BY " + (bucket == null ? render(x) : "1");
         }
 
-        String sql = cteHead + "SELECT " + String.join(", ", selects) + from + where + groupBy + order
-                + resultLimit();
+        String sql = cteHead + "SELECT " + String.join(", ", selects) + from + where + groupBy + order;
         return new Sql(sql, params, sampling);
     }
 
@@ -311,7 +310,7 @@ public final class BuilderSqlBuilder {
         String groupBy = " GROUP BY " + (bucket == null ? sampledX : "1");
         String order = buildOrder(yAxis.size());
         String sql = cte + "SELECT " + String.join(", ", selects) + " FROM " + sample
-                + groupBy + order + resultLimit();
+                + groupBy + order;
         return new Sql(sql, params, sampling);
     }
 
@@ -355,7 +354,7 @@ public final class BuilderSqlBuilder {
         String where = buildWhere(params);
         where += where.isEmpty() ? " WHERE " + pointSql + " IS NOT NULL" : " AND " + pointSql + " IS NOT NULL";
         String sql = "SELECT " + String.join(", ", selects)
-                + " FROM " + render(baseRef) + joins + where + resultLimit();
+                + " FROM " + render(baseRef) + joins + where;
         return new Sql(sql, params, null);
     }
 
