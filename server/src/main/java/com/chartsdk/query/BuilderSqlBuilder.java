@@ -58,6 +58,9 @@ public final class BuilderSqlBuilder {
     private static final String SPATIAL_LONGITUDE = "__chartsdk_longitude";
     private static final String SPATIAL_LATITUDE = "__chartsdk_latitude";
     private static final String SPATIAL_SIZE = "__chartsdk_size";
+    private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
+    private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
+    private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
 
     private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
                              String chartType, boolean rawMode, SamplePlan plan, boolean federated) {
@@ -127,6 +130,9 @@ public final class BuilderSqlBuilder {
 
         if (isSpatialGeoPoint()) {
             return buildSpatialGeoScatter(joins, sampling);
+        }
+        if (isSpatialGeoArea()) {
+            return buildSpatialGeoMap(joins, sampling);
         }
 
         if (xAxis == null) throw invalidReq("xAxis is required.");
@@ -364,15 +370,65 @@ public final class BuilderSqlBuilder {
                 && "spatial".equals(str(geoPoint.get("mode")));
     }
 
+    /** PostGIS Polygon/MultiPolygon을 동적 ECharts 지도 경계용 GeoJSON 행으로 투영한다. */
+    private Sql buildSpatialGeoMap(String joins, SamplingMetadata sampling) {
+        if (sampling != null) throw invalidReq("Sample cannot be used with spatial polygon values.");
+        if (federated) {
+            throw invalidReq("Spatial polygon columns are not supported across multiple datasources.");
+        }
+
+        Map<String, Object> geoArea = asMap(cfg.get("geoArea"));
+        String spatialColumn = geoArea == null ? null : str(geoArea.get("spatialColumn"));
+        String nameColumn = geoArea == null ? null : str(geoArea.get("nameColumn"));
+        String valueColumn = geoArea == null ? null : str(geoArea.get("valueColumn"));
+        if (spatialColumn == null) throw invalidReq("geoArea.spatialColumn is required.");
+        if (nameColumn == null) throw invalidReq("geoArea.nameColumn is required.");
+        if (valueColumn == null) throw invalidReq("geoArea.valueColumn is required.");
+
+        Ref area = resolveRef(spatialColumn);
+        Ref name = resolveRef(nameColumn);
+        Ref value = resolveRef(valueColumn);
+        if (!isSpatialAreaType(typeOf(area))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "map spatial column must be geometry/geography Polygon or MultiPolygon with an SRID.");
+        }
+        if (!isNumeric(typeOf(value))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "map spatial value column must be numeric.");
+        }
+
+        String areaSql = render(area);
+        String wgs84 = "ST_Transform((" + areaSql + ")::geometry, 4326)";
+        List<String> selects = List.of(
+                "CAST(" + render(name) + " AS text) AS " + SqlIdentifier.quote(SPATIAL_AREA_NAME),
+                render(value) + " AS " + SqlIdentifier.quote(SPATIAL_AREA_VALUE),
+                "ST_AsGeoJSON(" + wgs84 + ", 6) AS " + SqlIdentifier.quote(SPATIAL_AREA_GEOJSON)
+        );
+
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        where += where.isEmpty() ? " WHERE " + areaSql + " IS NOT NULL" : " AND " + areaSql + " IS NOT NULL";
+        String sql = "SELECT " + String.join(", ", selects)
+                + " FROM " + render(baseRef) + joins + where;
+        return new Sql(sql, params, null);
+    }
+
+    private boolean isSpatialGeoArea() {
+        Map<String, Object> geoArea = asMap(cfg.get("geoArea"));
+        return "map".equals(chartType) && geoArea != null
+                && "spatial".equals(str(geoArea.get("mode")));
+    }
+
     private static boolean isSpatialPointType(String type) {
         if (type == null) return false;
         String compact = type.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
         return compact.matches(".*(?:geometry|geography)\\(point(?:zm|z|m)?,[1-9]\\d*\\).*");
     }
 
-    /** 지도 포인트는 사용자가 지정한 WHERE 범위의 좌표를 모두 반환한다. 원본 행 미리보기는 별도 rawMode이므로 계속 제한한다. */
-    private String resultLimit() {
-        return "geoscatter".equals(chartType) && !rawMode ? "" : " LIMIT " + QueryExecutor.MAX_ROWS;
+    private static boolean isSpatialAreaType(String type) {
+        if (type == null) return false;
+        String compact = type.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        return compact.matches(".*(?:geometry|geography)\\((?:multi)?polygon(?:zm|z|m)?,[1-9]\\d*\\).*");
     }
 
     private List<String> hiddenResultSampleColumns(List<Map<String, Object>> yAxis) {
@@ -771,7 +827,7 @@ public final class BuilderSqlBuilder {
     private static boolean isNumeric(String t) {
         if (t == null) return false;
         t = t.toLowerCase(Locale.ROOT);
-        return t.contains("int") || t.equals("numeric") || t.equals("decimal") || t.equals("real")
+        return t.contains("int") || t.startsWith("numeric") || t.startsWith("decimal") || t.equals("real")
                 || t.contains("double") || t.equals("money") || t.equals("serial") || t.contains("float");
     }
 

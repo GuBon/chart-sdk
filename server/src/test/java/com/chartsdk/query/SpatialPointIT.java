@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** 별도 PostGIS 컨테이너(55433)에서 실제 geometry/geography Point 조회와 차트 변환을 관통 검증한다. */
+/** 별도 PostGIS 컨테이너(55433)에서 실제 Point·Polygon 공간 컬럼 조회와 차트 변환을 관통 검증한다. */
 class SpatialPointIT {
     private static final long DATASOURCE_ID = 995L;
     private static final int PORT = 55433;
@@ -75,8 +75,52 @@ class SpatialPointIT {
                         (2, ST_SetSRID(ST_MakePoint(129.0756, 35.1796), 4326)::geography),
                         (3, ST_SetSRID(ST_MakePoint(126.5312, 33.4996), 4326)::geography)
                     """);
+            statement.execute("""
+                    CREATE TABLE chartsdk_spatial_it.areas_geometry(
+                        id BIGINT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        score NUMERIC NOT NULL,
+                        boundary geometry(Polygon, 3857) NOT NULL
+                    )
+                    """);
+            statement.execute("""
+                    INSERT INTO chartsdk_spatial_it.areas_geometry VALUES
+                        (1, '서부', 25, ST_Transform(ST_GeomFromText('POLYGON((126.8 37.3,127.0 37.3,127.0 37.5,126.8 37.5,126.8 37.3))', 4326), 3857)),
+                        (2, '동부', 75, ST_Transform(ST_GeomFromText('POLYGON((127.0 37.3,127.2 37.3,127.2 37.5,127.0 37.5,127.0 37.3))', 4326), 3857))
+                    """);
+            statement.execute("""
+                    INSERT INTO chartsdk_spatial_it.areas_geometry(id, name, score, boundary)
+                    SELECT i,
+                           'area-' || i,
+                           10 + (i % 90),
+                           ST_Transform(
+                               ST_MakeEnvelope(
+                                   126.0 + (i % 40) * 0.01,
+                                   34.0 + ((i - 1) / 40) * 0.01,
+                                   126.005 + (i % 40) * 0.01,
+                                   34.005 + ((i - 1) / 40) * 0.01,
+                                   4326
+                               ),
+                               3857
+                           )
+                      FROM generate_series(3, 5000) AS i
+                    """);
+            statement.execute("""
+                    CREATE TABLE chartsdk_spatial_it.areas_geography(
+                        id BIGINT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        score NUMERIC NOT NULL,
+                        boundary geography(MultiPolygon, 4326) NOT NULL
+                    )
+                    """);
+            statement.execute("""
+                    INSERT INTO chartsdk_spatial_it.areas_geography VALUES
+                        (1, '복합 권역', 50, ST_Multi(ST_GeomFromText('POLYGON((128.0 36.0,128.2 36.0,128.2 36.2,128.0 36.2,128.0 36.0))', 4326))::geography)
+                    """);
             statement.execute("ANALYZE " + SCHEMA + ".places_geometry");
             statement.execute("ANALYZE " + SCHEMA + ".places_geography");
+            statement.execute("ANALYZE " + SCHEMA + ".areas_geometry");
+            statement.execute("ANALYZE " + SCHEMA + ".areas_geography");
         }
 
         DatasourceService datasources = mock(DatasourceService.class);
@@ -140,6 +184,68 @@ class SpatialPointIT {
         assertThat(result.rows().columns()).extracting(column -> column.get("name"))
                 .containsExactly("__chartsdk_longitude", "__chartsdk_latitude");
         assertCoordinate(result.rows().rows().get(0), 126.9780, 37.5665);
+    }
+
+    @Test
+    void ordinaryBarRendersAllFiveThousandGroupsWithoutSampling() {
+        Map<String, Object> config = Map.of(
+                "table", ref("areas_geometry"),
+                "xAxis", "name",
+                "yAxis", List.of(Map.of("column", "score", "agg", "sum")),
+                "where", List.of());
+
+        FederatedQueryRunner.BuiltResult result = runner.runBuilder(DATASOURCE_ID, config, "bar", false);
+
+        assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
+        assertThat(result.rows().rowCount()).isEqualTo(5_000);
+        assertThat(result.rows().truncated()).isFalse();
+
+        Map<String, Object> option = new ChartOptionConverter(new OptionDefaults(Map.of()))
+                .convert(result.rows(), "bar", Map.of());
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat((List<?>) series.get("data")).hasSize(5_000);
+    }
+
+    @Test
+    void allFiveThousandGeometryAreasAndGeographyAreasBecomeEmbeddedDynamicMaps() {
+        Map<String, Object> geometryConfig = Map.of(
+                "table", ref("areas_geometry"),
+                "where", List.of(),
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "boundary",
+                        "nameColumn", "name",
+                        "valueColumn", "score"));
+
+        FederatedQueryRunner.BuiltResult geometry = runner.runBuilder(DATASOURCE_ID, geometryConfig, "map", false);
+        assertThat(geometry.sql().text()).doesNotContain("LIMIT 1000");
+        assertThat(geometry.rows().rowCount()).isEqualTo(5_000);
+        assertThat(geometry.rows().truncated()).isFalse();
+        assertThat(geometry.rows().columns()).extracting(column -> column.get("name"))
+                .containsExactly("__chartsdk_area_name", "__chartsdk_area_value", "__chartsdk_geojson");
+        assertThat(geometry.rows().rows()).hasSize(5_000);
+        assertThat(String.valueOf(geometry.rows().rows().get(0).get(2))).contains("\"type\":\"Polygon\"");
+
+        Map<String, Object> option = new ChartOptionConverter(new OptionDefaults(Map.of()))
+                .convert(geometry.rows(), "map", Map.of());
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(series.get("map")).asString().startsWith("chartsdk-dynamic-");
+        assertThat((List<?>) series.get("data")).hasSize(5_000);
+        assertThat((List<?>) option.get("__chartsdkMaps")).hasSize(1);
+        Map<?, ?> embeddedMap = (Map<?, ?>) ((List<?>) option.get("__chartsdkMaps")).get(0);
+        Map<?, ?> geoJson = (Map<?, ?>) embeddedMap.get("geoJSON");
+        assertThat((List<?>) geoJson.get("features")).hasSize(5_000);
+
+        Map<String, Object> geographyConfig = Map.of(
+                "table", ref("areas_geography"),
+                "where", List.of(),
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "boundary",
+                        "nameColumn", "name",
+                        "valueColumn", "score"));
+        FederatedQueryRunner.BuiltResult geography = runner.runBuilder(DATASOURCE_ID, geographyConfig, "map", false);
+        assertThat(String.valueOf(geography.rows().rows().get(0).get(2))).contains("\"type\":\"MultiPolygon\"");
     }
 
     private static void assertCoordinate(List<Object> row, double longitude, double latitude) {

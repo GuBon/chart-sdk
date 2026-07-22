@@ -28,11 +28,13 @@ class BuilderSqlBuilderTest {
                     "id", "bigint",
                     "category", "text",
                     "amount", "numeric",
+                    "precise_amount", "numeric(8,1)",
                     "ordered_at", "timestamp without time zone",
                     "customer_id", "bigint",
                     "location", "geometry(Point,3857)",
                     "location_geog", "geography(Point,4326)",
-                    "service_area", "geometry(Polygon,4326)"
+                    "service_area", "geometry(Polygon,4326)",
+                    "service_area_geog", "geography(MultiPolygon,4326)"
             ),
             "customers", Map.of(
                     "id", "bigint",
@@ -428,6 +430,58 @@ class BuilderSqlBuilderTest {
         ), "map", false))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("map requires exactly one yAxis");
+    }
+
+    @Test
+    void mapSupportsPostgisPolygonAndMultiPolygonColumnsAsGeoJson() {
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "service_area",
+                        "nameColumn", "category",
+                        "valueColumn", "amount"),
+                "where", List.of(Map.of("column", "amount", "op", "gt", "value", 0))
+        ), "map", false);
+
+        assertThat(sql.text())
+                .contains("CAST(\"public\".\"sales\".\"category\" AS text) AS \"__chartsdk_area_name\"")
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_area_value\"")
+                .contains("ST_AsGeoJSON(ST_Transform((\"public\".\"sales\".\"service_area\")::geometry, 4326), 6) AS \"__chartsdk_geojson\"")
+                .contains("WHERE \"public\".\"sales\".\"amount\" > ? AND \"public\".\"sales\".\"service_area\" IS NOT NULL")
+                .doesNotContain("LIMIT 1000");
+        assertThat(sql.params()).containsExactly(0);
+
+        BuilderSqlBuilder.Sql geography = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "service_area_geog",
+                        "nameColumn", "category",
+                        "valueColumn", "amount")
+        ), "map", false);
+        assertThat(geography.text()).contains("service_area_geog\")::geometry, 4326");
+
+        BuilderSqlBuilder.Sql parameterizedNumeric = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "service_area",
+                        "nameColumn", "category",
+                        "valueColumn", "precise_amount")
+        ), "map", false);
+        assertThat(parameterizedNumeric.text()).contains("precise_amount\" AS \"__chartsdk_area_value");
+
+        assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "location",
+                        "nameColumn", "category",
+                        "valueColumn", "amount")
+        ), "map", false))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("Polygon or MultiPolygon with an SRID");
     }
 
     // ── 다중 스키마(§1.2) ────────────────────────────────────

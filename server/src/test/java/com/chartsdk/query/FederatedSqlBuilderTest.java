@@ -20,7 +20,7 @@ class FederatedSqlBuilderTest {
             2L, new SchemaCatalog(Map.of(
                     new SchemaCatalog.Key("sales", "orders"),
                     Map.of("id", "bigint", "user_id", "bigint", "amount", "numeric", "ordered_at", "timestamp without time zone",
-                            "location", "geometry(Point,4326)"))),
+                            "location", "geometry(Point,4326)", "service_area", "geometry(Polygon,4326)"))),
             5L, new SchemaCatalog(Map.of(
                     new SchemaCatalog.Key("public", "customers"),
                     Map.of("id", "bigint", "region", "text")))
@@ -85,6 +85,24 @@ class FederatedSqlBuilderTest {
                         "on", Map.of("leftColumn", "orders.user_id", "rightColumn", "customers.id"))),
                 "geoPoint", Map.of("mode", "spatial", "spatialColumn", "orders.location")
         ), "geoscatter", false))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("not supported across multiple datasources");
+    }
+
+    @Test
+    void rejectsPostgisPolygonExtractionAcrossDatasourcesUntilDuckDbSpatialIsGuaranteed() {
+        assertThatThrownBy(() -> gen(Map.of(
+                "table", ref(2, "sales", "orders"),
+                "joins", List.of(Map.of(
+                        "table", ref(5, "public", "customers"),
+                        "type", "inner",
+                        "on", Map.of("leftColumn", "orders.user_id", "rightColumn", "customers.id"))),
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "orders.service_area",
+                        "nameColumn", "customers.region",
+                        "valueColumn", "orders.amount")
+        ), "map", false))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("not supported across multiple datasources");
     }

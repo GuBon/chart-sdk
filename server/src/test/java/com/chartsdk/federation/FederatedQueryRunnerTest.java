@@ -130,6 +130,32 @@ class FederatedQueryRunnerTest {
         assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
     }
 
+    @Test
+    void routesSingleSourceSpatialAreaMapThroughUnboundedExecution() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        Map<String, Object> table = Map.of(
+                "datasourceId", 1L, "schema", "public", "name", "areas");
+        Map<String, Object> config = Map.of(
+                "table", table,
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "boundary",
+                        "nameColumn", "name",
+                        "valueColumn", "score"));
+        when(queries.catalog(1L)).thenReturn(areaCatalog());
+        when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
+        when(queries.executeUnbounded(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+
+        FederatedQueryRunner.BuiltResult result =
+                new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "map", false);
+
+        verify(queries).executeUnbounded(eq(1L), anyString(), anyList());
+        assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
+        assertThat(result.rows().truncated()).isFalse();
+    }
+
     private static Map<String, Object> geoConfig(Map<String, Object> table) {
         return Map.of(
                 "table", table,
@@ -141,5 +167,15 @@ class FederatedQueryRunnerTest {
         return new SchemaCatalog(Map.of(
                 new SchemaCatalog.Key("public", "points"),
                 Map.of("id", "bigint", "longitude", "double precision", "latitude", "double precision")));
+    }
+
+    private static SchemaCatalog areaCatalog() {
+        return new SchemaCatalog(Map.of(
+                new SchemaCatalog.Key("public", "areas"),
+                Map.of(
+                        "id", "bigint",
+                        "name", "text",
+                        "score", "numeric",
+                        "boundary", "geometry(Polygon,4326)")));
     }
 }

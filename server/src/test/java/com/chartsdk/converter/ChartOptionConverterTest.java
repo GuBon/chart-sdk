@@ -244,6 +244,57 @@ class ChartOptionConverterTest {
         assertThat(option.get("xAxis")).isNull();                  // 지도는 축 없음
         assertThat(option.get("legend")).isNull();
         assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
+        assertThat(option.get("__chartsdkMapViewport")).isEqualTo(Map.of("mode", "data"));
+    }
+
+    @Test
+    void mapAndGeoScatterForwardSavedViewportContract() {
+        Map<String, Object> viewport = Map.of(
+                "mode", "coordinates",
+                "bounds", Map.of("west", 126.7, "east", 127.3, "south", 37.3, "north", 37.8)
+        );
+        Map<String, Object> map = converter.convert(rows(), "map", Map.of("map", Map.of("viewport", viewport)));
+        assertThat(map.get("__chartsdkMapViewport")).isEqualTo(viewport);
+
+        QueryRows points = new QueryRows(
+                List.of(Map.of("name", "lng", "type", "number"), Map.of("name", "lat", "type", "number")),
+                List.of(List.of(127.0, 37.5)), 1, false, 0);
+        Map<String, Object> geo = converter.convert(points, "geoscatter", Map.of("map", Map.of("viewport", viewport)));
+        assertThat(geo.get("__chartsdkMapViewport")).isEqualTo(viewport);
+    }
+
+    @Test
+    void mapEmbedsDynamicGeoJsonForSpatialPolygonRows() {
+        QueryRows spatialRows = new QueryRows(
+                List.of(
+                        Map.of("name", "__chartsdk_area_name", "type", "text"),
+                        Map.of("name", "__chartsdk_area_value", "type", "numeric"),
+                        Map.of("name", "__chartsdk_geojson", "type", "text")
+                ),
+                List.of(
+                        List.of("영역 A", 10, "{\"type\":\"Polygon\",\"coordinates\":[[[127,37],[128,37],[128,38],[127,37]]]}"),
+                        List.of("영역 B", 30, "{\"type\":\"MultiPolygon\",\"coordinates\":[[[[128,36],[129,36],[129,37],[128,36]]]]}")
+                ),
+                2, false, 0
+        );
+
+        Map<String, Object> option = converter.convert(spatialRows, "map", Map.of("map", Map.of("roam", true)));
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(series.get("map")).asString().startsWith("chartsdk-dynamic-");
+        assertThat(series.get("data")).isEqualTo(List.of(
+                Map.of("name", "영역 A", "value", 10.0),
+                Map.of("name", "영역 B", "value", 30.0)
+        ));
+
+        List<?> embedded = (List<?>) option.get("__chartsdkMaps");
+        assertThat(embedded).hasSize(1);
+        Map<?, ?> payload = (Map<?, ?>) embedded.get(0);
+        assertThat(payload.get("name")).isEqualTo(series.get("map"));
+        Map<?, ?> geoJson = (Map<?, ?>) payload.get("geoJSON");
+        assertThat(geoJson.get("type")).isEqualTo("FeatureCollection");
+        List<?> features = (List<?>) geoJson.get("features");
+        assertThat(features).hasSize(2);
+        assertThat(((Map<?, ?>) ((Map<?, ?>) features.get(0)).get("properties")).get("name")).isEqualTo("영역 A");
     }
 
     @Test

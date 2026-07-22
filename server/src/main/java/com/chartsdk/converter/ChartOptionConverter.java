@@ -2,9 +2,16 @@ package com.chartsdk.converter;
 
 import com.chartsdk.config.OptionDefaults;
 import com.chartsdk.query.QueryRows;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,14 +23,26 @@ import java.util.Map;
  */
 @Service
 public class ChartOptionConverter {
+    private static final String EMBEDDED_MAPS_KEY = "__chartsdkMaps";
+    private static final String MAP_VIEWPORT_KEY = "__chartsdkMapViewport";
+    private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
+    private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
+    private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
     // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않는다. 예약 높이는 사용자 글꼴 크기에서 계산하며 mock과 수식이 같아야 한다.
     private record Typography(int title, int legend, int axis, int dataLabel, int tooltip) {}
     private record LayoutMetrics(int titleHeight, int legendHeight, int visualMapHeight) {}
 
     private final OptionDefaults defaults;
+    private final ObjectMapper mapper;
 
     public ChartOptionConverter(OptionDefaults defaults) {
+        this(defaults, new ObjectMapper());
+    }
+
+    @Autowired
+    public ChartOptionConverter(OptionDefaults defaults, ObjectMapper mapper) {
         this.defaults = defaults;
+        this.mapper = mapper;
     }
 
     private static boolean hasTitle(Map<String, Object> opt) {
@@ -55,7 +74,7 @@ public class ChartOptionConverter {
         // 신규 유형은 직교 폴스루를 타지 않고 전용 조립(축·시리즈 형태가 다르다).
         if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows); return o; }
         if ("heatmap".equals(chartType)) { buildHeatmap(o, opt, columns, dataRows); return o; }
-        if ("map".equals(chartType)) { buildMap(o, opt, dataRows); return o; }
+        if ("map".equals(chartType)) { buildMap(o, opt, columns, dataRows); return o; }
         if ("geoscatter".equals(chartType)) { buildGeoScatter(o, opt, columns, dataRows); return o; }
 
         if ("pie".equals(chartType)) {
@@ -245,14 +264,37 @@ public class ChartOptionConverter {
         o.put("series", List.of(s));
     }
 
-    /** 지도: 지역명(0열)별 값(1열) → series map(map.name: kr-sido|kr-sigungu) data {name,value} + visualMap. 축·범례 없음. */
-    private void buildMap(Map<String, Object> o, Map<String, Object> opt, List<List<Object>> rows) {
+    /** 지도: 내장 행정구역 또는 DB Polygon GeoJSON 경계에 이름·값을 연결한다. */
+    private void buildMap(Map<String, Object> o, Map<String, Object> opt,
+                          List<Map<String, Object>> columns, List<List<Object>> rows) {
+        int nameIndex = columnIndex(columns, SPATIAL_AREA_NAME);
+        int valueIndex = columnIndex(columns, SPATIAL_AREA_VALUE);
+        int geoJsonIndex = columnIndex(columns, SPATIAL_AREA_GEOJSON);
+        boolean spatial = nameIndex >= 0 && valueIndex >= 0 && geoJsonIndex >= 0;
         List<Object> data = new ArrayList<>();
+        List<Object> features = new ArrayList<>();
+        MessageDigest digest = spatial ? sha256() : null;
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
         for (List<Object> r : rows) {
+            int ni = spatial ? nameIndex : 0;
+            int vi = spatial ? valueIndex : 1;
+            String name = r.size() > ni ? String.valueOf(r.get(ni)) : "";
+            if (spatial) {
+                if (r.size() <= geoJsonIndex || !(r.get(geoJsonIndex) instanceof String geometryJson)) continue;
+                Map<String, Object> geometry = parsePolygonGeometry(geometryJson);
+                if (geometry == null) continue;
+                Map<String, Object> feature = new LinkedHashMap<>();
+                feature.put("type", "Feature");
+                feature.put("properties", Map.of("name", name));
+                feature.put("geometry", geometry);
+                features.add(feature);
+                digest.update(name.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+                digest.update(geometryJson.getBytes(StandardCharsets.UTF_8));
+            }
             Map<String, Object> point = new LinkedHashMap<>();
-            point.put("name", r.isEmpty() ? "" : String.valueOf(r.get(0)));
-            double v = (r.size() > 1 && r.get(1) instanceof Number n) ? n.doubleValue() : 0;
+            point.put("name", name);
+            double v = (r.size() > vi && r.get(vi) instanceof Number n) ? n.doubleValue() : 0;
             point.put("value", v);
             data.add(point);
             if (v < min) min = v;
@@ -264,15 +306,46 @@ public class ChartOptionConverter {
         o.remove("legend"); // 지도는 visualMap 이 범례 대체
         o.put("visualMap", visualMap(min, max, opt));
 
+        String selectedMap = spatial ? dynamicMapName(digest) : mapName(opt);
+        if (spatial) {
+            Map<String, Object> featureCollection = new LinkedHashMap<>();
+            featureCollection.put("type", "FeatureCollection");
+            featureCollection.put("features", features);
+            o.put(EMBEDDED_MAPS_KEY, List.of(Map.of("name", selectedMap, "geoJSON", featureCollection)));
+        }
+
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("type", "map");
-        s.put("map", mapName(opt));
+        s.put("map", selectedMap);
         s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
         s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography(opt).dataLabel()));
         applyLabelLayout(s, opt);
         s.put("emphasis", Map.of("label", Map.of("show", true)));
         s.put("data", data);
         o.put("series", List.of(s));
+        applyMapViewportMetadata(o, opt);
+    }
+
+    private Map<String, Object> parsePolygonGeometry(String json) {
+        try {
+            Map<String, Object> geometry = mapper.readValue(json, new TypeReference<>() {});
+            String type = String.valueOf(geometry.get("type"));
+            return "Polygon".equals(type) || "MultiPolygon".equals(type) ? geometry : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static String dynamicMapName(MessageDigest digest) {
+        return "chartsdk-dynamic-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }
 
     /**
@@ -326,6 +399,13 @@ public class ChartOptionConverter {
         if (color != null) s.put("itemStyle", Map.of("color", color));
         s.put("data", data);
         o.put("series", List.of(s));
+        applyMapViewportMetadata(o, opt);
+    }
+
+    /** Admin과 SDK가 등록된 GeoJSON·포인트 데이터에 동일한 표시 영역을 적용하도록 내부 계약을 전달한다. */
+    private void applyMapViewportMetadata(Map<String, Object> option, Map<String, Object> opt) {
+        Object viewport = map(opt.get("map")).get("viewport");
+        option.put(MAP_VIEWPORT_KEY, viewport instanceof Map<?, ?> ? viewport : Map.of("mode", "data"));
     }
 
     /** map.name 옵션(kr-sido|kr-sigungu) — 화이트리스트 밖 값은 kr-sido 로 폴백(등록 자산만 허용). */
