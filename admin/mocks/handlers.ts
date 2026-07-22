@@ -28,6 +28,21 @@ function chartUsesDatasource(chartId: number, primaryDatasourceId: number, datas
   return saved?.builderConfig?.joins?.some((join) => join.table.datasourceId === datasourceId) ?? false;
 }
 
+function chartUsesRelation(
+  chart: (typeof charts)[number],
+  datasourceId: number | null,
+  schema: string,
+  relation: string | null,
+): boolean {
+  const saved = savedCharts[chart.id] as { builderConfig?: BuilderConfig } | undefined;
+  const refs: TableRef[] = [];
+  if (chart.mainTable) refs.push(chart.mainTable);
+  if (saved?.builderConfig?.joins) refs.push(...saved.builderConfig.joins.map((join) => join.table));
+  return refs.some((ref) => (datasourceId == null || ref.datasourceId === datasourceId)
+    && (ref.schema || 'public') === schema
+    && (relation == null || ref.name === relation));
+}
+
 function mainTableResponse(value: unknown, fallbackDatasourceId: number): ChartMainTable | null {
   if (!value || typeof value !== 'object') return null;
   const table = value as Partial<TableRef>;
@@ -60,10 +75,8 @@ export const handlers = [
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
     if (type) list = list.filter((c) => c.chartType === type);
     if (dsId) list = list.filter((c) => chartUsesDatasource(c.id, c.datasourceId, Number(dsId)));
-    if (relation) {
-      list = list.filter((c) => c.mainTable?.datasourceId === Number(dsId)
-        && c.mainTable.schema === (schema || 'public')
-        && c.mainTable.name === relation);
+    if (schema || relation) {
+      list = list.filter((c) => chartUsesRelation(c, dsId ? Number(dsId) : null, schema || 'public', relation));
     }
     list = [...list].sort((a, b) => {
       switch (sort) {

@@ -53,15 +53,32 @@ test.describe('S1 필터·정렬·페이지네이션', () => {
 
   test('데이터소스 필터로 해당 소스 차트만 남는다', async ({ page }) => {
     await page.goto('/');
-    await page.locator('#chart-datasource-filter').selectOption('1'); // analytics-db(ds1)
+    await page.locator('#chart-datasource-filter').selectOption('analytics-db');
+    await expect(page).toHaveURL('/data/analytics-db');
+    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
     await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible(); // ds1
     await expect(page.getByText('월별 매출', { exact: true })).toBeHidden(); // ds2
+  });
+
+  test('데이터소스 경로에서 검색해도 선택한 소스 범위를 유지한다', async ({ page }) => {
+    await page.goto('/data/analytics-db');
+    await page.getByRole('textbox', { name: '차트 검색' }).fill('방문');
+    await expect(page).toHaveURL('/data/analytics-db?q=%EB%B0%A9%EB%AC%B8');
+    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
+    await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible();
+  });
+
+  test('기존 숫자 ID 필터 주소는 이름 기반 경로로 정규화한다', async ({ page }) => {
+    await page.goto('/?datasourceId=1&type=line');
+    await expect(page).toHaveURL('/data/analytics-db?type=line');
+    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
   });
 
   test('조건 불일치 시 빈 상태와 필터 초기화가 동작한다', async ({ page }) => {
     await page.goto('/');
     await page.locator('#chart-type-filter').selectOption('pie');
-    await page.locator('#chart-datasource-filter').selectOption('3'); // legacy-dw: 차트 0
+    await expect(page).toHaveURL(/type=pie/);
+    await page.locator('#chart-datasource-filter').selectOption('legacy-dw'); // 차트 0
     await expect(page.getByText('조건에 맞는 차트가 없습니다')).toBeVisible();
     await page.getByRole('button', { name: '필터 초기화' }).click();
     await expect(page.getByText('조건에 맞는 차트가 없습니다')).toBeHidden();

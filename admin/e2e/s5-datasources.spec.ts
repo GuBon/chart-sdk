@@ -24,10 +24,20 @@ test.describe('S5 데이터소스 관리', () => {
     await page.getByRole('link', { name: 'analytics-db' }).click();
     await expect(page).toHaveURL('/data/analytics-db');
     await expect(page.getByRole('heading', { name: 'analytics-db' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '이 데이터소스를 사용하는 차트' })).toBeVisible();
+    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
+    await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible();
 
+    await page.getByRole('link', { name: '스키마 탐색' }).click();
+    await expect(page).toHaveURL('/data/analytics-db?view=schema');
     await page.getByRole('link', { name: 'public' }).click();
+    await expect(page).toHaveURL('/data/analytics-db/public?view=relations');
+    await page.getByRole('navigation', { name: '스키마 보기' }).getByRole('link', { name: '차트', exact: true }).click();
     await expect(page).toHaveURL('/data/analytics-db/public');
+    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
+    await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible();
+
+    await page.getByRole('link', { name: '관계 탐색' }).click();
+    await expect(page).toHaveURL('/data/analytics-db/public?view=relations');
     const search = page.getByRole('textbox', { name: '관계 검색' });
     await search.fill('users');
     await expect(page.getByRole('link', { name: 'users' })).toBeVisible();
@@ -35,9 +45,13 @@ test.describe('S5 데이터소스 관리', () => {
     await search.clear();
 
     await page.getByRole('link', { name: 'sales' }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public/sales');
+    await expect(page).toHaveURL('/data/analytics-db/public/sales?view=columns');
     await expect(page.getByRole('heading', { name: 'sales', exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '컬럼명' })).toBeVisible();
+
+    await page.getByRole('navigation', { name: '테이블 보기' }).getByRole('link', { name: '차트', exact: true }).click();
+    await expect(page).toHaveURL('/data/analytics-db/public/sales');
+    await expect(page.locator('#chart-type-filter')).toBeVisible();
     const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
     await expect(visitorChart).toBeVisible();
     await expect(visitorChart.getByRole('link', { name: '편집' }))
