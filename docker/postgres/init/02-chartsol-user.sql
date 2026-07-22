@@ -106,6 +106,31 @@ WHERE NOT EXISTS (
     SELECT 1 FROM mc_datasource WHERE owner_id IS NULL AND name = 'docker-user-db'
 );
 
+INSERT INTO mc_datasource(
+    name,
+    host,
+    port,
+    database_name,
+    db_user,
+    db_password_enc,
+    max_pool_size,
+    last_tested_at,
+    last_test_ok
+)
+SELECT
+    'postgis-geometry-test',
+    'localhost',
+    55433,
+    'chartsdk_spatial_test',
+    'postgres',
+    '0218',
+    5,
+    now(),
+    true
+WHERE NOT EXISTS (
+    SELECT 1 FROM mc_datasource WHERE owner_id IS NULL AND name = 'postgis-geometry-test'
+);
+
 INSERT INTO mc_user_token(user_id, token, expires_at, is_active)
 SELECT u.id, 'dev-local-token', now() + interval '365 days', true
 FROM mc_user u

@@ -18,7 +18,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # 공간 Point 통합 테스트 전용. 기존 chartsol-postgres와 데이터·포트를 공유하지 않는다.
+  # 공간 차트 데모 + PostGIS 통합 테스트 전용. 기존 chartsol-postgres와 데이터·포트를 공유하지 않는다.
   # 실행: docker compose --profile spatial-test up -d postgis-test
   postgis-test:
     image: postgis/postgis:17-3.5
@@ -30,6 +30,10 @@ services:
       POSTGRES_PASSWORD: "0218"
     ports:
       - "55433:5432"
+    volumes:
+      - ./docker/postgis/init/01-geometry-chart-data.sql:/docker-entrypoint-initdb.d/01-geometry-chart-data.sql:ro
+      - ./docker/postgis/init/02-korea-map-data.sql:/docker-entrypoint-initdb.d/02-korea-map-data.sql:ro
+      - ./chart-options/maps/kr-sigungu.json:/docker-entrypoint-initdb.d/kr-sigungu.json:ro
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:

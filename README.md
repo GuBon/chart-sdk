@@ -69,6 +69,21 @@ docker compose up -d
 
 서버 로컬 실행 기본값은 Docker DB 기준이다.
 
+### PostGIS 공간 차트 데모 데이터
+
+```bash
+docker compose --profile spatial-test up -d
+```
+
+위 프로필은 `localhost:55433`의 `chartsdk_spatial_test` DB와 Admin용 `postgis-geometry-test` 데이터소스를 준비한다. `geometry_demo.parcel_boundaries_10k`에는 10,000개의 가상 필지가 들어 있다.
+
+| 차트 | 공간 컬럼 | 이름/값 컬럼 |
+|---|---|---|
+| 동적 Polygon 지도 | `boundary` (`geometry(Polygon,3857)`) 또는 `boundary_geography` | `parcel_name` / `assessed_value` |
+| 지도 포인트 | `centroid` (`geometry(Point,3857)`) 또는 `centroid_geography` | 크기값 `area_sqm` |
+
+`district`, `land_use`, `observed_on`은 필터·집계 검증에 사용할 수 있다. 초기화 SQL은 [`docker/postgis/init/01-geometry-chart-data.sql`](docker/postgis/init/01-geometry-chart-data.sql)이다.
+
 ```bash
 DATABASE_URL=jdbc:postgresql://localhost:5433/chartsol
 DATABASE_USER=postgres
