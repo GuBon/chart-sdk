@@ -93,6 +93,20 @@ class MultiSourceChartLifecycleIT {
                 .extracting(chart -> ((Number) chart.get("id")).longValue())
                 .contains(chartId);
 
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> joinedSchemaCharts = (List<Map<String, Object>>) chartService
+                .list(new ChartListQuery(null, null, dId, "public", null, null, 1, 12)).get("charts");
+        assertThat(joinedSchemaCharts)
+                .extracting(chart -> ((Number) chart.get("id")).longValue())
+                .contains(chartId);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> joinedRelationCharts = (List<Map<String, Object>>) chartService
+                .list(new ChartListQuery(null, null, dId, "public", "users", null, 1, 12)).get("charts");
+        assertThat(joinedRelationCharts)
+                .extracting(chart -> ((Number) chart.get("id")).longValue())
+                .contains(chartId);
+
         meta.update("UPDATE mc_datasource SET name=? WHERE id=?", "it-tandanji-renamed", tId);
         assertThat(chartService.get(chartId).get("mainTable")).isEqualTo(
                 Map.of("datasourceId", tId, "datasourceName", "it-tandanji-renamed", "schema", "tandanji", "name", "exercise_logs"));

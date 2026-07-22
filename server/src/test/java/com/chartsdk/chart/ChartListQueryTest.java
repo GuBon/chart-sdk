@@ -21,6 +21,7 @@ class ChartListQueryTest {
         ChartListQuery query = new ChartListQuery(null, null, 1L, null, "sales", null, 1, 12);
 
         assertThat(query.hasRelation()).isTrue();
+        assertThat(query.hasSchema()).isTrue();
         assertThat(query.relationSchema()).isEqualTo("public");
     }
 
@@ -29,6 +30,15 @@ class ChartListQueryTest {
         ChartListQuery query = new ChartListQuery(null, null, 1L, "analytics", "  ", null, 1, 12);
 
         assertThat(query.hasRelation()).isFalse();
+        assertThat(query.hasSchema()).isTrue();
         assertThat(query.relationSchema()).isEqualTo("analytics");
+    }
+
+    @Test
+    void blankSchemaAndRelationDoNotEnableScopedFilter() {
+        ChartListQuery query = new ChartListQuery(null, null, 1L, "  ", "  ", null, 1, 12);
+
+        assertThat(query.hasSchema()).isFalse();
+        assertThat(query.hasRelation()).isFalse();
     }
 }

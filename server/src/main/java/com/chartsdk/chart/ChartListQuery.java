@@ -15,6 +15,10 @@ public record ChartListQuery(
         return relation != null && !relation.isBlank();
     }
 
+    public boolean hasSchema() {
+        return hasRelation() || (schema != null && !schema.isBlank());
+    }
+
     public String relationSchema() {
         return schema == null || schema.isBlank() ? "public" : schema;
     }

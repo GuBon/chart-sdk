@@ -44,16 +44,36 @@ public class ChartRepository {
             where.append(" AND EXISTS (SELECT 1 FROM mc_chart_datasource mcd WHERE mcd.chart_id=mc_chart.id AND mcd.datasource_id=?)");
             params.add(query.datasourceId());
         }
-        if (query.hasRelation()) {
-            // 관계 상세는 builder_config.table의 기준 관계만 대상으로 한다. 조인 관계 전체는 별도 읽기 모델이 필요하다.
-            where.append(" AND COALESCE(builder_config->'table'->>'schema', 'public')=?");
-            params.add(query.relationSchema());
-            where.append(" AND builder_config->'table'->>'name'=?");
-            params.add(query.relation());
+        if (query.hasSchema()) {
+            // 데이터소스 범위와 동일하게 기준 관계와 joins[].table의 보조 관계를 모두 포함한다.
+            where.append("""
+                     AND EXISTS (
+                         SELECT 1
+                           FROM (
+                               SELECT mc_chart.builder_config->'table' AS table_ref
+                               UNION ALL
+                               SELECT join_item->'table'
+                                 FROM jsonb_array_elements(
+                                     CASE
+                                         WHEN jsonb_typeof(mc_chart.builder_config->'joins')='array'
+                                         THEN mc_chart.builder_config->'joins'
+                                         ELSE '[]'::jsonb
+                                     END
+                                 ) AS join_item
+                           ) AS chart_ref
+                          WHERE chart_ref.table_ref IS NOT NULL
+                """);
             if (query.datasourceId() != null) {
-                where.append(" AND COALESCE(NULLIF(builder_config->'table'->>'datasourceId', '')::bigint, datasource_id)=?");
+                where.append(" AND COALESCE(NULLIF(chart_ref.table_ref->>'datasourceId', '')::bigint, mc_chart.datasource_id)=?");
                 params.add(query.datasourceId());
             }
+            where.append(" AND COALESCE(chart_ref.table_ref->>'schema', 'public')=?");
+            params.add(query.relationSchema());
+            if (query.hasRelation()) {
+                where.append(" AND chart_ref.table_ref->>'name'=?");
+                params.add(query.relation());
+            }
+            where.append(")");
         }
 
         int safePageSize = query.resolvedPageSize();
