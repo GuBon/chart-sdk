@@ -347,25 +347,161 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 툴팁 ──
-  // heatmap·map 은 변환기가 trigger='item' 으로 고정(축/지역 항목 단위) → 트리거 컨트롤 미노출.
+  // '자동'은 해당 키를 ECharts에 전달하지 않아 설치 버전(5.6)의 기본 동작을 그대로 보존한다.
+  {
+    key: 'tooltip.enabled', zone: 'common', section: '툴팁', label: '툴팁 표시',
+    control: 'toggle', appliesTo: MAJOR_TYPES, default: true,
+    echarts: 'tooltip.show',
+  },
   {
     key: 'tooltip.trigger', zone: 'common', section: '툴팁', label: '트리거',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'],
-    defaultByType: { bar: 'axis', line: 'axis', pie: 'item', scatter: 'item', boxplot: 'item' },
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap'], default: 'auto',
+    showIf: (o) => o.tooltip?.enabled !== false,
     echarts: 'tooltip.trigger',
-    choices: [{ value: 'item', label: '항목' }, { value: 'axis', label: '축' }],
+    choices: [{ value: 'auto', label: '자동' }, { value: 'item', label: '항목' }, { value: 'axis', label: '축' }],
+    help: '자동은 ECharts 기본값(item)을 사용합니다. 막대·선에서 축을 선택하면 같은 X 위치의 계열을 함께 표시합니다.',
   },
   {
     key: 'tooltip.valueFormat', zone: 'common', section: '툴팁', label: '값 포맷',
-    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter'], default: 'raw',
+    control: 'select', appliesTo: MAJOR_TYPES, default: 'raw',
+    showIf: (o) => o.tooltip?.enabled !== false,
     echarts: '@tooltip.valueFormatter', choices: FORMAT_CHOICES,
   },
   {
     key: 'tooltip.axisPointer', zone: 'common', section: '툴팁', label: '축 지시선',
-    control: 'segment', appliesTo: ['bar', 'line', 'scatter'], default: 'line',
-    showIf: (o) => o.tooltip?.trigger === 'axis',
+    control: 'segment', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 'auto',
+    showIf: (o) => o.tooltip?.enabled !== false && o.tooltip?.trigger === 'axis',
     echarts: 'tooltip.axisPointer.type',
-    choices: [{ value: 'line', label: '선' }, { value: 'shadow', label: '음영' }, { value: 'cross', label: '십자' }],
+    choices: [{ value: 'auto', label: '자동' }, { value: 'line', label: '선' }, { value: 'shadow', label: '음영' }, { value: 'cross', label: '십자' }],
+  },
+  {
+    key: 'tooltip.confine', zone: 'common', section: '툴팁', label: '표시 영역',
+    control: 'select', appliesTo: MAJOR_TYPES, default: 'auto',
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: 'tooltip.confine',
+    choices: [{ value: 'auto', label: '자동' }, { value: 'inside', label: '차트 안쪽' }, { value: 'free', label: '바깥 허용' }],
+    help: '자동은 ECharts 기본 배치입니다. 임베드 컨테이너에서 잘리면 차트 안쪽을 선택하세요.',
+  },
+  {
+    key: 'tooltip.backgroundColor', zone: 'common', section: '툴팁', label: '배경색',
+    control: 'color', appliesTo: MAJOR_TYPES, default: '#FFFFFF',
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: 'tooltip.backgroundColor',
+    help: 'ECharts 5.6 기본값은 흰색(#FFFFFF)입니다.',
+  },
+  {
+    key: 'tooltip.textColor', zone: 'common', section: '툴팁', label: '글자색',
+    control: 'color', appliesTo: MAJOR_TYPES, default: '#666666',
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: 'tooltip.textStyle.color',
+    help: 'ECharts 5.6 기본값은 #666666입니다.',
+  },
+  {
+    key: 'tooltip.borderColor', zone: 'common', section: '툴팁', label: '테두리 색상',
+    control: 'color', appliesTo: MAJOR_TYPES, default: null,
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: 'tooltip.borderColor',
+    help: '기본은 ECharts가 현재 데이터 항목의 색상을 자동 사용합니다. 색을 고르면 고정 색상으로 바뀝니다.',
+  },
+  {
+    key: 'tooltip.borderWidth', zone: 'common', section: '툴팁', label: '테두리 두께',
+    control: 'number', appliesTo: MAJOR_TYPES, default: 1,
+    showIf: (o) => o.tooltip?.enabled !== false,
+    min: 0, max: 10, step: 1, unit: 'px', echarts: 'tooltip.borderWidth',
+  },
+  {
+    key: 'tooltip.padding', zone: 'common', section: '툴팁', label: '내부 여백',
+    control: 'number', appliesTo: MAJOR_TYPES, default: 10,
+    showIf: (o) => o.tooltip?.enabled !== false,
+    min: 0, max: 40, step: 1, unit: 'px', echarts: 'tooltip.padding',
+    help: '브라우저 HTML 툴팁에서 ECharts 기본 계산값은 10px입니다.',
+  },
+  {
+    key: 'tooltip.contentMode', zone: 'common', section: '툴팁', label: '내용',
+    control: 'segment', appliesTo: MAJOR_TYPES, default: 'auto',
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: '@tooltip.template',
+    choices: [{ value: 'auto', label: '자동' }, { value: 'custom', label: '직접 지정' }],
+    help: '자동은 차트별 ECharts 기본 툴팁 내용을 그대로 사용합니다.',
+  },
+  {
+    key: 'tooltip.template', zone: 'common', section: '툴팁', label: '툴팁 내용',
+    control: 'textarea', appliesTo: MAJOR_TYPES,
+    defaultByType: {
+      bar: '{series}\n{name}: {value}',
+      line: '{series}\n{name}: {value}',
+      pie: '{name}: {value} ({percent}%)',
+      scatter: '{series}\nX: {x}\nY: {y}',
+      boxplot: '{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}',
+      heatmap: 'X: {x}\nY: {y}\n값: {value}',
+      map: '지역: {name}\n값: {value}',
+      geoscatter: '경도: {lng}\n위도: {lat}',
+    },
+    showIf: (o) => o.tooltip?.enabled !== false && o.tooltip?.contentMode === 'custom',
+    echarts: '@tooltip.template',
+    help: '공통: {series}, {name}, {value}. 차트에 따라 {x}, {y}, {percent}, {min}, {q1}, {median}, {q3}, {max}, {lng}, {lat}을 사용할 수 있습니다.',
+  },
+
+  // ── 강조 ──
+  // enabled=true + 자동 설정은 emphasis를 만들지 않는다. ECharts 차트별 기본 강조와 병합 규칙을 그대로 쓴다.
+  {
+    key: 'emphasis.enabled', zone: 'common', section: '강조', label: '강조 효과',
+    control: 'toggle', appliesTo: MAJOR_TYPES, default: true,
+    echarts: 'series.emphasis.disabled',
+  },
+  {
+    key: 'emphasis.focus', zone: 'common', section: '강조', label: '집중 범위',
+    control: 'select', appliesTo: MAJOR_TYPES, default: 'auto',
+    showIf: (o) => o.emphasis?.enabled !== false,
+    echarts: 'series.emphasis.focus',
+    choices: [
+      { value: 'auto', label: '자동' },
+      { value: 'none', label: '흐림 없음' },
+      { value: 'self', label: '현재 항목' },
+      { value: 'series', label: '현재 계열' },
+    ],
+    help: '현재 항목이나 계열을 선택하면 나머지 데이터가 흐려져 비교 대상에 집중할 수 있습니다.',
+  },
+  {
+    key: 'emphasis.colorMode', zone: 'common', section: '강조', label: '강조 색상',
+    control: 'segment', appliesTo: MAJOR_TYPES, default: 'auto',
+    showIf: (o) => o.emphasis?.enabled !== false,
+    echarts: '@emphasis.color',
+    choices: [{ value: 'auto', label: '자동' }, { value: 'custom', label: '직접 지정' }],
+    help: '자동은 막대 밝기, 선·점 크기, 지도 기본 금색 등 ECharts의 차트별 기본 효과를 유지합니다.',
+  },
+  {
+    key: 'emphasis.color', zone: 'common', section: '강조', label: '사용자 강조 색상',
+    control: 'color', appliesTo: MAJOR_TYPES, default: '#FFD700',
+    showIf: (o) => o.emphasis?.enabled !== false && o.emphasis?.colorMode === 'custom',
+    echarts: '@emphasis.color',
+  },
+  {
+    key: 'emphasis.scale', zone: 'common', section: '강조', label: '크기 확대',
+    control: 'toggle', appliesTo: ['line', 'pie', 'scatter', 'boxplot', 'geoscatter'], default: true,
+    showIf: (o) => o.emphasis?.enabled !== false,
+    echarts: 'series.emphasis.scale',
+    help: 'ECharts 5.6에서 선·원형·산점도·박스 플롯의 기본값은 켜짐입니다.',
+  },
+  {
+    key: 'emphasis.scaleSize', zone: 'common', section: '강조', label: '원형 확대 크기',
+    control: 'slider', appliesTo: ['pie'], default: 5,
+    showIf: (o) => o.emphasis?.enabled !== false && o.emphasis?.scale !== false,
+    min: 0, max: 20, step: 1, unit: 'px', echarts: 'series.emphasis.scaleSize',
+  },
+  {
+    key: 'emphasis.lineWidth', zone: 'common', section: '강조', label: '강조 선 굵기',
+    control: 'number', appliesTo: ['line'], default: null,
+    showIf: (o) => o.emphasis?.enabled !== false,
+    min: 0, max: 20, step: 1, unit: 'px', echarts: 'series.emphasis.lineStyle.width',
+    help: '비워두면 ECharts 기본값을 사용합니다.',
+  },
+  {
+    key: 'emphasis.borderWidth', zone: 'common', section: '강조', label: '박스 테두리 굵기',
+    control: 'slider', appliesTo: ['boxplot'], default: 2,
+    showIf: (o) => o.emphasis?.enabled !== false,
+    min: 0, max: 10, step: 1, unit: 'px', echarts: 'series.emphasis.itemStyle.borderWidth',
+    help: 'ECharts 5.6 박스 플롯 기본값은 2px입니다.',
   },
 
   // ── 계열 ──
@@ -710,57 +846,6 @@ export function visibleDefs(chartType: MajorType, options: Options): OptionDef[]
   );
 }
 
-/** 대분류의 전체 기본 options 객체 생성 (JSONB 저장 키만, 중첩 형태) */
-export function defaultsFor(chartType: MajorType): Options {
-  const o: Options = {};
-  for (const def of OPTION_REGISTRY) {
-    if (!def.appliesTo.includes(chartType)) continue;
-    if ((def.storage ?? 'jsonb') !== 'jsonb') continue;
-    const v = defaultOf(def, chartType);
-    if (v !== undefined) setPath(o, def.key, v);
-  }
-  return o;
-}
-
-/** zone='type' (대분류 전용) JSONB 키 목록 — 대분류 전환 시 초기화 대상 */
-export function typeZoneKeys(): string[] {
-  return OPTION_REGISTRY
-    .filter((d) => d.zone === 'type' && (d.storage ?? 'jsonb') === 'jsonb')
-    .map((d) => d.key);
-}
-
-/**
- * 대분류 전환 시 options 재구성.
- *   - common  : 유지
- *   - axis    : 직교끼리 유지 / 원형 관련 전환은 호출측에서 숨김+보존 처리
- *   - type    : 삭제 후 새 대분류 전용 기본값 주입
- * 반환: { next, removedKeys }  (removedKeys → 토스트·실행취소용)
- */
-export function switchMajor(prev: Options, from: MajorType, to: MajorType): { next: Options; removedKeys: string[] } {
-  const next: Options = structuredClone(prev);
-  const removedKeys: string[] = [];
-
-  // 1) 이전 대분류 전용(type) 키 제거
-  for (const def of OPTION_REGISTRY) {
-    if (def.zone !== 'type' || (def.storage ?? 'jsonb') !== 'jsonb') continue;
-    if (def.appliesTo.includes(from) && getPath(next, def.key) !== undefined) {
-      removedKeys.push(def.key);
-      setPath(next, def.key, undefined);
-    }
-  }
-
-  // 2) 새 대분류 전용 기본값 주입 + variant 기본값 교체
-  for (const def of OPTION_REGISTRY) {
-    if ((def.storage ?? 'jsonb') !== 'jsonb') continue;
-    if (def.zone === 'type' && def.appliesTo.includes(to)) {
-      const v = defaultOf(def, to);
-      if (v !== undefined) setPath(next, def.key, v);
-    }
-  }
-  next.variant = defaultOf(OPTION_REGISTRY.find((d) => d.key === 'variant')!, to);
-
-  return { next, removedKeys };
-}
 /**
  * `zone`은 차트 유형 전환 시 옵션을 유지·초기화하는 저장 계약이다.
  * 편집 화면의 정보 구조는 이 별도 메타데이터를 사용해 저장 계약과 UI 순서를 분리한다.
@@ -857,3 +942,152 @@ export function optionEditorSectionOrder(chartType: MajorType, tab: OptionEditor
   }
 }
 
+/** 대분류의 전체 기본 options 객체 생성 (JSONB 저장 키만, 중첩 형태) */
+export function defaultsFor(chartType: MajorType): Options {
+  const o: Options = {};
+  for (const def of OPTION_REGISTRY) {
+    if (!def.appliesTo.includes(chartType)) continue;
+    if ((def.storage ?? 'jsonb') !== 'jsonb') continue;
+    const v = defaultOf(def, chartType);
+    if (v !== undefined) setPath(o, def.key, v);
+  }
+  o.colorTheme = normalizeColorTheme(DEFAULT_COLOR_THEME, o.palettePreset, chartType);
+  return o;
+}
+
+function mergeOptions(base: Options, override: Options): Options {
+  const merged: Options = structuredClone(base);
+  for (const [key, value] of Object.entries(override)) {
+    if (
+      value != null
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && merged[key] != null
+      && typeof merged[key] === 'object'
+      && !Array.isArray(merged[key])
+    ) {
+      merged[key] = mergeOptions(merged[key], value);
+    } else {
+      merged[key] = structuredClone(value);
+    }
+  }
+  return merged;
+}
+
+/**
+ * 지도 전용이던 상호작용 설정을 공통 계약으로 승격한다.
+ * 서버에도 같은 규칙이 있어, 편집기를 거치지 않는 구 저장 데이터도 호환된다.
+ */
+export function migrateLegacyInteractionOptions(options: Options, chartType: MajorType): Options {
+  const next: Options = structuredClone(options ?? {});
+  const isCartesian = ['bar', 'line', 'scatter', 'boxplot', 'heatmap'].includes(chartType);
+  if (isCartesian) {
+    const metadata = next._chartsdk && typeof next._chartsdk === 'object' ? { ...next._chartsdk } : {};
+    const usesLegacyAxisTitleLayout = metadata.axisTitleLayout !== 2;
+
+    for (const axisKey of ['xAxis', 'yAxis'] as const) {
+      if (!next[axisKey] || typeof next[axisKey] !== 'object') continue;
+      const axis = { ...next[axisKey] };
+      delete axis.offset;
+      if (axisKey === 'xAxis') delete axis.hideOverlap;
+      if (axisKey === 'yAxis') {
+        delete axis.minInterval;
+        delete axis.maxInterval;
+      }
+      if (axisKey === 'yAxis' && usesLegacyAxisTitleLayout && axis.titleRotate === 90) {
+        axis.titleRotate = -90;
+      }
+      next[axisKey] = axis;
+    }
+
+    metadata.axisTitleLayout = 2;
+    next._chartsdk = metadata;
+  }
+  if (chartType !== 'map' && chartType !== 'geoscatter') return next;
+
+  const mapOptions = next.map && typeof next.map === 'object' ? { ...next.map } : {};
+  const legacyTooltip = mapOptions.tooltip && typeof mapOptions.tooltip === 'object' ? mapOptions.tooltip : {};
+  const legacyEmphasis = mapOptions.emphasis && typeof mapOptions.emphasis === 'object' ? mapOptions.emphasis : {};
+  const tooltip = next.tooltip && typeof next.tooltip === 'object' ? { ...next.tooltip } : {};
+  const emphasis = next.emphasis && typeof next.emphasis === 'object' ? { ...next.emphasis } : {};
+
+  if (!('enabled' in tooltip) && 'enabled' in legacyTooltip) tooltip.enabled = legacyTooltip.enabled;
+  if (!('template' in tooltip) && 'template' in legacyTooltip) {
+    tooltip.contentMode = 'custom';
+    tooltip.template = legacyTooltip.template;
+  }
+  if (!('enabled' in emphasis) && 'enabled' in legacyEmphasis) emphasis.enabled = legacyEmphasis.enabled;
+  if (!('color' in emphasis) && 'color' in legacyEmphasis) {
+    emphasis.colorMode = 'custom';
+    emphasis.color = legacyEmphasis.color;
+  }
+
+  delete mapOptions.tooltip;
+  delete mapOptions.emphasis;
+  next.map = mapOptions;
+  if (Object.keys(tooltip).length > 0) next.tooltip = tooltip;
+  if (Object.keys(emphasis).length > 0) next.emphasis = emphasis;
+  return next;
+}
+
+/** 차트별 기본값과 저장 옵션을 중첩 객체까지 병합하고 레거시 상호작용 키를 정규화한다. */
+export function optionsWithDefaults(chartType: MajorType, options: Options = {}): Options {
+  const normalized = migrateLegacyInteractionOptions(options, chartType);
+  const next = mergeOptions(defaultsFor(chartType), normalized);
+  const hasStoredOptions = Object.keys(options ?? {}).length > 0;
+  const usesLegacyColorTheme = hasStoredOptions && normalized.colorTheme?.version !== 2;
+  if (!usesLegacyColorTheme) return next;
+
+  // 구 저장 데이터는 당시의 범주형 기본 팔레트 + 2색 visualMap 표현을 유지한다.
+  delete next.colorTheme;
+  next.paletteReversed = false;
+  if ((chartType === 'map' || chartType === 'heatmap') && !Object.prototype.hasOwnProperty.call(normalized, 'palette')) {
+    next.palette = cartoPalette(
+      typeof normalized.palettePreset === 'string' ? normalized.palettePreset : DEFAULT_PALETTE_PRESET,
+    );
+  }
+  if ((chartType === 'map' || chartType === 'heatmap') && !Object.prototype.hasOwnProperty.call(normalized, 'palettePreset')) {
+    next.palettePreset = DEFAULT_PALETTE_PRESET;
+  }
+  return next;
+}
+
+/** zone='type' (대분류 전용) JSONB 키 목록 — 대분류 전환 시 초기화 대상 */
+export function typeZoneKeys(): string[] {
+  return OPTION_REGISTRY
+    .filter((d) => d.zone === 'type' && (d.storage ?? 'jsonb') === 'jsonb')
+    .map((d) => d.key);
+}
+
+/**
+ * 대분류 전환 시 options 재구성.
+ *   - common  : 유지
+ *   - axis    : 직교끼리 유지 / 원형 관련 전환은 호출측에서 숨김+보존 처리
+ *   - type    : 삭제 후 새 대분류 전용 기본값 주입
+ * 반환: { next, removedKeys }  (removedKeys → 토스트·실행취소용)
+ */
+export function switchMajor(prev: Options, from: MajorType, to: MajorType): { next: Options; removedKeys: string[] } {
+  const next: Options = structuredClone(prev);
+  const removedKeys: string[] = [];
+
+  // 1) 이전 대분류 전용(type) 키 제거
+  for (const def of OPTION_REGISTRY) {
+    if (def.zone !== 'type' || (def.storage ?? 'jsonb') !== 'jsonb') continue;
+    if (def.appliesTo.includes(from) && getPath(next, def.key) !== undefined) {
+      removedKeys.push(def.key);
+      setPath(next, def.key, undefined);
+    }
+  }
+
+  // 2) 새 대분류 전용 기본값 주입 + variant 기본값 교체
+  for (const def of OPTION_REGISTRY) {
+    if ((def.storage ?? 'jsonb') !== 'jsonb') continue;
+    if (def.zone === 'type' && def.appliesTo.includes(to)) {
+      const v = defaultOf(def, to);
+      if (v !== undefined) setPath(next, def.key, v);
+    }
+  }
+  next.variant = defaultOf(OPTION_REGISTRY.find((d) => d.key === 'variant')!, to);
+
+  return { next: switchPaletteForChartType(next, from, to), removedKeys };
+}

@@ -190,21 +190,122 @@ public class ChartOptionConverter {
     private void applyTooltip(Map<String, Object> o, Map<String, Object> opt, String chartType) {
         Map<String, Object> tooltip = map(opt.get("tooltip"));
         Map<String, Object> t = new LinkedHashMap<>();
-        boolean itemDefault = "pie".equals(chartType) || "scatter".equals(chartType) || "boxplot".equals(chartType);
-        // heatmap·map·geoscatter 는 항목(셀/지역/포인트) 단위 hover 만 의미 → trigger 를 item 으로 고정(공통 zone 잔존 'axis' 클램프).
-        boolean itemForced = "heatmap".equals(chartType) || "map".equals(chartType) || "geoscatter".equals(chartType);
-        t.put("trigger", itemForced ? "item" : string(tooltip.get("trigger"), itemDefault ? "item" : "axis"));
-        String axisPointer = string(tooltip.get("axisPointer"), null);
-        if (axisPointer != null && !itemForced) t.put("axisPointer", Map.of("type", axisPointer));
-        // 임베드 방어: 툴팁(HTML div)을 차트 컨테이너 안으로 제한 — 호스트의 overflow:hidden 클리핑·좌표 어긋남 차단.
-        t.put("confine", true);
-        t.put("textStyle", Map.of("fontSize", typography(opt).tooltip()));
+        boolean enabled = !Boolean.FALSE.equals(tooltip.get("enabled"));
+        if (!enabled) t.put("show", false);
+
+        String trigger = string(tooltip.get("trigger"), "auto");
+        if (!"auto".equals(trigger)) t.put("trigger", trigger);
+        String axisPointer = string(tooltip.get("axisPointer"), "auto");
+        if (!"auto".equals(axisPointer)) t.put("axisPointer", Map.of("type", axisPointer));
+        switch (string(tooltip.get("confine"), "auto")) {
+            case "inside" -> t.put("confine", true);
+            case "free" -> t.put("confine", false);
+            default -> { /* ECharts 기본값(null)을 그대로 사용 */ }
+        }
+        putIfNotNull(t, "backgroundColor", tooltip.get("backgroundColor"));
+        putIfNotNull(t, "borderColor", tooltip.get("borderColor"));
+        if (tooltip.get("borderWidth") instanceof Number borderWidth) t.put("borderWidth", borderWidth);
+        if (tooltip.get("padding") instanceof Number padding) t.put("padding", padding);
+        Map<String, Object> textStyle = new LinkedHashMap<>();
+        textStyle.put("fontSize", typography(opt).tooltip());
+        putIfNotNull(textStyle, "color", tooltip.get("textColor"));
+        t.put("textStyle", textStyle);
         o.put("tooltip", t);
+
+        if (enabled && "custom".equals(string(tooltip.get("contentMode"), "auto"))) {
+            o.put(TOOLTIP_METADATA_KEY, Map.of(
+                    "chartType", chartType,
+                    "template", string(tooltip.get("template"), tooltipTemplateFor(chartType))
+            ));
+        } else {
+            o.remove(TOOLTIP_METADATA_KEY);
+        }
+    }
+
+    private String tooltipTemplateFor(String chartType) {
+        return switch (chartType) {
+            case "bar", "line" -> "{series}\n{name}: {value}";
+            case "pie" -> "{name}: {value} ({percent}%)";
+            case "scatter" -> "{series}\nX: {x}\nY: {y}";
+            case "boxplot" -> "{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}";
+            case "heatmap" -> "X: {x}\nY: {y}\n값: {value}";
+            case "map" -> "지역: {name}\n값: {value}";
+            case "geoscatter" -> "경도: {lng}\n위도: {lat}";
+            default -> "{series}\n{name}: {value}";
+        };
+    }
+
+    /** 모든 시리즈가 공유하는 강조 계약. 자동 항목은 생략해 ECharts 유형별 기본값을 그대로 사용한다. */
+    private void applySeriesEmphasis(Map<String, Object> series, Map<String, Object> opt, String seriesType) {
+        Map<String, Object> config = map(opt.get("emphasis"));
+        if (Boolean.FALSE.equals(config.get("enabled"))) {
+            series.put("emphasis", Map.of("disabled", true));
+            return;
+        }
+
+        Map<String, Object> emphasis = new LinkedHashMap<>();
+        String focus = string(config.get("focus"), "auto");
+        if (!"auto".equals(focus)) emphasis.put("focus", focus);
+
+        if (List.of("line", "pie", "scatter", "boxplot").contains(seriesType)
+                && config.get("scale") instanceof Boolean scale) {
+            emphasis.put("scale", scale);
+        }
+        if ("pie".equals(seriesType) && config.get("scaleSize") instanceof Number scaleSize) {
+            emphasis.put("scaleSize", scaleSize);
+        }
+        if ("line".equals(seriesType) && config.get("lineWidth") instanceof Number lineWidth) {
+            putNested(emphasis, "lineStyle", "width", lineWidth);
+        }
+        if ("boxplot".equals(seriesType) && config.get("borderWidth") instanceof Number borderWidth) {
+            putNested(emphasis, "itemStyle", "borderWidth", borderWidth);
+        }
+
+        if ("custom".equals(string(config.get("colorMode"), "auto"))) {
+            String color = string(config.get("color"), "#FFD700");
+            switch (seriesType) {
+                case "map" -> putNested(emphasis, "itemStyle", "areaColor", color);
+                case "line" -> {
+                    putNested(emphasis, "itemStyle", "color", color);
+                    putNested(emphasis, "lineStyle", "color", color);
+                }
+                case "boxplot" -> {
+                    putNested(emphasis, "itemStyle", "color", color);
+                    putNested(emphasis, "itemStyle", "borderColor", color);
+                }
+                default -> putNested(emphasis, "itemStyle", "color", color);
+            }
+        }
+
+        if (!emphasis.isEmpty()) series.put("emphasis", emphasis);
+    }
+
+    /** geo 컴포넌트는 series와 강조 색상 경로가 달라 별도 어댑터만 둔다. */
+    private void applyGeoEmphasis(Map<String, Object> geo, Map<String, Object> opt) {
+        Map<String, Object> config = map(opt.get("emphasis"));
+        if (Boolean.FALSE.equals(config.get("enabled"))) {
+            geo.put("emphasis", Map.of("disabled", true));
+            return;
+        }
+        Map<String, Object> emphasis = new LinkedHashMap<>();
+        String focus = string(config.get("focus"), "auto");
+        if (!"auto".equals(focus)) emphasis.put("focus", focus);
+        if ("custom".equals(string(config.get("colorMode"), "auto"))) {
+            putNested(emphasis, "itemStyle", "areaColor", string(config.get("color"), "#FFD700"));
+        }
+        if (!emphasis.isEmpty()) geo.put("emphasis", emphasis);
+    }
+
+    private void putNested(Map<String, Object> target, String group, String key, Object value) {
+        Map<String, Object> nested = new LinkedHashMap<>(map(target.get(group)));
+        nested.put(key, value);
+        target.put(group, nested);
     }
 
     // ── 신규: 상자수염·히트맵·지도 ────────────────────────
     /** 상자수염: 카테고리(0열)별로 값(1열)을 모아 5수 요약([min,Q1,median,Q3,max])을 계산. 전용 축(직교 폴스루의 이중축 오염 회피). */
-    private void buildBoxplot(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+    private void buildBoxplot(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns,
+                              List<List<Object>> rows, ItemColorResolver itemColors) {
         LinkedHashMap<String, List<Double>> groups = new LinkedHashMap<>();
         for (List<Object> r : rows) {
             String cat = r.isEmpty() ? "" : String.valueOf(r.get(0));
@@ -365,11 +466,12 @@ public class ChartOptionConverter {
 
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("type", "map");
+        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "값") : "값");
         s.put("map", selectedMap);
         s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
         s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography(opt).dataLabel()));
         applyLabelLayout(s, opt);
-        s.put("emphasis", Map.of("label", Map.of("show", true)));
+        applySeriesEmphasis(s, opt, "map");
         s.put("data", data);
         o.put("series", List.of(s));
         applyMapViewportMetadata(o, opt);
@@ -441,7 +543,7 @@ public class ChartOptionConverter {
         geo.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
         geo.put("label", Map.of("show", false));
         geo.put("itemStyle", Map.of("areaColor", "#f3f4f6", "borderColor", "#d1d5db"));
-        geo.put("emphasis", Map.of("itemStyle", Map.of("areaColor", "#e5e7eb"), "label", Map.of("show", false)));
+        applyGeoEmphasis(geo, opt);
         o.put("geo", geo);
 
         Map<String, Object> s = new LinkedHashMap<>();
@@ -892,6 +994,66 @@ public class ChartOptionConverter {
     }
 
     // ── deep merge & 헬퍼 ────────────────────────────────
+    private Map<String, Object> migrateLegacyInteractionOptions(Map<String, Object> options, String chartType) {
+        Map<String, Object> next = deepMerge(new LinkedHashMap<>(), options);
+        boolean cartesian = switch (chartType) {
+            case "bar", "line", "scatter", "boxplot", "heatmap" -> true;
+            default -> false;
+        };
+        if (cartesian) {
+            Map<String, Object> metadata = new LinkedHashMap<>(map(next.get("_chartsdk")));
+            boolean legacyAxisTitleLayout = number(metadata.get("axisTitleLayout"), 0) < 2;
+            for (String axisKey : List.of("xAxis", "yAxis")) {
+                if (!(next.get(axisKey) instanceof Map<?, ?>)) continue;
+                Map<String, Object> axis = new LinkedHashMap<>(map(next.get(axisKey)));
+                axis.remove("offset");
+                if ("xAxis".equals(axisKey)) axis.remove("hideOverlap");
+                if ("yAxis".equals(axisKey)) {
+                    axis.remove("minInterval");
+                    axis.remove("maxInterval");
+                }
+                if ("yAxis".equals(axisKey)
+                        && legacyAxisTitleLayout
+                        && axis.get("titleRotate") instanceof Number rotation
+                        && rotation.doubleValue() == 90) {
+                    axis.put("titleRotate", -90);
+                }
+                next.put(axisKey, axis);
+            }
+            metadata.put("axisTitleLayout", 2);
+            next.put("_chartsdk", metadata);
+        }
+        if (!"map".equals(chartType) && !"geoscatter".equals(chartType)) return next;
+
+        Map<String, Object> mapOptions = new LinkedHashMap<>(map(next.get("map")));
+        Map<String, Object> legacyTooltip = map(mapOptions.get("tooltip"));
+        Map<String, Object> legacyEmphasis = map(mapOptions.get("emphasis"));
+        Map<String, Object> tooltip = new LinkedHashMap<>(map(next.get("tooltip")));
+        Map<String, Object> emphasis = new LinkedHashMap<>(map(next.get("emphasis")));
+
+        if (!tooltip.containsKey("enabled") && legacyTooltip.containsKey("enabled")) {
+            tooltip.put("enabled", legacyTooltip.get("enabled"));
+        }
+        if (!tooltip.containsKey("template") && legacyTooltip.containsKey("template")) {
+            tooltip.put("contentMode", "custom");
+            tooltip.put("template", legacyTooltip.get("template"));
+        }
+        if (!emphasis.containsKey("enabled") && legacyEmphasis.containsKey("enabled")) {
+            emphasis.put("enabled", legacyEmphasis.get("enabled"));
+        }
+        if (!emphasis.containsKey("color") && legacyEmphasis.containsKey("color")) {
+            emphasis.put("colorMode", "custom");
+            emphasis.put("color", legacyEmphasis.get("color"));
+        }
+
+        mapOptions.remove("tooltip");
+        mapOptions.remove("emphasis");
+        next.put("map", mapOptions);
+        if (!tooltip.isEmpty()) next.put("tooltip", tooltip);
+        if (!emphasis.isEmpty()) next.put("emphasis", emphasis);
+        return next;
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> deepMerge(Map<String, Object> base, Map<String, Object> override) {
         Map<String, Object> out = new LinkedHashMap<>(base);

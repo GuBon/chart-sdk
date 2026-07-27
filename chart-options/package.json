@@ -14,6 +14,7 @@
     "./renderLayout": "./renderLayout.ts",
     "./sampling": "./sampling.ts",
     "./palettes": "./palettes.ts",
+    "./valueFormat": "./valueFormat.ts",
     "./layout-contract-cases.json": "./layout-contract-cases.json",
     "./sampling-contract-cases.json": "./sampling-contract-cases.json",
     "./maps/*.json": "./maps/*.json"

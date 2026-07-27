@@ -2,15 +2,18 @@
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart } from 'echarts/charts';
 import { GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent } from 'echarts/components';
+import { LabelLayout } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
 import { hasChartTitle, responsiveTitlePatch, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
 import { confidenceBadgeText, samplingMethodLabel, samplingWarningMessage, type SamplingMetadata } from '@chartsdk/chart-options/sampling';
+import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
 
 // GeoComponent: 지도 포인트(geoscatter)가 독립 geo 좌표계(option.geo)를 쓰므로 명시 등록.
 // (map 시리즈 단독은 MapChart 의 installGeo 로 충분하지만, option.geo 컴포넌트는 별도 등록 필요)
 echarts.use([
   BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart,
   GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent,
+  LabelLayout,
   CanvasRenderer,
 ]);
 
@@ -72,7 +75,9 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
   });
   // 배경 오버라이드: 컨테이너에 data-chart-background 가 있으면 그 값으로(예: 다크 사이트 'transparent').
   const bg = el.getAttribute('data-chart-background');
-  const baseOption = bg ? { ...option, backgroundColor: bg } : option;
+  const { __chartsdkAutoColorMap: _autoColorMap, ...publicOptionSource } = option;
+  const publicOption = hydrateValueFormat(structuredClone(publicOptionSource));
+  const baseOption = bg ? { ...publicOption, backgroundColor: bg } : publicOption;
 
   // 긴 제목이 컨테이너 밖으로 잘리지 않도록 말줄임(…). title.textStyle.width 는 컨테이너 크기 의존이라
   // 크기를 모르는 서버가 아니라 렌더러가 주입한다("크기·반응형은 렌더 측 책임" 원칙). resize 마다 갱신.

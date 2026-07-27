@@ -8,6 +8,7 @@ const ec = vi.hoisted(() => {
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: ec.init }));
 vi.mock('echarts/charts', () => ({ BarChart: {}, LineChart: {}, PieChart: {}, ScatterChart: {}, BoxplotChart: {}, HeatmapChart: {}, MapChart: {} }));
 vi.mock('echarts/components', () => ({ GeoComponent: {}, GridComponent: {}, TooltipComponent: {}, LegendComponent: {}, TitleComponent: {}, VisualMapComponent: {} }));
+vi.mock('echarts/features', () => ({ LabelLayout: {} }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
 import { renderChart, renderError } from './chart';
