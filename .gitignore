@@ -42,3 +42,4 @@ sdk/test-results/
 
 # playwright real-run screenshots (스크립트 .cjs/.ps1 는 보존)
 output/**/*.png
+output/playwright/
