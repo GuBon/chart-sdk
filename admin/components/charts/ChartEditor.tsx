@@ -2,14 +2,23 @@
 
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, ChevronUp, ChevronsRight } from 'lucide-react';
-import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
+import { ChevronLeft, ChevronUp, ChevronsRight, RotateCcw } from 'lucide-react';
+import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
 import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
 import { activeTables, builderExecutionIssue, builderValidationIssue, emptyBuilder, emptyJoin, isTableQueryMode, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
+import { chartSaveIssue } from '@/lib/chartSave';
+import {
+  cloneEditorSnapshot,
+  createEditorSnapshot,
+  editorDefinitionEquals,
+  type EditorDefinitionSnapshot,
+  type EditorPreviewSnapshot,
+  type SavedEditorSnapshot,
+} from '@/lib/editorSnapshot';
 import {
   createMapViewportSession,
   isCompleteMapViewport,
@@ -201,6 +210,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     undefined,
     () => createMapViewportSession(defaultsFor('bar').map?.viewport),
   );
+  const [savedSnapshot, setSavedSnapshot] = useState<SavedEditorSnapshot | null>(null);
   const [colorSelection, setColorSelection] = useState<ColorSelection | null>(null);
   const [colorPicking, setColorPicking] = useState(false);
 
@@ -238,6 +248,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setTableSelectionTarget(null);
     setInitialPreviewLoading(true);
     setInitialPreviewError(null);
+    setSavedSnapshot(null);
     setResult(null);
     setResultKind(null);
     setColorSelection(null);
@@ -253,20 +264,44 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     void Promise.allSettled([chartsApi.get(chartId), chartsApi.preview(chartId)] as const)
       .then(([definitionResult, previewResult]) => {
         if (cancelled) return;
+        const restoredPreviewOption = previewResult.status === 'fulfilled' ? previewResult.value.option : null;
+        const restoredResult = previewResult.status === 'fulfilled'
+          ? queryResultFromPreview(previewResult.value)
+          : null;
+
         if (definitionResult.status === 'fulfilled') {
           const c = definitionResult.value;
+          const restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
+          let restoredOptions = optionsWithDefaults(c.chartType, c.options);
+          const restoredAutoColors = autoColorMapFromOption(restoredPreviewOption);
+          if (restoredAutoColors) restoredOptions = { ...restoredOptions, autoColorMap: restoredAutoColors };
+
           setName(c.name);
           setDatasourceId(c.datasourceId);
-          const restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
           setBuilder(restoredBuilder);
           setChartType(c.chartType);
-          const restoredOptions = { ...defaultsFor(c.chartType), ...c.options };
           setOptions(restoredOptions);
           dispatchMapViewport({
             type: 'restoreGlobal',
             viewport: normalizeMapViewport(restoredOptions.map?.viewport),
           });
           setGeneratedSql(c.sqlQuery || null);
+          setSavedSnapshot(createEditorSnapshot(
+            {
+              name: c.name,
+              datasourceId: c.datasourceId,
+              builder: restoredBuilder,
+              chartType: c.chartType,
+              options: restoredOptions,
+            },
+            {
+              result: restoredResult,
+              resultKind: restoredResult ? 'chart' : null,
+              option: restoredPreviewOption,
+              generatedSql: c.sqlQuery || null,
+            },
+          ));
+          setDirty(false);
           const canonicalPath = chartEditPath(c.id, c.mainTable);
           replaceEditorPath(canonicalPath);
         } else {
@@ -274,10 +309,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         }
 
         if (previewResult.status === 'fulfilled') {
-          const cachedResult = queryResultFromPreview(previewResult.value);
-          setOption(previewResult.value.option);
-          if (cachedResult) {
-            setResult(cachedResult);
+          setOption(restoredPreviewOption);
+          if (restoredResult) {
+            setResult(restoredResult);
             setResultKind('chart');
           }
           setResultTab('result');
@@ -617,15 +651,39 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // 저장 = 실행 + 캐시 시드(PRD 7.3). 현재 구성으로 실행 성공한 결과가 있어야 저장 가능
-  // (빌더 변경 시 result/generatedSql 가 무효화되므로 stale SQL 저장이 방지된다).
-  const canSave = !!name.trim() && !builderValidationIssue(builder, chartType, tables) && !!result;
+  const optionsToPersist = optionsWithMapViewport(options, chartType, mapViewportSession.draft);
+  const currentDefinitionSnapshot: EditorDefinitionSnapshot = {
+    name,
+    datasourceId: primaryDatasourceId,
+    builder,
+    chartType,
+    options: optionsToPersist,
+  };
+  const hasUnsavedChanges = savedSnapshot
+    ? !editorDefinitionEquals(currentDefinitionSnapshot, savedSnapshot.definition)
+    : dirty;
+
+  // 저장 = 실행 + 캐시 시드(PRD 7.3). 버튼은 누를 수 있게 두고, 미충족 조건을 문구로 안내한다.
+  // 실제 저장은 현재 구성으로 실행 성공한 차트 결과가 있을 때만 진행해 stale SQL 저장을 막는다.
+  const saveIssue = chartSaveIssue({
+    name,
+    builderIssue: builderValidationIssue(builder, chartType, tables),
+    hasDatasource: primaryDatasourceId != null,
+    hasResult: result != null,
+    resultKind,
+    running,
+    runError,
+  });
 
   const save = async (): Promise<boolean> => {
-    if (!canSave || primaryDatasourceId == null) return false;
+    if (saveIssue || primaryDatasourceId == null) {
+      setToast(saveIssue ?? '데이터소스와 테이블을 선택해야 저장할 수 있습니다.');
+      return false;
+    }
     setSaving(true);
     try {
-      const { jsonb, cols } = splitOptions(options);
+      const optionsToSave = optionsToPersist;
+      const { jsonb, cols } = splitOptions(optionsToSave);
       const input: ChartInput = {
         name: name.trim(),
         description: (cols.description as string) || null,
@@ -646,6 +704,26 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         const updated = await chartsApi.update(savedId, input);
         replaceEditorPath(chartEditPath(savedId, updated.mainTable));
       }
+      setOptions(optionsToSave);
+      const savedDefinition: EditorDefinitionSnapshot = {
+        name: name.trim(),
+        datasourceId: primaryDatasourceId,
+        builder,
+        chartType,
+        options: optionsToSave,
+      };
+      const savedPreview: EditorPreviewSnapshot = {
+        result,
+        resultKind,
+        option,
+        generatedSql,
+      };
+      setName(savedDefinition.name);
+      setSavedSnapshot(createEditorSnapshot(savedDefinition, savedPreview));
+      dispatchMapViewport({
+        type: 'saveGlobal',
+        viewport: normalizeMapViewport(optionsToSave.map?.viewport),
+      });
       setDirty(false);
       setToast('저장되었습니다');
       return true;
@@ -658,7 +736,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   };
 
   const goList = () => {
-    if (dirty) setLeaveOpen(true);
+    if (hasUnsavedChanges) setLeaveOpen(true);
     else router.push('/');
   };
 
@@ -672,6 +750,49 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setColorPicking(picking);
     if (picking) dispatchMapViewport({ type: 'setEditing', editing: false });
   };
+
+  const resetOptions = () => {
+    if (!savedSnapshot) return;
+    if (autoRunTimerRef.current != null) {
+      window.clearTimeout(autoRunTimerRef.current);
+      autoRunTimerRef.current = null;
+    }
+    runRequestId.current += 1;
+    optionPreviewRequestId.current += 1;
+    rawRequestId.current += 1;
+
+    const restored = cloneEditorSnapshot(savedSnapshot);
+    setName(restored.definition.name);
+    setDatasourceId(restored.definition.datasourceId);
+    setBuilder(restored.definition.builder);
+    setChartType(restored.definition.chartType);
+    setOptions(restored.definition.options);
+    setResult(restored.preview.result);
+    setResultKind(restored.preview.resultKind);
+    setOption(restored.preview.option);
+    setGeneratedSql(restored.preview.generatedSql);
+    setRunning(false);
+    setRunError(null);
+    setInitialPreviewLoading(false);
+    setInitialPreviewError(null);
+    setRaw(null);
+    setRawTable(null);
+    setRawRunning(false);
+    setRawError(null);
+    setResultTab('result');
+    setTableSelectionTarget(null);
+    setPendingBaseTable(null);
+    dispatchMapViewport({
+      type: 'restoreGlobal',
+      viewport: normalizeMapViewport(restored.definition.options.map?.viewport),
+    });
+    setColorSelection(null);
+    setColorPicking(false);
+    setDirty(false);
+    setToast('마지막 저장 상태로 복원했습니다');
+  };
+
+  const canResetOptions = savedSnapshot != null && hasUnsavedChanges;
 
   const pendingViewport = pendingMapViewport(mapViewportSession);
   const mapViewportChangedFromCheckpoint = !mapViewportEquals(
@@ -725,7 +846,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </div>
         {savedId != null && <span className="text-[13px] text-text-tertiary">#{savedId}</span>}
         <div className="flex-1" />
-        <Button variant="secondary" size="sm" className="h-8" disabled={!canSave || saving} onClick={save}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-8"
+          icon={<RotateCcw className="size-3.5" />}
+          disabled={!canResetOptions || saving}
+          title="차트 이름·데이터 구성·유형·옵션을 마지막 저장 상태로 되돌리기"
+          onClick={resetOptions}
+        >
+          초기화
+        </Button>
+        <Button variant="secondary" size="sm" className="h-8" disabled={saving} onClick={save}>
           {saving ? '저장 중…' : '저장'}
         </Button>
         <Button size="sm" className="h-8" disabled={savedId == null} onClick={() => setEmbedOpen(true)}>
@@ -988,7 +1120,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
               <Button variant="ghost" size="sm" className="h-[34px]" onClick={() => router.push('/')}>
                 저장 안 함
               </Button>
-              <Button size="sm" className="h-[34px]" disabled={!canSave || saving} onClick={async () => { if (await save()) router.push('/'); }}>
+              <Button size="sm" className="h-[34px]" disabled={saving} onClick={async () => { if (await save()) router.push('/'); }}>
                 저장 후 나가기
               </Button>
             </>
@@ -1008,7 +1140,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
       {/* 저장 토스트 */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg">
+        <div
+          className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg"
+          role="status"
+          aria-live="polite"
+        >
           {toast}
         </div>
       )}

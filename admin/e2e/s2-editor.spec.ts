@@ -739,8 +739,21 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
   }
+
+  test('저장 조건이 부족하면 버튼을 비활성화하지 않고 정확한 안내를 표시한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    const save = page.getByRole('button', { name: '저장', exact: true });
+
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(page.getByText('차트 이름을 입력해야 저장할 수 있습니다.')).toBeVisible();
+
+    await page.getByPlaceholder('차트 이름').fill('미완성 차트');
+    await save.click();
+    await expect(page.getByText('테이블을 선택해야 저장할 수 있습니다.')).toBeVisible();
+  });
 
   test('실행·이름 입력 후 저장하면 완료 토스트가 뜬다', async ({ page }) => {
     await buildChart(page);
@@ -750,6 +763,28 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByPlaceholder('차트 이름').fill('월별 매출');
     await page.getByRole('button', { name: '저장', exact: true }).click();
     await expect(page.getByText('저장되었습니다')).toBeVisible();
+  });
+
+  test('전역 초기화는 이름·Builder·차트 옵션을 마지막 저장 상태로 복원한다', async ({ page }) => {
+    await buildChart(page);
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByPlaceholder('차트 이름').fill('옵션 초기화 테스트');
+    await page.getByRole('button', { name: '저장', exact: true }).click();
+    await expect(page.getByText('저장되었습니다')).toBeVisible();
+
+    const reset = page.getByRole('button', { name: '초기화', exact: true });
+    await expect(reset).toBeDisabled();
+    await page.getByPlaceholder('차트 이름').fill('저장하지 않은 이름');
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('dept');
+    await page.locator('#option-title').fill('저장하지 않은 제목');
+    await expect(reset).toBeEnabled();
+    await reset.click();
+
+    await expect(page.getByPlaceholder('차트 이름')).toHaveValue('옵션 초기화 테스트');
+    await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue('category');
+    await expect(page.locator('#option-title')).toHaveValue('');
+    await expect(page.getByText('마지막 저장 상태로 복원했습니다')).toBeVisible();
+    await expect(reset).toBeDisabled();
   });
 
   test('저장 후 임베드 코드 버튼 활성화 + S3 모달 연결', async ({ page }) => {
@@ -768,16 +803,16 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByText(/sdk\.js/)).toBeVisible();
   });
 
-  test('빌더 변경 시 실행 결과가 무효화되어 재실행 전 저장 불가', async ({ page }) => {
+  test('빌더 변경으로 결과가 무효화되어도 저장 버튼은 안내를 위해 활성 상태를 유지한다', async ({ page }) => {
     await buildChart(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByText('의류')).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('x');
     await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
 
-    // X축 변경 → 결과/SQL 무효화 → 저장 비활성(stale 저장 방지)
+    // X축 변경 → 결과/SQL 무효화. 실제 저장은 막되 버튼은 조건 안내를 위해 유지한다.
     await page.getByRole('combobox', { name: 'X축' }).selectOption('dept');
-    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
   });
 
   test('데이터소스를 바꿔도 구성이 유지되고 왼쪽 목록에서 다른 소스 조인을 선택한다', async ({ page }) => {
@@ -947,18 +982,18 @@ test.describe('S2 차트 유형 제약', () => {
     await expect(page.locator('#builder-y-agg-0 option')).toHaveCount(1);
   });
 
-  test('분포 전환은 실행 결과를 무효화해 저장이 비활성화된다', async ({ page }) => {
+  test('분포 전환은 실행 결과를 무효화해도 저장 안내 버튼을 유지한다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.getByText('의류')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('분포전환');
     await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
     // 분포 전환 → 구성이 바뀌어 결과 무효화
     await page.getByRole('button', { name: '분포', exact: true }).click();
     await expect(page.getByText('실행하면 미리보기가 표시됩니다.')).toBeVisible();
-    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
   });
 });
 
@@ -966,21 +1001,21 @@ test.describe('S2 이탈 모달·옵션 검색', () => {
   test('이탈확인에서 저장 안 함을 누르면 목록으로 이동한다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '목록', exact: true }).click();
     await expect(page.getByText('저장되지 않은 변경이 있습니다')).toBeVisible();
     await page.getByRole('button', { name: '저장 안 함' }).click();
     await expect(page.getByText('새 차트 만들기')).toBeVisible(); // 목록 도착
   });
 
-  test('저장 후 나가기는 실행 결과가 있어야 활성화되고, 저장 후 목록에 반영된다', async ({ page }) => {
+  test('저장 후 나가기도 항상 안내 가능하며, 실행 후 저장하면 목록에 반영된다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByPlaceholder('차트 이름').fill('이탈저장차트');
-    // 미실행 → 저장 후 나가기 비활성
+    // 미실행 상태도 조건 안내를 위해 버튼은 활성 상태다.
     await page.getByRole('button', { name: '목록', exact: true }).click();
-    await expect(page.getByRole('button', { name: '저장 후 나가기' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '저장 후 나가기' })).toBeEnabled();
     await page.getByRole('button', { name: '계속 편집' }).click();
     // 실행 후 → 저장 후 나가기 활성 → 저장 + 이동
     await page.getByRole('button', { name: '실행', exact: true }).click();
