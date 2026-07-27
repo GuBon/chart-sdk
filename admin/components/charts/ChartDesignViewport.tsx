@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MajorType } from '@chartsdk/chart-options';
+import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import type { ChartDesignSize, PreviewFitMode } from '@chartsdk/chart-options/display';
 import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import { ChartPreview, type MapBoundsChangeSource } from './ChartPreview';
@@ -20,6 +21,10 @@ interface Props {
   mapViewportRevision?: number;
   mapBoxZoomEnabled?: boolean;
   onMapBoundsChange?: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
+  colorPicking?: boolean;
+  colorSelection?: ColorSelection | null;
+  onColorSelection?: (selection: Extract<ColorSelection, { scope: 'item' }>) => void;
+  onColorPickingChange?: (picking: boolean) => void;
 }
 
 const VIEWPORT_PADDING = 24;
@@ -41,6 +46,10 @@ export function ChartDesignViewport({
   mapViewportRevision = 0,
   mapBoxZoomEnabled = true,
   onMapBoundsChange,
+  colorPicking = false,
+  colorSelection = null,
+  onColorSelection,
+  onColorPickingChange,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -101,6 +110,10 @@ export function ChartDesignViewport({
             mapViewportRevision={mapViewportRevision}
             mapBoxZoomEnabled={mapBoxZoomEnabled}
             onMapBoundsChange={onMapBoundsChange}
+            colorPicking={colorPicking}
+            colorSelection={colorSelection}
+            onColorSelection={onColorSelection}
+            onColorPickingChange={onColorPickingChange}
           />
         </div>
       </div>

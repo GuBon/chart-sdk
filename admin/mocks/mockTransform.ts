@@ -16,6 +16,16 @@ import {
 } from '@chartsdk/chart-options/sampling';
 import { resolveChartLayoutMetrics, resolveChartTypography } from '@chartsdk/chart-options/display';
 import { EMBEDDED_MAPS_KEY, MAP_VIEWPORT_KEY } from '@chartsdk/chart-options/geo';
+import { DEFAULT_PALETTE, resolveSeriesColorMap } from '@chartsdk/chart-options/palettes';
+import {
+  itemColorSeriesKey,
+  itemColorTargetKey,
+  normalizeItemColorOverrides,
+  type ItemColorDimension,
+  type ItemColorKind,
+} from '@chartsdk/chart-options/colorOverrides';
+import { migrateLegacyInteractionOptions, type MajorType } from '@chartsdk/chart-options';
+import { columnsForBuilder } from '@/lib/builder';
 import { schemaTables } from './seed';
 
 type Cols = { name: string; type: string }[];
@@ -262,16 +272,6 @@ GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${cfg.seriesBy ? `, ${qcol('__chartsd
   return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${systemSample}${joinSql}${where}\nGROUP BY ${group}${orderSql()}`;
 }
 
-/** 표본 비율 0.1~100, 소수점 한 자리 정규화 (생성규칙 3C·9장) */
-export const clampRate = normalizeSampleRate;
-
-function baseRelationForConfig(cfg: BuilderConfig): SchemaTable | undefined {
-  if (!cfg.table) return undefined;
-  return schemaTables.find((table) =>
-    table.datasourceId === cfg.table!.datasourceId
-    && table.schema === cfg.table!.schema
-    && table.name === cfg.table!.name,
-  );
 /** X/Y 없는 실행 결과용 행 조회 SQL 표시. 조건과 원본 컬럼 정렬만 적용한다. */
 export function buildRowsSql(cfg: BuilderConfig): string {
   if (!cfg.table) return '';
@@ -289,6 +289,16 @@ export function buildRowsSql(cfg: BuilderConfig): string {
   return `SELECT *\nFROM ${qtable(cfg.table, multi)}${joins}${where}${order}\nLIMIT 1000`;
 }
 
+/** 표본 비율 0.1~100, 소수점 한 자리 정규화 (생성규칙 3C·9장) */
+export const clampRate = normalizeSampleRate;
+
+function baseRelationForConfig(cfg: BuilderConfig): SchemaTable | undefined {
+  if (!cfg.table) return undefined;
+  return schemaTables.find((table) =>
+    table.datasourceId === cfg.table!.datasourceId
+    && table.schema === cfg.table!.schema
+    && table.name === cfg.table!.name,
+  );
 }
 
 function populationEstimateForConfig(cfg: BuilderConfig): number {
@@ -419,10 +429,34 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
 }
 
 // map 데모용 시·도 라벨 — kr-sido.json properties.name 과 정확히 일치해야 지도에 값이 칠해진다.
-const SAMPLE_REGIONS = ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도', '강원도', '충청북도', '전라남도', '경상북도', '제주특별자치도'];
+const SAMPLE_REGIONS = [
+  '서울특별시',
+  '전남광주통합특별시',
+  '부산광역시',
+  '대구광역시',
+  '인천광역시',
+  '경기도',
+  '강원특별자치도',
+  '충청북도',
+  '경상북도',
+  '제주특별자치도',
+];
 
 /** 집계 결과 rows 생성 — 카테고리/월 라벨 + yAxis별 가짜 값 */
 export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): QueryResult {
+  if (cfg.seriesBy && (chartType === 'bar' || chartType === 'line')) {
+    const years = ['2012', '2013', '2014', '2015'];
+    const regions = ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도'];
+    const columns: Cols = [
+      { name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' },
+      ...years.map((year) => ({ name: year, type: 'numeric' })),
+    ];
+    const rows: Rows = regions.map((region, regionIndex) => [
+      region,
+      ...years.map((_year, yearIndex) => 2_500_000 + regionIndex * 1_150_000 + yearIndex * 85_000),
+    ]);
+    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 24 };
+  }
   // 상자수염: 카테고리별로 원본값 여러 개(분포) — 변환기가 그룹핑해 5수 요약 계산.
   if (chartType === 'boxplot') {
     const valName = cfg.yAxis[0] ? colName(cfg.yAxis[0].column) : 'value';
@@ -461,19 +495,6 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       elapsedMs: sampling?.approximate ? 12 : 20,
       ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
     };
-  if (cfg.seriesBy && (chartType === 'bar' || chartType === 'line')) {
-    const years = ['2012', '2013', '2014', '2015'];
-    const regions = ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도'];
-    const columns: Cols = [
-      { name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' },
-      ...years.map((year) => ({ name: year, type: 'numeric' })),
-    ];
-    const rows: Rows = regions.map((region, regionIndex) => [
-      region,
-      ...years.map((_year, yearIndex) => 2_500_000 + regionIndex * 1_150_000 + yearIndex * 85_000),
-    ]);
-    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 24 };
-  }
   }
   // 지도 포인트: 대한민국 범위 내 경도·위도(+선택 크기값) 원본 좌표.
   if (chartType === 'geoscatter') {
@@ -556,15 +577,31 @@ function matchesCondition(actual: unknown, condition: BuilderConfig['where'][num
 
 /** X/Y 없는 실행 결과(mode:rows) — 전체 컬럼에 조건·원본 컬럼 정렬을 적용한다. */
 export function buildRawRows(cfg: BuilderConfig): QueryResult {
-  const rawNumeric = cfg.yAxis.some((y) => y.agg === 'none');
-  const columns: Cols = [
-    { name: cfg.xAxis ? colName(cfg.xAxis) : 'category', type: rawNumeric ? 'numeric' : 'text' },
-    ...cfg.yAxis.map((y) => ({ name: colName(y.column), type: 'numeric' })),
-  ];
-  const rows: Rows = Array.from({ length: 12 }, (_, i) => [
-    rawNumeric ? 10 + i * 7 : SAMPLE_CATS[i % SAMPLE_CATS.length],
-    ...cfg.yAxis.map((_, j) => Math.round(50 + i * 7 + j * 11)),
-  ]);
+  const options = columnsForBuilder(cfg, schemaTables);
+  const columns: Cols = options.map((column) => ({ name: column.label, type: column.type }));
+  let rows: Rows = Array.from({ length: 12 }, (_, index) => options.map((column) => sampleValue(column.type, index)));
+  rows = rows.filter((row) => cfg.where.every((condition) => {
+    const columnIndex = options.findIndex((column) => column.value === condition.column);
+    return columnIndex >= 0 && matchesCondition(row[columnIndex], condition);
+  }));
+
+  const orderColumn = cfg.orderBy?.target.startsWith('column:')
+    ? cfg.orderBy.target.slice('column:'.length)
+    : null;
+  const orderIndex = orderColumn ? options.findIndex((column) => column.value === orderColumn) : -1;
+  if (orderIndex >= 0 && cfg.orderBy) {
+    const direction = cfg.orderBy.direction === 'asc' ? 1 : -1;
+    rows = [...rows].sort((a, b) => {
+      const left = a[orderIndex];
+      const right = b[orderIndex];
+      if (left === right) return 0;
+      if (left == null) return -direction;
+      if (right == null) return direction;
+      return (typeof left === 'number' && typeof right === 'number'
+        ? left - right
+        : String(left).localeCompare(String(right), 'ko')) * direction;
+    });
+  }
   return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 18 };
 }
 
@@ -574,17 +611,16 @@ export function buildTablePreview(table: SchemaTable): QueryResult {
   return { columns: table.columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 12 };
 }
 
-const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
-
 const titleAtBottom = (o: any): boolean => !!o.title && (o.titleV ?? 'top') === 'bottom';
 const presetBase = (preset?: string) =>
   preset === 'compact' ? { left: 8, right: 8, top: 8, bottom: 8 }
     : preset === 'loose' ? { left: 48, right: 48, top: 48, bottom: 48 }
       : { left: 24, right: 24, top: 28, bottom: 24 };
 /** grid top/bottom 에 제목·범례 예약 높이 가산 (서버 applyMargins 미러). */
-function gridMargins(o: any, includeLegend: boolean): { left: number; right: number; top: number; bottom: number } {
+function gridMargins(o: any, includeLegend: boolean, horizontal = false): { left: number; right: number; top: number; bottom: number } {
   const b = presetBase(o.grid?.preset);
   const metrics = resolveChartLayoutMetrics(o);
+  const axisFontSize = resolveChartTypography(o).axis;
   if (!!o.title && (o.titleV ?? 'top') === 'top') b.top += metrics.titleHeight;
   if (titleAtBottom(o)) b.bottom += metrics.titleHeight;
   if (includeLegend && o.legend?.show !== false) {
@@ -592,25 +628,192 @@ function gridMargins(o: any, includeLegend: boolean): { left: number; right: num
     if (pos === 'top') b.top += metrics.legendHeight;
     if (pos === 'bottom') b.bottom += metrics.legendHeight;
   }
+  const physicalXConfig = horizontal ? o.yAxis : o.xAxis;
+  const physicalYConfig = horizontal ? o.xAxis : o.yAxis;
+  const physicalXPosition = axisPosition(physicalXConfig, horizontal ? 'y' : 'x', 'x');
+  const physicalYPosition = axisPosition(physicalYConfig, horizontal ? 'x' : 'y', 'y');
+  const physicalXReserve = axisReserve(physicalXConfig, axisFontSize);
+  const physicalYReserve = axisReserve(physicalYConfig, axisFontSize);
+  b[physicalXPosition] += physicalXReserve;
+  b[physicalYPosition] += physicalYReserve;
+  const physicalXEndpointReserve = axisEndpointReserve(
+    physicalXConfig,
+    horizontal ? 'y' : 'x',
+    'x',
+    axisFontSize,
+  );
+  const physicalYEndpointReserve = axisEndpointReserve(
+    physicalYConfig,
+    horizontal ? 'x' : 'y',
+    'y',
+    axisFontSize,
+  );
+  if (physicalXConfig?.titleLocation === 'start') b.left += physicalXEndpointReserve;
+  if (physicalXConfig?.titleLocation === 'end') b.right += physicalXEndpointReserve;
+  if (physicalYConfig?.titleLocation === 'start') b.bottom += physicalYEndpointReserve;
+  if (physicalYConfig?.titleLocation === 'end') b.top += physicalYEndpointReserve;
+  if (!horizontal && o.yAxis?.secondAxis === true) {
+    b[physicalYPosition === 'left' ? 'right' : 'left'] += physicalYReserve;
+  }
   return b;
+}
+
+const AXIS_NAME_GAP = 56;
+const AXIS_ENDPOINT_NAME_GAP = 8;
+
+type AxisKind = 'x' | 'y';
+type AxisPosition = 'top' | 'bottom' | 'left' | 'right';
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function axisPosition(config: any, logical: AxisKind, physical: AxisKind): AxisPosition {
+  const logicalPosition: AxisPosition = logical === 'x'
+    ? (config?.position === 'top' ? 'top' : 'bottom')
+    : (config?.position === 'right' ? 'right' : 'left');
+  if (logical === physical) return logicalPosition;
+  if (logical === 'x') return logicalPosition === 'top' ? 'right' : 'left';
+  return logicalPosition === 'right' ? 'top' : 'bottom';
+}
+
+function axisReserve(config: any, fontSize: number): number {
+  if (typeof config?.title !== 'string' || !config.title.trim()) return 0;
+  if (config?.titleLocation === 'start' || config?.titleLocation === 'end') return fontSize + 12;
+  const gap = Math.max(0, finiteNumber(config?.titleGap, AXIS_NAME_GAP));
+  return fontSize + 12 + Math.max(0, gap - AXIS_NAME_GAP);
+}
+
+function axisTitleRotation(config: any, logical: AxisKind, physical: AxisKind): number {
+  const logicalDefault = logical === 'x' ? 0 : -90;
+  const physicalDefault = physical === 'x' ? 0 : -90;
+  return physicalDefault + finiteNumber(config?.titleRotate, logicalDefault) - logicalDefault;
+}
+
+function estimatedTextWidth(text: string, fontSize: number): number {
+  const units = Array.from(text).reduce((sum, character) => {
+    if (/\s/u.test(character)) return sum + 0.35;
+    return sum + (character.codePointAt(0)! <= 0x7f ? 0.58 : 1);
+  }, 0);
+  return Math.ceil(units * fontSize);
+}
+
+function axisEndpointReserve(
+  config: any,
+  logical: AxisKind,
+  physical: AxisKind,
+  fontSize: number,
+): number {
+  if (typeof config?.title !== 'string' || !config.title.trim()) return 0;
+  if (config?.titleLocation !== 'start' && config?.titleLocation !== 'end') return 0;
+  const rotation = axisTitleRotation(config, logical, physical) * Math.PI / 180;
+  const textWidth = estimatedTextWidth(config.title.trim(), fontSize);
+  const projectedLength = physical === 'x'
+    ? Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * fontSize
+    : Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * fontSize;
+  return AXIS_ENDPOINT_NAME_GAP + Math.ceil(projectedLength);
+}
+
+function axisOptions(config: any, fontSize: number, logical: AxisKind, physical: AxisKind): Record<string, unknown> {
+  const location = config?.titleLocation === 'start' || config?.titleLocation === 'end'
+    ? config.titleLocation
+    : 'middle';
+  const position = axisPosition(config, logical, physical);
+  return {
+    ...(typeof config?.title === 'string' && config.title.trim()
+      ? {
+          name: config.title,
+          nameLocation: location,
+          nameGap: location === 'middle'
+            ? Math.max(0, finiteNumber(config?.titleGap, AXIS_NAME_GAP))
+            : AXIS_ENDPOINT_NAME_GAP,
+          nameRotate: axisTitleRotation(config, logical, physical),
+        }
+      : {}),
+    position,
+    nameTextStyle: { fontSize },
+  };
+}
+
+function categoryAxisLabel(
+  fontSize: number,
+  rotate: unknown,
+  config: any,
+  defaultMode: 'all' | 'auto',
+  hideOverlapOnAuto: boolean,
+): Record<string, unknown> {
+  const mode = config?.labelIntervalMode === 'step' || config?.labelIntervalMode === 'auto' || config?.labelIntervalMode === 'all'
+    ? config.labelIntervalMode
+    : defaultMode;
+  const interval = mode === 'auto'
+    ? 'auto'
+    : mode === 'step'
+      ? Math.max(0, Math.round(finiteNumber(config?.labelEvery, 2)) - 1)
+      : 0;
+  return {
+    interval,
+    rotate: typeof rotate === 'number' ? rotate : 30,
+    ...(typeof config?.showMinLabel === 'boolean' ? { showMinLabel: config.showMinLabel } : {}),
+    ...(typeof config?.showMaxLabel === 'boolean' ? { showMaxLabel: config.showMaxLabel } : {}),
+    hideOverlap: hideOverlapOnAuto
+      ? mode === 'auto'
+      : mode !== 'all' && config?.hideOverlap === true,
+    fontSize,
+  };
+}
+
+function numericAxisOptions(
+  config: any,
+  type: 'value' | 'log',
+  allowIntervalBounds: boolean,
+): Record<string, unknown> {
+  if (type === 'log') {
+    return { logBase: Math.max(2, Math.round(finiteNumber(config?.logBase, 10))) };
+  }
+  if (config?.tickMode === 'fixed') {
+    const interval = finiteNumber(config?.interval, 0);
+    return {
+      scale: config?.includeZero === false,
+      ...(interval > 0 ? { interval } : {}),
+    };
+  }
+  const minInterval = allowIntervalBounds ? finiteNumber(config?.minInterval, 0) : 0;
+  const maxInterval = allowIntervalBounds ? finiteNumber(config?.maxInterval, 0) : 0;
+  return {
+    scale: config?.includeZero === false,
+    splitNumber: Math.min(20, Math.max(2, Math.round(finiteNumber(config?.splitNumber, 5)))),
+    ...(minInterval > 0 ? { minInterval } : {}),
+    ...(maxInterval > 0 ? { maxInterval } : {}),
+  };
 }
 
 /** (rows, chartType, options) → ECharts option (방식 A 모사, MVP 옵션 범위) */
 export function assembleOption(result: QueryResult, chartType: ChartType, options: Record<string, any>): Record<string, unknown> {
-  const o = options ?? {};
+  const o = migrateLegacyInteractionOptions(options ?? {}, chartType as MajorType);
+  const itemColors = itemColorLookup(o.itemColorOverrides);
   const cats = result.rows.map((r) => r[0]);
   const seriesCols = result.columns.slice(1);
-  const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex);
+  const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex, o.paletteReversed);
+  const colorNames = chartType === 'pie' ? cats.map((category) => String(category)) : seriesCols.map((column) => column.name);
+  const autoColorMap = resolveSeriesColorMap(colorNames, palette, o.autoColorMap ?? {});
   const variant: string = o.variant ?? (chartType === 'pie' ? 'pie' : chartType === 'scatter' ? 'scatter' : chartType === 'line' ? 'basic' : 'basic');
   const typography = resolveChartTypography(o);
   const metrics = resolveChartLayoutMetrics(o);
 
   // 배경: 서버 변환기와 동일하게 불투명 기본(흰색) — 미리보기가 임베드 결과와 일치하도록.
-  const opt: Record<string, any> = { color: palette, backgroundColor: o.backgroundColor ?? '#ffffff' };
+  const opt: Record<string, any> = {
+    color: palette,
+    backgroundColor: o.backgroundColor ?? '#ffffff',
+    __chartsdkAutoColorMap: autoColorMap,
+    __chartsdkValueFormat: {
+      tooltip: o.tooltip?.valueFormat ?? 'raw',
+      yAxis: o.yAxis?.format ?? 'raw',
+      unit: o.yAxis?.unit ?? '',
+    },
+  };
 
   if (o.title) opt.title = { text: o.title, left: o.titleH ?? 'center', top: o.titleV ?? 'top', textStyle: { fontSize: typography.title } };
-  const itemTooltip = chartType === 'pie' || chartType === 'scatter' || chartType === 'boxplot' || chartType === 'heatmap' || chartType === 'map';
-  opt.tooltip = { trigger: o.tooltip?.trigger ?? (itemTooltip ? 'item' : 'axis'), confine: true, textStyle: { fontSize: typography.tooltip } };
+  applyCommonTooltip(opt, o, chartType, typography.tooltip);
   if (o.legend?.show !== false) {
     const pos = o.legend?.position ?? 'bottom';
     // 제목이 같은 모서리면 범례를 제목 다음 줄로(규칙 1, 서버 미러).
@@ -644,16 +847,37 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       groups.get(cat)!.push(v);
     }
     const cats = [...groups.keys()];
-    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
-    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, boundaryGap: true, splitArea: { show: false }, axisLabel: { rotate: o.xAxis?.rotate ?? 0, fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
-    opt.yAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    opt.xAxis = {
+      type: 'category',
+      data: cats,
+      boundaryGap: true,
+      splitArea: { show: false },
+      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true),
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+    };
+    opt.yAxis = {
+      type: o.yAxis?.scale === 'log' ? 'log' : 'value',
+      splitLine: { show: o.yAxis?.splitLine !== false },
+      axisLabel: { fontSize: typography.axis },
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+      ...numericAxisOptions(o.yAxis, o.yAxis?.scale === 'log' ? 'log' : 'value', false),
+    };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
-    opt.series = [{
+    const seriesName = seriesCols[0]?.name ?? '분포';
+    const seriesColor = o.colorMap?.[seriesName] ?? autoColorMap[seriesName] ?? paletteColor(palette, 0);
+    const series: Record<string, any> = {
       type: 'boxplot',
-      name: seriesCols[0]?.name ?? '분포',
-      data: cats.map((c) => fiveNumberSummary(groups.get(c)!)),
-      itemStyle: { color: paletteColor(palette, 0), borderColor: paletteColor(palette, 0) },
-    }];
+      name: seriesName,
+      data: cats.map((c) => withMockItemColor(
+        fiveNumberSummary(groups.get(c)!),
+        itemColorFor(itemColors, 'boxplot', seriesName, [c], 0),
+        'color',
+        true,
+      )),
+      itemStyle: { color: seriesColor, borderColor: seriesColor },
+    };
+    applySeriesEmphasis(series, o, 'boxplot');
+    opt.series = [series];
     return opt;
   }
 
@@ -661,41 +885,84 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   if (chartType === 'heatmap') {
     const cats = result.rows.map((r) => String(r[0] ?? ''));
     const yNames = seriesCols.map((c) => c.name);
-    const data: [number, number, number][] = [];
+    const data: unknown[] = [];
+    const occurrences = new Map<string, number>();
     let min = Infinity;
     let max = -Infinity;
     result.rows.forEach((r, xi) => {
       seriesCols.forEach((_c, s) => {
         const v = Number(r[1 + s]) || 0;
-        data.push([xi, s, v]);
+        const dimensions: ItemColorDimension[] = [cats[xi], yNames[s]];
+        const occurrence = nextMockOccurrence(occurrences, 'heatmap', '', dimensions);
+        data.push(withMockItemColor(
+          [xi, s, v],
+          itemColorFor(itemColors, 'heatmap', '', dimensions, occurrence),
+          'color',
+        ));
         if (v < min) min = v;
         if (v > max) max = v;
       });
     });
     if (!Number.isFinite(min)) { min = 0; max = 1; }
     if (min === max) max = min + 1;
-    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
-    opt.xAxis = { type: 'category', data: cats, name: o.xAxis?.title, splitArea: { show: true }, axisLabel: { rotate: o.xAxis?.rotate ?? 0, fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
-    opt.yAxis = { type: 'category', data: yNames, name: o.yAxis?.title, splitArea: { show: true }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    opt.xAxis = {
+      type: 'category',
+      data: cats,
+      splitArea: { show: true },
+      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true),
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+    };
+    opt.yAxis = {
+      type: 'category',
+      data: yNames,
+      splitArea: { show: true },
+      axisLabel: categoryAxisLabel(typography.axis, 0, o.yAxis, 'auto', false),
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+    };
     const hm = gridMargins(o, false); // heatmap 은 범례 제거 → 제목만 가산
     opt.grid = { ...hm, bottom: hm.bottom + metrics.visualMapHeight, containLabel: o.grid?.containLabel !== false };
-    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0, typography.legend);
-    opt.series = [{ type: 'heatmap', name: '값', data, label: { show: o.dataLabel === true, fontSize: typography.dataLabel } }];
+    opt.visualMap = visualMapConfig(
+      min,
+      max,
+      palette,
+      titleAtBottom(o) ? metrics.titleHeight : 0,
+      typography.legend,
+      o.colorTheme?.version === 2,
+    );
+    const series: Record<string, any> = { type: 'heatmap', name: '값', data, label: { show: o.dataLabel === true, fontSize: typography.dataLabel } };
+    applySeriesEmphasis(series, o, 'heatmap');
+    opt.series = [series];
     return opt;
   }
 
   // ── 지도 — 지역별 값=색(visualMap). map.name 으로 시도/시군구 선택 ──
   if (chartType === 'map') {
     const spatial = result.columns.some((column) => column.name === '__chartsdk_geojson');
-    const data = result.rows.map((r) => ({ name: String(r[0] ?? ''), value: Number(r[1]) || 0 }));
-    const vals = data.map((d) => d.value);
+    const occurrences = new Map<string, number>();
+    const data = result.rows.map((r) => {
+      const name = String(r[0] ?? '');
+      const dimensions: ItemColorDimension[] = [name];
+      const occurrence = nextMockOccurrence(occurrences, 'map', '', dimensions);
+      return withMockItemColor(
+        { name, value: Number(r[1]) || 0 },
+        itemColorFor(itemColors, 'map', '', dimensions, occurrence),
+        'areaColor',
+      );
+    });
+    const vals = result.rows.map((row) => Number(row[1]) || 0);
     let min = vals.length ? Math.min(...vals) : 0;
     let max = vals.length ? Math.max(...vals) : 1;
     if (min === max) max = min + 1;
-    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
-    opt.visualMap = visualMapConfig(min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0, typography.legend);
+    opt.visualMap = visualMapConfig(
+      min,
+      max,
+      palette,
+      titleAtBottom(o) ? metrics.titleHeight : 0,
+      typography.legend,
+      o.colorTheme?.version === 2,
+    );
     let mapName = o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido';
     if (spatial) {
       const features = result.rows.flatMap((row) => {
@@ -713,15 +980,17 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       mapName = `chartsdk-dynamic-mock-${(hash >>> 0).toString(16)}`;
       opt[EMBEDDED_MAPS_KEY] = [{ name: mapName, geoJSON: { type: 'FeatureCollection', features } }];
     }
-    opt.series = [{
+    const series: Record<string, any> = {
       type: 'map',
+      name: seriesCols[0]?.name ?? '값',
       map: mapName,
       roam: o.map?.roam === true,
       label: { show: o.dataLabel === true, fontSize: typography.dataLabel },
       ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
-      emphasis: { label: { show: true } },
       data,
-    }];
+    };
+    applySeriesEmphasis(series, o, 'map');
+    opt.series = [series];
     opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
@@ -735,16 +1004,16 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
     // JSON 전송이라 symbolSize 콜백 불가 → 포인트별 symbolSize 를 데이터 항목에 계산해 넣는다(6~28px sqrt 스케일).
     const sizeOf = (v: number) => (sMax === sMin ? base : Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-    opt.tooltip = { trigger: 'item', confine: true, textStyle: { fontSize: typography.tooltip } };
     opt.legend = { show: false };
     opt.geo = {
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
       roam: o.map?.roam === true,
       label: { show: false },
       itemStyle: { areaColor: '#f3f4f6', borderColor: '#d1d5db' },
-      emphasis: { itemStyle: { areaColor: '#e5e7eb' }, label: { show: false } },
     };
-    opt.series = [{
+    applyGeoEmphasis(opt.geo, o);
+    const occurrences = new Map<string, number>();
+    const series: Record<string, any> = {
       type: 'scatter',
       coordinateSystem: 'geo',
       name: seriesCols[0]?.name ?? '포인트',
@@ -753,53 +1022,118 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       data: result.rows.map((r) => {
         const lng = Number(r[0]) || 0;
         const lat = Number(r[1]) || 0;
-        if (!hasSize) return [lng, lat];
+        const dimensions: ItemColorDimension[] = [roundMockCoordinate(lng), roundMockCoordinate(lat)];
+        const occurrence = nextMockOccurrence(occurrences, 'geoscatter', '', dimensions);
+        const itemColor = itemColorFor(itemColors, 'geoscatter', '', dimensions, occurrence);
+        if (!hasSize) return withMockItemColor([lng, lat], itemColor, 'color');
         const v = Number(r[2]) || 0;
-        return { value: [lng, lat, v], symbolSize: sizeOf(v) };
+        return withMockItemColor({ value: [lng, lat, v], symbolSize: sizeOf(v) }, itemColor, 'color');
       }),
-    }];
+    };
+    applySeriesEmphasis(series, o, 'scatter');
+    opt.series = [series];
     opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
 
   if (chartType === 'pie') {
     const radius = variant === 'donut' ? [`${100 - (o.pie?.donutWidth ?? 40)}%`, '100%'] : '70%';
-    opt.series = [
-      {
+    const occurrences = new Map<string, number>();
+    const series: Record<string, any> = {
         type: 'pie',
         radius,
         roseType: variant === 'rose' ? 'radius' : undefined,
         label: { show: o.dataLabel === true, position: o.pie?.labelPosition ?? 'outside', fontSize: typography.dataLabel },
-        data: cats.map((name, i) => ({ name, value: result.rows[i][1], itemStyle: { color: paletteColor(palette, i) } })),
-      },
-    ];
+        data: cats.map((name, i) => {
+          const dimensions: ItemColorDimension[] = [colorDimension(name)];
+          const occurrence = nextMockOccurrence(occurrences, 'pie', '', dimensions);
+          return withMockItemColor(
+            { name, value: result.rows[i][1], itemStyle: { color: o.colorMap?.[String(name)] ?? autoColorMap[String(name)] } },
+            itemColorFor(itemColors, 'pie', '', dimensions, occurrence),
+            'color',
+          );
+        }),
+    };
+    applySeriesEmphasis(series, o, 'pie');
+    opt.series = [series];
     return opt;
   }
 
   if (chartType === 'scatter') {
-    opt.xAxis = { type: o.xAxis?.scale === 'log' ? 'log' : 'value', name: o.xAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
-    opt.yAxis = { type: 'value', name: o.yAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+    const xAxisType = o.xAxis?.scale === 'log' ? 'log' : 'value';
+    const yAxisType = o.yAxis?.scale === 'log' ? 'log' : 'value';
+    opt.xAxis = {
+      type: xAxisType,
+      axisLabel: { fontSize: typography.axis },
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+      ...numericAxisOptions(o.xAxis, xAxisType, true),
+      ...(o.xAxis?.min != null ? { min: o.xAxis.min } : {}),
+      ...(o.xAxis?.max != null ? { max: o.xAxis.max } : {}),
+    };
+    opt.yAxis = {
+      type: yAxisType,
+      axisLabel: { fontSize: typography.axis },
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+      ...numericAxisOptions(o.yAxis, yAxisType, false),
+      ...(o.yAxis?.rangeMode === 'manual' ? { min: o.yAxis?.min, max: o.yAxis?.max } : {}),
+    };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
-    opt.series = seriesCols.map((c, s) => ({
-      type: 'scatter',
-      name: c.name,
-      symbolSize: o.scatter?.symbolSize ?? 10,
-      symbol: o.scatter?.symbol ?? 'circle',
-      data: result.rows.map((r) => [Number(r[0]) || 0, Number(r[1 + s]) || 0]),
-      label,
-      labelLayout,
-      color: paletteColor(palette, s),
-      itemStyle: { color: paletteColor(palette, s) },
-    }));
+    opt.series = seriesCols.map((c, s) => {
+      const occurrences = new Map<string, number>();
+      const series: Record<string, any> = {
+        type: 'scatter',
+        name: c.name,
+        symbolSize: o.scatter?.symbolSize ?? 10,
+        symbol: o.scatter?.symbol ?? 'circle',
+        data: result.rows.map((r) => {
+          const x = Number(r[0]) || 0;
+          const y = Number(r[1 + s]) || 0;
+          const dimensions: ItemColorDimension[] = [x, y];
+          const occurrence = nextMockOccurrence(occurrences, 'scatter', c.name, dimensions);
+          return withMockItemColor(
+            [x, y],
+            itemColorFor(itemColors, 'scatter', c.name, dimensions, occurrence),
+            'color',
+          );
+        }),
+        label,
+        labelLayout,
+        color: o.colorMap?.[c.name] ?? autoColorMap[c.name],
+        itemStyle: { color: o.colorMap?.[c.name] ?? autoColorMap[c.name] },
+      };
+      applySeriesEmphasis(series, o, 'scatter');
+      return series;
+    });
     return opt;
   }
 
   // bar / line (직교)
-  const catAxis = { type: 'category', data: cats, name: o.xAxis?.title, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
-  const valAxis = { type: o.yAxis?.scale === 'log' ? 'log' : 'value', name: o.yAxis?.title, splitLine: { show: o.yAxis?.splitLine !== false }, axisLabel: { fontSize: typography.axis }, nameTextStyle: { fontSize: typography.axis } };
+  const catAxis = {
+    type: 'category',
+    data: cats,
+    splitLine: { show: o.xAxis?.splitLine === true },
+    axisLabel: categoryAxisLabel(typography.axis, horizontal ? 0 : o.xAxis?.rotate, o.xAxis, 'all', true),
+    ...axisOptions(o.xAxis, typography.axis, 'x', horizontal ? 'y' : 'x'),
+  };
+  const valAxis = {
+    type: o.yAxis?.scale === 'log' ? 'log' : 'value',
+    splitLine: { show: o.yAxis?.splitLine !== false },
+    axisLabel: { fontSize: typography.axis },
+    ...axisOptions(o.yAxis, typography.axis, 'y', horizontal ? 'x' : 'y'),
+    ...numericAxisOptions(o.yAxis, o.yAxis?.scale === 'log' ? 'log' : 'value', false),
+    ...(o.yAxis?.rangeMode === 'manual' ? { min: o.yAxis?.min, max: o.yAxis?.max } : {}),
+  };
   opt.xAxis = horizontal ? valAxis : catAxis;
-  opt.yAxis = horizontal ? catAxis : valAxis;
-  opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
+  if (!horizontal && o.yAxis?.secondAxis === true) {
+    const primaryPosition = axisPosition(o.yAxis, 'y', 'y');
+    opt.yAxis = [
+      valAxis,
+      { ...valAxis, position: primaryPosition === 'right' ? 'left' : 'right' },
+    ];
+  } else {
+    opt.yAxis = horizontal ? catAxis : valAxis;
+  }
+  opt.grid = { ...gridMargins(o, true, horizontal), containLabel: o.grid?.containLabel !== false };
 
   const stack = variant === 'stacked' || variant === 'stackedArea' ? 'total' : undefined;
   // 100% 정규화(누적 막대) — 카테고리(행)별 합으로 나눠 각 카테고리 스택이 1이 되게 (서버 변환기와 동일).
@@ -811,20 +1145,31 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const seriesTypeMap: Record<string, any> = o.seriesTypes && typeof o.seriesTypes === 'object' ? o.seriesTypes : {};
   opt.series = seriesCols.map((c, s) => {
     const seriesType = seriesTypeMap[c.name] === 'bar' || seriesTypeMap[c.name] === 'line' ? seriesTypeMap[c.name] : chartType;
+    const occurrences = new Map<string, number>();
     const base: Record<string, any> = {
       type: seriesType,
       name: c.name,
       data: result.rows.map((r, ri) => {
         const v = Number(r[1 + s]) || 0;
-        return rowTotals && rowTotals[ri] ? v / rowTotals[ri] : v;
+        const itemValue = rowTotals && rowTotals[ri] ? v / rowTotals[ri] : v;
+        const dimensions: ItemColorDimension[] = [colorDimension(r[0])];
+        const occurrence = nextMockOccurrence(occurrences, 'cartesian', c.name, dimensions);
+        return withMockItemColor(
+          itemValue,
+          itemColorFor(itemColors, 'cartesian', c.name, dimensions, occurrence),
+          'color',
+        );
       }),
       label,
       labelLayout,
       stack,
-      color: paletteColor(palette, s),
-      itemStyle: { color: paletteColor(palette, s) },
+      color: o.colorMap?.[c.name] ?? autoColorMap[c.name],
+      itemStyle: { color: o.colorMap?.[c.name] ?? autoColorMap[c.name] },
     };
+    if (!horizontal && o.yAxis?.secondAxis === true && s >= 1) base.yAxisIndex = 1;
     if (seriesType === 'bar') {
+      if (o.bar?.width != null) base.barWidth = `${o.bar.width}%`;
+      if (o.bar?.gap != null) base.barGap = `${o.bar.gap}%`;
       if (o.bar?.borderRadius) base.itemStyle = { ...base.itemStyle, borderRadius: o.bar.borderRadius };
       if (o.bar?.showBackground) base.showBackground = true;
     }
@@ -832,23 +1177,183 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       base.smooth = variant === 'smooth';
       base.step = variant === 'step' ? 'end' : undefined;
       if (variant === 'area' || variant === 'stackedArea') base.areaStyle = { opacity: o.line?.areaOpacity ?? 0.3 };
-      base.lineStyle = { width: o.line?.width ?? 2, type: o.line?.lineType ?? 'solid', color: paletteColor(palette, s) };
+      base.lineStyle = { width: o.line?.width ?? 2, type: o.line?.lineType ?? 'solid', color: o.colorMap?.[c.name] ?? autoColorMap[c.name] };
       base.showSymbol = o.line?.showSymbol !== false;
+      base.symbolSize = o.line?.symbolSize ?? 4;
+      base.connectNulls = o.line?.connectNulls === true;
     }
+    applySeriesEmphasis(base, o, seriesType);
     return base;
   });
   return opt;
 }
 
-function orderedPalette(palette: string[], activeIndex: unknown): string[] {
+function itemColorLookup(value: unknown): Map<string, string> {
+  return new Map(normalizeItemColorOverrides(value).map((item) => [itemColorTargetKey(item), item.color]));
+}
+
+function itemColorFor(
+  lookup: Map<string, string>,
+  kind: ItemColorKind,
+  displayedSeriesName: string,
+  dimensions: ItemColorDimension[],
+  occurrence: number,
+): string | undefined {
+  return lookup.get(itemColorTargetKey({
+    kind,
+    seriesName: itemColorSeriesKey(kind, displayedSeriesName),
+    dimensions,
+    occurrence,
+  }));
+}
+
+function nextMockOccurrence(
+  seen: Map<string, number>,
+  kind: ItemColorKind,
+  displayedSeriesName: string,
+  dimensions: ItemColorDimension[],
+): number {
+  const key = itemColorTargetKey({
+    kind,
+    seriesName: itemColorSeriesKey(kind, displayedSeriesName),
+    dimensions,
+    occurrence: 0,
+  });
+  const occurrence = seen.get(key) ?? 0;
+  seen.set(key, occurrence + 1);
+  return occurrence;
+}
+
+function withMockItemColor(
+  value: unknown,
+  color: string | undefined,
+  colorKey: 'color' | 'areaColor',
+  matchBorderColor = false,
+): unknown {
+  if (!color) return value;
+  const item: Record<string, unknown> = value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : { value };
+  const existingStyle = item.itemStyle && typeof item.itemStyle === 'object' && !Array.isArray(item.itemStyle)
+    ? item.itemStyle as Record<string, unknown>
+    : {};
+  item.itemStyle = {
+    ...existingStyle,
+    [colorKey]: color,
+    ...(matchBorderColor ? { borderColor: color } : {}),
+  };
+  return item;
+}
+
+function colorDimension(value: unknown): ItemColorDimension {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Object.is(value, -0) ? 0 : value;
+  return String(value);
+}
+
+function roundMockCoordinate(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function orderedPalette(palette: string[], activeIndex: unknown, reversed: unknown): string[] {
   if (palette.length === 0) return DEFAULT_PALETTE;
   const start = typeof activeIndex === 'number' && Number.isFinite(activeIndex) ? Math.max(0, Math.round(activeIndex)) % palette.length : 0;
-  if (start <= 0) return palette;
-  return [...palette.slice(start), ...palette.slice(0, start)];
+  const ordered = start <= 0 ? [...palette] : [...palette.slice(start), ...palette.slice(0, start)];
+  return reversed === true ? ordered.reverse() : ordered;
 }
 
 function paletteColor(palette: string[], index: number): string {
   return palette[index % palette.length] ?? DEFAULT_PALETTE[0];
+}
+
+function applyCommonTooltip(
+  option: Record<string, any>,
+  source: Record<string, any>,
+  chartType: ChartType,
+  fontSize: number,
+): void {
+  const config = source.tooltip ?? {};
+  const enabled = config.enabled !== false;
+  const tooltip: Record<string, any> = { textStyle: { fontSize } };
+  if (!enabled) tooltip.show = false;
+  if (config.trigger && config.trigger !== 'auto') tooltip.trigger = config.trigger;
+  if (config.axisPointer && config.axisPointer !== 'auto') tooltip.axisPointer = { type: config.axisPointer };
+  if (config.confine === 'inside') tooltip.confine = true;
+  if (config.confine === 'free') tooltip.confine = false;
+  if (config.backgroundColor != null) tooltip.backgroundColor = config.backgroundColor;
+  if (config.borderColor != null) tooltip.borderColor = config.borderColor;
+  if (typeof config.borderWidth === 'number') tooltip.borderWidth = config.borderWidth;
+  if (typeof config.padding === 'number') tooltip.padding = config.padding;
+  if (config.textColor != null) tooltip.textStyle.color = config.textColor;
+  option.tooltip = tooltip;
+
+  if (enabled && config.contentMode === 'custom') {
+    option.__chartsdkTooltip = {
+      chartType,
+      template: config.template ?? tooltipTemplateFor(chartType),
+    };
+  } else {
+    delete option.__chartsdkTooltip;
+  }
+}
+
+function tooltipTemplateFor(chartType: ChartType): string {
+  const templates: Record<ChartType, string> = {
+    bar: '{series}\n{name}: {value}',
+    line: '{series}\n{name}: {value}',
+    pie: '{name}: {value} ({percent}%)',
+    scatter: '{series}\nX: {x}\nY: {y}',
+    boxplot: '{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}',
+    heatmap: 'X: {x}\nY: {y}\n값: {value}',
+    map: '지역: {name}\n값: {value}',
+    geoscatter: '경도: {lng}\n위도: {lat}',
+  };
+  return templates[chartType];
+}
+
+function putNested(target: Record<string, any>, group: string, key: string, value: unknown): void {
+  target[group] = { ...(target[group] ?? {}), [key]: value };
+}
+
+function applySeriesEmphasis(series: Record<string, any>, source: Record<string, any>, seriesType: string): void {
+  const config = source.emphasis ?? {};
+  if (config.enabled === false) {
+    series.emphasis = { disabled: true };
+    return;
+  }
+  const emphasis: Record<string, any> = {};
+  if (config.focus && config.focus !== 'auto') emphasis.focus = config.focus;
+  if (['line', 'pie', 'scatter', 'boxplot'].includes(seriesType) && typeof config.scale === 'boolean') emphasis.scale = config.scale;
+  if (seriesType === 'pie' && typeof config.scaleSize === 'number') emphasis.scaleSize = config.scaleSize;
+  if (seriesType === 'line' && typeof config.lineWidth === 'number') putNested(emphasis, 'lineStyle', 'width', config.lineWidth);
+  if (seriesType === 'boxplot' && typeof config.borderWidth === 'number') putNested(emphasis, 'itemStyle', 'borderWidth', config.borderWidth);
+  if (config.colorMode === 'custom') {
+    const color = config.color ?? '#FFD700';
+    if (seriesType === 'map') {
+      putNested(emphasis, 'itemStyle', 'areaColor', color);
+    } else if (seriesType === 'line') {
+      putNested(emphasis, 'itemStyle', 'color', color);
+      putNested(emphasis, 'lineStyle', 'color', color);
+    } else if (seriesType === 'boxplot') {
+      putNested(emphasis, 'itemStyle', 'color', color);
+      putNested(emphasis, 'itemStyle', 'borderColor', color);
+    } else {
+      putNested(emphasis, 'itemStyle', 'color', color);
+    }
+  }
+  if (Object.keys(emphasis).length > 0) series.emphasis = emphasis;
+}
+
+function applyGeoEmphasis(geo: Record<string, any>, source: Record<string, any>): void {
+  const config = source.emphasis ?? {};
+  if (config.enabled === false) {
+    geo.emphasis = { disabled: true };
+    return;
+  }
+  const emphasis: Record<string, any> = {};
+  if (config.focus && config.focus !== 'auto') emphasis.focus = config.focus;
+  if (config.colorMode === 'custom') putNested(emphasis, 'itemStyle', 'areaColor', config.color ?? '#FFD700');
+  if (Object.keys(emphasis).length > 0) geo.emphasis = emphasis;
 }
 
 /** 정렬된 배열에서 p 분위수 — R-7 선형보간(numpy/ECharts dataTool 기본). */
@@ -867,8 +1372,15 @@ function fiveNumberSummary(values: number[]): [number, number, number, number, n
   return [s[0] ?? 0, quantileSorted(s, 0.25), quantileSorted(s, 0.5), quantileSorted(s, 0.75), s[s.length - 1] ?? 0];
 }
 
-/** heatmap·map 공용 visualMap — 팔레트[0]을 상단(고강도) 색으로, 밝은 중립을 하단으로. */
-function visualMapConfig(min: number, max: number, palette: string[], bottom = 0, fontSize = 12): Record<string, unknown> {
+/** heatmap·map 공용 visualMap. v2는 순차형 전체 단계, 구 저장 데이터는 종전 2색 계약을 유지한다. */
+function visualMapConfig(
+  min: number,
+  max: number,
+  palette: string[],
+  bottom = 0,
+  fontSize = 12,
+  continuousPalette = false,
+): Record<string, unknown> {
   return {
     min,
     max,
@@ -877,6 +1389,6 @@ function visualMapConfig(min: number, max: number, palette: string[], bottom = 0
     left: 'center',
     bottom, // 제목이 하단이면 그 위로 올려 겹침 방지(규칙 1)
     textStyle: { fontSize },
-    inRange: { color: ['#f7f7f7', paletteColor(palette, 0)] },
+    inRange: { color: continuousPalette ? [...palette] : ['#f7f7f7', paletteColor(palette, 0)] },
   };
 }

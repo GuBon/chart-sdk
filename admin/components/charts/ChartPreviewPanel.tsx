@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Maximize2 } from 'lucide-react';
 import { setPath, type Options } from '@chartsdk/chart-options';
 import type { MajorType } from '@chartsdk/chart-options';
+import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import {
   CHART_SIZE_PRESETS,
@@ -28,7 +29,11 @@ interface Props {
   mapViewportEditing: boolean;
   mapViewport: MapViewport;
   mapViewportRevision: number;
+  colorPicking: boolean;
+  colorSelection: ColorSelection | null;
   onMapBoundsChange: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
+  onColorSelection: (selection: Extract<ColorSelection, { scope: 'item' }>) => void;
+  onColorPickingChange: (picking: boolean) => void;
   onChangeOptions: (next: Options) => void;
 }
 
@@ -42,7 +47,11 @@ export function ChartPreviewPanel({
   mapViewportEditing,
   mapViewport,
   mapViewportRevision,
+  colorPicking,
+  colorSelection,
   onMapBoundsChange,
+  onColorSelection,
+  onColorPickingChange,
   onChangeOptions,
 }: Props) {
   const [fitMode, setFitMode] = useState<PreviewFitMode>('contain');
@@ -72,6 +81,15 @@ export function ChartPreviewPanel({
           {(chartType === 'map' || chartType === 'geoscatter') && (
             <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(mapViewport)}`}>
               표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(mapViewport)}
+            </span>
+          )}
+          {colorPicking && (
+            <span
+              role="status"
+              className="max-w-[min(420px,45vw)] truncate rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
+              title="색상을 바꿀 막대·점·조각·지역을 선택하세요. Esc로 종료"
+            >
+              색상을 바꿀 요소를 선택하세요 · Esc 종료
             </span>
           )}
           <div className="flex-1" />
@@ -115,6 +133,10 @@ export function ChartPreviewPanel({
             mapViewportRevision={mapViewportRevision}
             mapBoxZoomEnabled={!focusOpen}
             onMapBoundsChange={onMapBoundsChange}
+            colorPicking={colorPicking}
+            colorSelection={colorSelection}
+            onColorSelection={onColorSelection}
+            onColorPickingChange={onColorPickingChange}
           />
         ) : (
           <div className="flex h-full items-center justify-center bg-muted/40 px-4 text-center text-xs text-text-tertiary">
@@ -132,6 +154,10 @@ export function ChartPreviewPanel({
           mapViewport={mapViewport}
           mapViewportRevision={mapViewportRevision}
           onMapBoundsChange={onMapBoundsChange}
+          colorPicking={colorPicking}
+          colorSelection={colorSelection}
+          onColorSelection={onColorSelection}
+          onColorPickingChange={onColorPickingChange}
           onClose={() => setFocusOpen(false)}
         />
       )}

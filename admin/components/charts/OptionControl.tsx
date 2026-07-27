@@ -8,8 +8,17 @@ import { Switch } from '@/components/ui/Switch';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 import { CHART_TYPE_META } from '@/lib/chartTypes';
+import {
+  DEFAULT_PALETTE,
+  paletteChoicesForChartType,
+  paletteFamilyForChartType,
+} from '@chartsdk/chart-options/palettes';
+import {
+  findItemColorOverride,
+  itemColorTargetKey,
+  type ColorSelection,
+} from '@chartsdk/chart-options/colorOverrides';
 
-const DEFAULT_PALETTE = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'];
 
 export function TypographyPolicy({ typography }: { typography: ChartTypography }) {
   return (
@@ -26,23 +35,45 @@ export function OptionControl({
   value,
   chartType,
   columns,
+  colorTargets,
   hasResult,
   disabled,
-  paletteActiveIndex,
+  paletteColors,
+  paletteReversed,
+  continuousPalette,
+  colorMap,
+  autoColorMap,
+  itemColorOverrides,
+  colorSelection,
+  colorPicking,
   onChange,
   onChangeType,
-  onSelectPaletteIndex,
+  onSelectColorTarget,
+  onColorPickingChange,
+  onApplySelectedColor,
+  onClearSelectedColor,
 }: {
   def: OptionDef;
   value: unknown;
   chartType: MajorType;
   columns: { name: string; type: string }[];
+  colorTargets: ColorSelection[];
   hasResult: boolean;
   disabled: boolean;
-  paletteActiveIndex: number;
+  paletteColors: string[];
+  paletteReversed: boolean;
+  continuousPalette: boolean;
+  colorMap: Record<string, string>;
+  autoColorMap: Record<string, string>;
+  itemColorOverrides: unknown;
+  colorSelection: ColorSelection | null;
+  colorPicking: boolean;
   onChange: (value: unknown) => void;
   onChangeType: (type: MajorType) => void;
-  onSelectPaletteIndex: (index: number) => void;
+  onSelectColorTarget: (target: ColorSelection) => void;
+  onColorPickingChange: (picking: boolean) => void;
+  onApplySelectedColor: (color: string) => void;
+  onClearSelectedColor: () => void;
 }) {
   const fieldName = fieldNameFor(def.key);
   const fieldId = `option-${fieldName}`;
@@ -94,9 +125,10 @@ export function OptionControl({
           value={String(value ?? '')}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled}
-          rows={2}
+          rows={def.key === 'tooltip.template' ? 5 : 2}
           className="w-full resize-none rounded-md border border-border bg-bg-panel px-3 py-2 text-[13px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-50"
         />
+        {def.help && <span className="text-[11px] leading-4 text-text-tertiary">{def.help}</span>}
       </Labeled>
     );
   }
@@ -132,14 +164,20 @@ export function OptionControl({
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Segmented value={String(value)} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={onChange} /></div>;
       break;
     }
-    case 'select':
-      control = <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={(def.choices ?? []).map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(event) => onChange(coerce(def, event.target.value))} /></div>;
+    case 'select': {
+      const baseChoices = def.key === 'palettePreset' ? paletteChoicesForChartType(chartType) : (def.choices ?? []);
+      const currentValue = String(value ?? '');
+      const choices = def.key === 'palettePreset' && currentValue && !baseChoices.some((choice) => String(choice.value) === currentValue)
+        ? [{ value: currentValue, label: '기존 테마' }, ...baseChoices]
+        : baseChoices;
+      control = <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={currentValue} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(event) => onChange(coerce(def, event.target.value))} /></div>;
       break;
+    }
     case 'text':
       control = <div className="w-36"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /></div>;
       break;
     case 'number':
-      control = <div className="w-24"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" type="number" value={value == null ? '' : String(value)} min={def.min} max={def.max} onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))} /></div>;
+      control = <div className="w-24"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" type="number" value={value == null ? '' : String(value)} min={def.min} max={def.max} step={def.step} onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))} /></div>;
       break;
     case 'slider':
       control = (
@@ -152,26 +190,87 @@ export function OptionControl({
     case 'toggle':
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Switch checked={value === true} onChange={onChange} aria-label={def.label} /></div>;
       break;
-    case 'color':
-      control = <input id={fieldId} name={fieldName} aria-label={def.label} type="color" value={String(value ?? '#5470C6')} onChange={(event) => onChange(event.target.value)} disabled={disabled} className="h-7 w-10 rounded border border-border disabled:opacity-50" />;
+    case 'color': {
+      const automaticBorderColor = def.key === 'tooltip.borderColor' && value == null;
+      control = (
+        <div className="flex items-center gap-2">
+          <input
+            id={fieldId}
+            name={fieldName}
+            aria-label={def.label}
+            type="color"
+            value={normalizeHex(String(value ?? '#FFFFFF'))}
+            onChange={(event) => onChange(event.target.value.toUpperCase())}
+            disabled={disabled}
+            className="h-7 w-10 rounded border border-border disabled:opacity-50"
+          />
+          {def.key === 'tooltip.borderColor' && (
+            <button
+              type="button"
+              disabled={disabled || automaticBorderColor}
+              onClick={() => onChange(null)}
+              className="text-[11px] text-text-tertiary hover:text-text-primary disabled:opacity-50"
+            >
+              {automaticBorderColor ? '데이터 색상' : '자동'}
+            </button>
+          )}
+        </div>
+      );
       break;
+    }
     case 'palette':
-      control = <PaletteControl value={value} selectedIndex={paletteActiveIndex} disabled={disabled} label={def.label} onChange={onChange} onSelect={onSelectPaletteIndex} />;
+      control = (
+        <PaletteControl
+          value={value}
+          selectedColor={colorSelection
+            ? resolvedSelectionColor(colorSelection, colorTargets, colorMap, autoColorMap, itemColorOverrides, paletteColors)
+            : null}
+          selectedTarget={colorSelection}
+          disabled={disabled}
+          label={def.label}
+          sequential={paletteFamilyForChartType(chartType) === 'sequential'}
+          reversed={paletteReversed}
+          continuous={continuousPalette}
+          onApply={onApplySelectedColor}
+        />
+      );
       break;
     case 'columnRef':
       control = hasResult
         ? <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={columns.map((column) => ({ value: column.name, label: column.name }))} onChange={(event) => onChange(event.target.value)} placeholder="컬럼" /></div>
         : <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>;
       break;
-    case 'colorMap':
-      control = <span className="text-xs text-text-tertiary">{hasResult ? '행별 색 지정(후속)' : '실행 후 지정 가능'}</span>;
+    case 'colorMap': {
+      const colorMap = value && typeof value === 'object' ? value as Record<string, string> : {};
+      control = !hasResult
+        ? <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>
+        : <ColorTargetControl
+            label={chartType === 'map' || chartType === 'heatmap' ? '요소 색상' : def.label}
+            targets={colorTargets}
+            selection={colorSelection}
+            colorMap={colorMap}
+            autoColorMap={autoColorMap}
+            itemColorOverrides={itemColorOverrides}
+            palette={paletteColors}
+            picking={colorPicking}
+            disabled={disabled}
+            onSelect={onSelectColorTarget}
+            onPickingChange={onColorPickingChange}
+            onApplyColor={onApplySelectedColor}
+            onClearColor={onClearSelectedColor}
+          />;
       break;
+    }
     case 'button':
       control = <Button variant="secondary" size="sm" className="h-7" disabled={disabled}>{def.label}</Button>;
       break;
   }
 
   if (def.control === 'button') return <div className="flex items-center justify-between gap-2">{control}</div>;
+  if (def.control === 'colorMap' && hasResult) return control;
+  if (def.control === 'palette' || def.control === 'colorMap') {
+    return <Labeled label={def.label} stack>{control}</Labeled>;
+  }
   return <Labeled label={def.label}>{control}</Labeled>;
 }
 
@@ -179,70 +278,272 @@ function coerce(def: OptionDef, raw: string): unknown {
   return def.choices?.some((choice) => typeof choice.value === 'number') ? Number(raw) : raw;
 }
 
-export function coercePaletteIndex(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
-}
-
-function PaletteControl({ value, selectedIndex, disabled, label, onChange, onSelect }: {
+function PaletteControl({ value, selectedColor, selectedTarget, disabled, label, sequential, reversed, continuous, onApply }: {
   value: unknown;
-  selectedIndex: number;
+  selectedColor: string | null;
+  selectedTarget: ColorSelection | null;
   disabled: boolean;
   label: string;
-  onChange: (value: unknown) => void;
-  onSelect: (index: number) => void;
+  sequential: boolean;
+  reversed: boolean;
+  continuous: boolean;
+  onApply: (color: string) => void;
 }) {
   const palette = normalizePalette(value);
-  const safeSelected = Math.min(Math.max(0, selectedIndex), palette.length - 1);
-  const color = normalizeHex(palette[safeSelected] ?? DEFAULT_PALETTE[0]);
-  const rgb = hexToRgb(color);
-
-  const update = (nextColor: string) => {
-    const next = [...palette];
-    next[safeSelected] = normalizeHex(nextColor);
-    onChange(next);
-  };
-  const updateRgb = (channel: 'r' | 'g' | 'b', raw: string) => {
-    const next = { ...rgb, [channel]: clampRgb(Number(raw)) };
-    update(rgbToHex(next.r, next.g, next.b));
-  };
+  const displayPalette = sequential && reversed ? [...palette].reverse() : palette;
+  const gradientPalette = sequential && !continuous
+    ? ['#F7F7F7', displayPalette[0] ?? DEFAULT_PALETTE[0]]
+    : displayPalette;
+  const normalizedSelected = selectedColor ? normalizeHex(selectedColor) : null;
+  const unavailable = disabled || !selectedTarget;
 
   return (
-    <div className={cn('flex w-full flex-col gap-2', disabled && 'pointer-events-none opacity-50')}>
+    <div className={cn('flex flex-col gap-2', unavailable && 'opacity-50')}>
+      {sequential && (
+        <div className="flex items-center gap-2 text-[10px] text-text-tertiary">
+          <span className="shrink-0">낮은 값</span>
+          <div
+            data-testid="palette-gradient"
+            role="img"
+            aria-label={`낮은 값에서 높은 값 색상${reversed ? ' · 반전됨' : ''}`}
+            className="h-3 flex-1 rounded-sm border border-black/10"
+            style={{ background: `linear-gradient(to right, ${gradientPalette.join(', ')})` }}
+          />
+          <span className="shrink-0">높은 값</span>
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
-        {palette.map((item, index) => {
+        {displayPalette.map((item, index) => {
           const swatch = normalizeHex(item);
-          const active = index === safeSelected;
+          const active = normalizedSelected === swatch;
           return (
             <button
               key={`${swatch}-${index}`}
               type="button"
-              aria-label={`${label} ${index + 1}번 색상 선택`}
+              aria-label={`${label} ${index + 1}번 색상을 ${selectedTarget?.label ?? '선택한 대상'}에 적용`}
               data-testid={`palette-swatch-${index}`}
-              disabled={disabled}
-              onClick={() => onSelect(index)}
+              title={selectedTarget ? `${selectedTarget.label}에 적용` : '먼저 시리즈 칩을 선택하거나 차트에서 요소를 선택하세요'}
+              disabled={unavailable}
+              onClick={() => onApply(swatch)}
               className={cn('size-6 rounded border transition-transform disabled:cursor-not-allowed', active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105')}
               style={{ backgroundColor: swatch }}
             />
           );
         })}
       </div>
-      <div className="grid grid-cols-[44px_1fr] items-center gap-x-2 gap-y-1.5">
-        <span className="text-xs text-text-tertiary">색상</span>
-        <input id="option-palette-color" name="paletteColor" aria-label="선택한 팔레트 색상" type="color" value={color} disabled={disabled} onChange={(event) => update(event.target.value)} className="h-8 w-full rounded border border-border bg-bg-panel disabled:opacity-50" />
-        {(['r', 'g', 'b'] as const).map((channel) => (
-          <label key={channel} className="contents">
-            <span className="text-xs uppercase text-text-tertiary">{channel}</span>
-            <Input id={`option-palette-${channel}`} name={`palette${channel.toUpperCase()}`} aria-label={`선택한 팔레트 ${channel.toUpperCase()} 값`} size="sm" type="number" min={0} max={255} value={String(rgb[channel])} disabled={disabled} onChange={(event) => updateRgb(channel, event.target.value)} />
-          </label>
-        ))}
-      </div>
     </div>
   );
 }
 
+function ColorTargetControl({
+  label,
+  targets,
+  selection,
+  colorMap,
+  autoColorMap,
+  itemColorOverrides,
+  palette,
+  picking,
+  disabled,
+  onSelect,
+  onPickingChange,
+  onApplyColor,
+  onClearColor,
+}: {
+  label: string;
+  targets: ColorSelection[];
+  selection: ColorSelection | null;
+  colorMap: Record<string, string>;
+  autoColorMap: Record<string, string>;
+  itemColorOverrides: unknown;
+  palette: string[];
+  picking: boolean;
+  disabled: boolean;
+  onSelect: (target: ColorSelection) => void;
+  onPickingChange: (picking: boolean) => void;
+  onApplyColor: (color: string) => void;
+  onClearColor: () => void;
+}) {
+  const activeColor = selection
+    ? resolvedSelectionColor(selection, targets, colorMap, autoColorMap, itemColorOverrides, palette)
+    : normalizeHex(palette[0] ?? DEFAULT_PALETTE[0]);
+  const selectionHasOverride = selection?.scope === 'series'
+    ? colorMap[selection.seriesName] != null
+    : selection?.scope === 'item' && (
+      !!findItemColorOverride(itemColorOverrides, selection)
+      || (selection.kind === 'pie' && colorMap[String(selection.dimensions[0])] != null)
+    );
+  const openEditor = () => {
+    const picker = document.getElementById('option-series-color-picker') as HTMLInputElement | null;
+    if (!picker) return;
+    try {
+      if (typeof picker.showPicker === 'function') picker.showPicker();
+      else picker.click();
+    } catch {
+      picker.click();
+    }
+  };
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
+        <span className="mr-auto text-[13px] text-text-secondary">{label}</span>
+        <Button
+          variant={picking ? 'primary' : 'secondary'}
+          size="sm"
+          className="h-7 px-2 text-[11px]"
+          data-testid="chart-color-pick"
+          aria-pressed={picking}
+          disabled={disabled}
+          onClick={() => onPickingChange(!picking)}
+        >
+          {picking ? '선택 중' : '차트에서 선택'}
+        </Button>
+        <div className="relative shrink-0">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            data-testid="series-color-edit"
+            disabled={disabled || !selection}
+            onClick={openEditor}
+          >
+            직접 지정
+          </Button>
+          <input
+            id="option-series-color-picker"
+            name="seriesColor"
+            aria-label={`${selection?.label ?? '선택한 대상'} 색상 직접 지정`}
+            type="color"
+            value={activeColor}
+            disabled={disabled || !selection}
+            tabIndex={-1}
+            onChange={(event) => onApplyColor(event.target.value.toUpperCase())}
+            className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={disabled || !selectionHasOverride}
+          onClick={onClearColor}
+          className="h-7 shrink-0 rounded px-1.5 text-[11px] text-text-secondary hover:bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          지정 해제
+        </button>
+      </div>
+      {selection?.scope === 'item' && (
+        <div className="flex min-h-8 items-center gap-1.5" aria-live="polite">
+          <div
+            data-testid="selected-chart-color-item"
+            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-text-primary bg-muted px-2.5 py-1.5 text-[11px] text-text-primary ring-2 ring-primary/20"
+            title={selection.label}
+          >
+            <span className="min-w-0 truncate">{selection.label}</span>
+            <span className="size-3.5 shrink-0 rounded-sm border border-black/10" style={{ backgroundColor: activeColor }} />
+          </div>
+        </div>
+      )}
+      <div data-testid="series-color-grid" className="grid grid-cols-5 gap-1.5">
+        {targets.map((target) => {
+          const color = resolvedSelectionColor(target, targets, colorMap, autoColorMap, itemColorOverrides, palette);
+          const active = sameColorSelection(target, selection);
+          const targetId = colorSelectionId(target);
+          return (
+            <button
+              key={targetId}
+              type="button"
+              data-testid={`series-color-chip-${target.label}`}
+              aria-label={`${target.label} 색상 선택`}
+              title={target.label}
+              disabled={disabled}
+              onClick={() => onSelect(target)}
+              className={cn(
+                'flex h-7 min-w-0 items-center justify-between gap-1.5 rounded border px-2 text-[11px] text-text-secondary transition-colors disabled:cursor-not-allowed',
+                active ? 'border-text-primary bg-muted ring-2 ring-primary/20' : 'border-border hover:bg-muted',
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate text-left">{target.label}</span>
+              <span
+                data-testid={`series-color-swatch-${target.label}`}
+                className="size-3.5 shrink-0 rounded-sm border border-black/10"
+                style={{ backgroundColor: color }}
+              />
+            </button>
+          );
+        })}
+      </div>
+      {targets.length === 0 && !selection && (
+        <p className="text-[11px] leading-4 text-text-tertiary">차트에서 요소를 선택한 뒤 색상을 지정할 수 있습니다.</p>
+      )}
+    </div>
+  );
+}
+
+function resolvedSelectionColor(
+  selection: ColorSelection,
+  targets: ColorSelection[],
+  colorMap: Record<string, string>,
+  autoColorMap: Record<string, string>,
+  itemColorOverrides: unknown,
+  palette: string[],
+): string {
+  const paletteSize = Math.max(1, palette.length);
+  if (selection.scope === 'series') {
+    const seriesTargets = targets.filter((target) => target.scope === 'series');
+    const index = Math.max(0, seriesTargets.findIndex((target) => target.seriesName === selection.seriesName));
+    return normalizeHex(
+      colorMap[selection.seriesName]
+      ?? autoColorMap[selection.seriesName]
+      ?? palette[index % paletteSize]
+      ?? DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+    );
+  }
+
+  const override = findItemColorOverride(itemColorOverrides, selection);
+  if (override) return override.color;
+  if (selection.kind === 'pie') {
+    const itemName = String(selection.dimensions[0] ?? '');
+    const pieTargets = targets.filter((target) => target.scope === 'item' && target.kind === 'pie');
+    const index = Math.max(0, pieTargets.findIndex((target) => sameColorSelection(target, selection)));
+    return normalizeHex(
+      colorMap[itemName]
+      ?? autoColorMap[itemName]
+      ?? selection.renderedColor
+      ?? palette[index % paletteSize]
+      ?? DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+    );
+  }
+  if (selection.kind === 'cartesian' || selection.kind === 'scatter') {
+    const seriesTargets = targets.filter((target) => target.scope === 'series');
+    const index = Math.max(0, seriesTargets.findIndex((target) => target.seriesName === selection.seriesName));
+    return normalizeHex(
+      colorMap[selection.seriesName]
+      ?? autoColorMap[selection.seriesName]
+      ?? selection.renderedColor
+      ?? palette[index % paletteSize]
+      ?? DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+    );
+  }
+  return normalizeHex(selection.renderedColor ?? palette[0] ?? DEFAULT_PALETTE[0]);
+}
+
+function sameColorSelection(left: ColorSelection, right: ColorSelection | null): boolean {
+  if (!right || left.scope !== right.scope) return false;
+  if (left.scope === 'series' && right.scope === 'series') return left.seriesName === right.seriesName;
+  return left.scope === 'item'
+    && right.scope === 'item'
+    && itemColorTargetKey(left) === itemColorTargetKey(right);
+}
+
+function colorSelectionId(selection: ColorSelection): string {
+  return selection.scope === 'series'
+    ? `series:${selection.seriesName}`
+    : `item:${itemColorTargetKey(selection)}`;
+}
+
 function normalizePalette(value: unknown): string[] {
   const source = Array.isArray(value) && value.length > 0 ? value : DEFAULT_PALETTE;
-  return source.map((color) => normalizeHex(String(color))).slice(0, 8);
+  return source.map((color) => normalizeHex(String(color))).slice(0, 12);
 }
 
 function normalizeHex(value: string): string {
@@ -253,24 +554,6 @@ function normalizeHex(value: string): string {
     return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
   }
   return DEFAULT_PALETTE[0];
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const normalized = normalizeHex(hex).slice(1);
-  return {
-    r: parseInt(normalized.slice(0, 2), 16),
-    g: parseInt(normalized.slice(2, 4), 16),
-    b: parseInt(normalized.slice(4, 6), 16),
-  };
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map((value) => clampRgb(value).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
-
-function clampRgb(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(255, Math.max(0, Math.round(value)));
 }
 
 function fieldNameFor(key: string): string {

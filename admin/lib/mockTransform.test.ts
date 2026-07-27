@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import contractCases from '@chartsdk/chart-options/layout-contract-cases.json';
 import samplingCases from '@chartsdk/chart-options/sampling-contract-cases.json';
 import type { BuilderConfig, ChartType, QueryResult } from './api/types';
-import { assembleOption, buildAggregateRows, buildGeneratedSql } from '../mocks/mockTransform';
+import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql } from '../mocks/mockTransform';
 import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
+import { MAJOR_TYPES, optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
+import { cartoPalette } from '@chartsdk/chart-options/palettes';
 
 type LayoutContractCase = {
   name: string;
@@ -33,8 +35,6 @@ function valueAt(root: unknown, path: string): unknown {
   }, root);
 }
 
-describe('mock 변환기 레이아웃 계약', () => {
-  it.each(contractCases as LayoutContractCase[])('$name', ({ chartType, options, expected, absent = [] }) => {
 describe('mock 축 없는 조회', () => {
   it('전체 테이블 컬럼에 조건과 원본 컬럼 정렬을 적용한다', () => {
     const config: BuilderConfig = {
@@ -54,9 +54,230 @@ describe('mock 축 없는 조회', () => {
   });
 });
 
+describe('mock 변환기 레이아웃 계약', () => {
+  it.each(contractCases as LayoutContractCase[])('$name', ({ chartType, options, expected, absent = [] }) => {
     const option = assembleOption(result, chartType, options);
     for (const [path, value] of Object.entries(expected)) expect(valueAt(option, path), path).toEqual(value);
     for (const path of absent) expect(valueAt(option, path), path).toBeUndefined();
+  });
+
+  it('X/Y축 제목 끝점 여백을 계산하고 레거시 축 간격을 제거한다', () => {
+    const option = assembleOption(result, 'bar', {
+      xAxis: {
+        title: '기간', titleLocation: 'start', titleGap: 34, titleRotate: 15,
+        position: 'top', offset: 7,
+      },
+      yAxis: {
+        title: '매출', titleLocation: 'end', titleGap: 72, titleRotate: 90,
+        position: 'right', offset: 11, secondAxis: true,
+      },
+    });
+    const xAxis = option.xAxis as Record<string, unknown>;
+    const yAxes = option.yAxis as Array<Record<string, unknown>>;
+    const series = option.series as Array<Record<string, unknown>>;
+
+    expect(xAxis).toMatchObject({
+      name: '기간', nameLocation: 'start', nameGap: 8, nameRotate: 15,
+      position: 'top',
+    });
+    expect(xAxis.offset).toBeUndefined();
+    expect(yAxes[0]).toMatchObject({
+      name: '매출', nameLocation: 'end', nameGap: 8, nameRotate: -90,
+      position: 'right',
+    });
+    expect(yAxes[0].offset).toBeUndefined();
+    expect(yAxes[1].position).toBe('left');
+    expect(series[1].yAxisIndex).toBe(1);
+  });
+
+  it('가로 막대에서는 저장한 X/Y축 위치를 물리적 Y/X축 방향으로 변환한다', () => {
+    const option = assembleOption(result, 'bar', {
+      variant: 'horizontal',
+      xAxis: { title: '범주', position: 'top' },
+      yAxis: { title: '값', position: 'right' },
+    });
+
+    expect((option.xAxis as Record<string, unknown>).position).toBe('top');
+    expect((option.yAxis as Record<string, unknown>).position).toBe('right');
+    expect((option.xAxis as Record<string, unknown>).nameRotate).toBe(0);
+    expect((option.yAxis as Record<string, unknown>).nameRotate).toBe(-90);
+  });
+
+  it('X축 범주 라벨은 기본 전체, Y축 숫자 눈금은 기본 자동으로 조립한다', () => {
+    const option = assembleOption(result, 'bar', {});
+    const xAxis = option.xAxis as Record<string, any>;
+    const yAxis = option.yAxis as Record<string, any>;
+
+    expect(xAxis.axisLabel.interval).toBe(0);
+    expect(xAxis.axisLabel.hideOverlap).toBe(false);
+    expect(yAxis.interval).toBeUndefined();
+    expect(yAxis.splitNumber).toBe(5);
+    expect(yAxis.scale).toBe(false);
+  });
+
+  it('X축 자동 모드에서만 겹치는 라벨을 숨기고 지정 간격은 그대로 유지한다', () => {
+    const option = assembleOption(result, 'bar', {
+      xAxis: {
+        labelIntervalMode: 'step', labelEvery: 3,
+        showMinLabel: true, showMaxLabel: false, hideOverlap: true,
+      },
+      yAxis: { tickMode: 'fixed', interval: 20, includeZero: false },
+    });
+    const xAxis = option.xAxis as Record<string, any>;
+    const yAxis = option.yAxis as Record<string, any>;
+
+    expect(xAxis.axisLabel).toMatchObject({
+      interval: 2, showMinLabel: true, showMaxLabel: false, hideOverlap: false,
+    });
+    expect(yAxis).toMatchObject({ interval: 20, scale: true });
+    expect(yAxis.splitNumber).toBeUndefined();
+
+    const automatic = assembleOption(result, 'bar', {
+      xAxis: { labelIntervalMode: 'auto', hideOverlap: false },
+    }).xAxis as Record<string, any>;
+    expect(automatic.axisLabel).toMatchObject({ interval: 'auto', hideOverlap: true });
+  });
+
+  it('Y축의 레거시 최소·최대 눈금 간격은 제거하고 숫자형 X축 설정은 유지한다', () => {
+    const withoutLegacyBounds = assembleOption(result, 'bar', {
+      yAxis: { minInterval: 10, maxInterval: 20 },
+    }).yAxis as Record<string, any>;
+    expect(withoutLegacyBounds.minInterval).toBeUndefined();
+    expect(withoutLegacyBounds.maxInterval).toBeUndefined();
+
+    const scatter = assembleOption(result, 'scatter', {
+      xAxis: { minInterval: 1, maxInterval: 5 },
+    }).xAxis as Record<string, any>;
+    expect(scatter).toMatchObject({ minInterval: 1, maxInterval: 5 });
+  });
+
+  it('히트맵의 범주형 Y축은 기본 자동 라벨 간격을 사용한다', () => {
+    const option = assembleOption(result, 'heatmap', {});
+    expect((option.yAxis as Record<string, any>).axisLabel.interval).toBe('auto');
+  });
+
+  it('지도 툴팁 템플릿과 강조 색상을 서버 변환기와 같은 계약으로 조립한다', () => {
+    const option = assembleOption(result, 'map', {
+      map: {
+        tooltip: { enabled: true, template: '{series}\n{name}: {value}' },
+        emphasis: { enabled: true, color: '#12AB34' },
+      },
+    });
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect((option.tooltip as Record<string, unknown>).show).toBeUndefined();
+    expect(option.__chartsdkTooltip).toEqual({ chartType: 'map', template: '{series}\n{name}: {value}' });
+    expect(series.name).toBe('s1');
+    expect(series.emphasis.itemStyle.areaColor).toBe('#12AB34');
+    expect(series.select).toBeUndefined();
+  });
+
+  it('지도 포인트의 툴팁과 강조 효과를 함께 끌 수 있다', () => {
+    const option = assembleOption(result, 'geoscatter', {
+      map: { tooltip: { enabled: false }, emphasis: { enabled: false } },
+    });
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect((option.tooltip as Record<string, unknown>).show).toBe(false);
+    expect(option.__chartsdkTooltip).toBeUndefined();
+    expect((option.geo as Record<string, any>).emphasis.disabled).toBe(true);
+    expect(series.emphasis.disabled).toBe(true);
+  });
+
+  it.each(MAJOR_TYPES)('%s 초기 상호작용은 ECharts 기본 동작을 덮어쓰지 않는다', (chartType) => {
+    const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
+    const tooltip = option.tooltip as Record<string, unknown>;
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect(tooltip.show).toBeUndefined();
+    expect(tooltip.trigger).toBeUndefined();
+    expect(tooltip.confine).toBeUndefined();
+    expect(tooltip.backgroundColor).toBe('#FFFFFF');
+    expect(tooltip.borderColor).toBeUndefined();
+    expect(tooltip.borderWidth).toBe(1);
+    expect(tooltip.padding).toBe(10);
+    expect((tooltip.textStyle as Record<string, unknown>).color).toBe('#666666');
+    expect(option.__chartsdkTooltip).toBeUndefined();
+
+    if (chartType === 'line' || chartType === 'scatter' || chartType === 'geoscatter') {
+      expect(series.emphasis).toEqual({ scale: true });
+    } else if (chartType === 'pie') {
+      expect(series.emphasis).toEqual({ scale: true, scaleSize: 5 });
+    } else if (chartType === 'boxplot') {
+      expect(series.emphasis).toEqual({ scale: true, itemStyle: { borderWidth: 2 } });
+    } else {
+      expect(series.emphasis).toBeUndefined();
+    }
+    if (chartType === 'geoscatter') expect((option.geo as Record<string, any>).emphasis).toBeUndefined();
+  });
+
+  it.each(MAJOR_TYPES)('%s 툴팁과 강조 효과를 공통 옵션으로 끌 수 있다', (chartType) => {
+    const options = optionsWithDefaults(chartType, {
+      tooltip: { enabled: false },
+      emphasis: { enabled: false },
+    });
+    const option = assembleOption(result, chartType, options);
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect((option.tooltip as Record<string, unknown>).show).toBe(false);
+    expect(option.__chartsdkTooltip).toBeUndefined();
+    expect(series.emphasis).toEqual({ disabled: true });
+    if (chartType === 'geoscatter') expect((option.geo as Record<string, any>).emphasis).toEqual({ disabled: true });
+  });
+
+  it.each(MAJOR_TYPES)('%s 사용자 툴팁 템플릿을 공통 메타데이터로 전달한다', (chartType) => {
+    const option = assembleOption(result, chartType, optionsWithDefaults(chartType, {
+      tooltip: {
+        trigger: chartType === 'map' || chartType === 'geoscatter' ? undefined : 'axis',
+        axisPointer: 'shadow',
+        confine: 'inside',
+        contentMode: 'custom',
+        template: '{series}: {value}',
+      },
+    }));
+
+    expect((option.tooltip as Record<string, unknown>).confine).toBe(true);
+    expect(option.__chartsdkTooltip).toEqual({ chartType, template: '{series}: {value}' });
+  });
+
+  it.each(MAJOR_TYPES)('%s 툴팁 스타일을 공통 ECharts 경로로 변환한다', (chartType) => {
+    const option = assembleOption(result, chartType, optionsWithDefaults(chartType, {
+      tooltip: {
+        backgroundColor: '#102030',
+        textColor: '#F0F0F0',
+        borderColor: '#405060',
+        borderWidth: 3,
+        padding: 16,
+      },
+    }));
+    const tooltip = option.tooltip as Record<string, any>;
+
+    expect(tooltip.backgroundColor).toBe('#102030');
+    expect(tooltip.textStyle.color).toBe('#F0F0F0');
+    expect(tooltip.borderColor).toBe('#405060');
+    expect(tooltip.borderWidth).toBe(3);
+    expect(tooltip.padding).toBe(16);
+  });
+
+  it.each([
+    ['bar', 'itemStyle.color'],
+    ['line', 'lineStyle.color'],
+    ['pie', 'itemStyle.color'],
+    ['scatter', 'itemStyle.color'],
+    ['boxplot', 'itemStyle.color'],
+    ['heatmap', 'itemStyle.color'],
+    ['map', 'itemStyle.areaColor'],
+    ['geoscatter', 'itemStyle.color'],
+  ] as Array<[MajorType, string]>)('%s 사용자 강조 색상을 차트별 ECharts 경로로 변환한다', (chartType, path) => {
+    const option = assembleOption(result, chartType, optionsWithDefaults(chartType, {
+      emphasis: { colorMode: 'custom', color: '#12AB34' },
+    }));
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect(valueAt(series.emphasis, path)).toBe('#12AB34');
+    if (chartType === 'geoscatter') {
+      expect(valueAt((option.geo as Record<string, any>).emphasis, 'itemStyle.areaColor')).toBe('#12AB34');
+    }
   });
 });
 

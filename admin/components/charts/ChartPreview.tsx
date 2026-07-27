@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import type { MajorType } from '@chartsdk/chart-options';
+import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
+import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
 import krSido from '@chartsdk/chart-options/maps/kr-sido.json';
 import krSigungu from '@chartsdk/chart-options/maps/kr-sigungu.json';
 import {
@@ -14,6 +16,13 @@ import {
   type MapViewport,
 } from '@chartsdk/chart-options/geo';
 import { hasChartTitle, responsiveTitlePatch, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
+import {
+  colorSelectionFromChartClick,
+  locateColorSelection,
+  type ChartColorClick,
+  type LocatedColorItem,
+} from '@/lib/chartColorSelection';
+import { cn } from '@/lib/cn';
 
 export type MapBoundsChangeSource = 'sync' | 'roam' | 'box';
 
@@ -45,6 +54,10 @@ export function ChartPreview({
   mapViewportRevision = 0,
   mapBoxZoomEnabled = true,
   onMapBoundsChange,
+  colorPicking = false,
+  colorSelection = null,
+  onColorSelection,
+  onColorPickingChange,
 }: {
   option: Record<string, unknown> | null;
   chartType?: MajorType;
@@ -53,6 +66,10 @@ export function ChartPreview({
   mapViewportRevision?: number;
   mapBoxZoomEnabled?: boolean;
   onMapBoundsChange?: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
+  colorPicking?: boolean;
+  colorSelection?: ColorSelection | null;
+  onColorSelection?: (selection: Extract<ColorSelection, { scope: 'item' }>) => void;
+  onColorPickingChange?: (picking: boolean) => void;
 }) {
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -61,6 +78,10 @@ export function ChartPreview({
   const renderedMapViewportRevisionRef = useRef<number | null>(null);
   const onMapBoundsChangeRef = useRef(onMapBoundsChange);
   const mapViewportRef = useRef(mapViewport);
+  const chartTypeRef = useRef(chartType);
+  const colorPickingRef = useRef(colorPicking);
+  const onColorSelectionRef = useRef(onColorSelection);
+  const selectedLocationRef = useRef<LocatedColorItem | null>(null);
   const roamFrameRef = useRef<number | null>(null);
   const shiftPressedRef = useRef(false);
   const boxDragRef = useRef<BoxDrag | null>(null);
@@ -74,6 +95,12 @@ export function ChartPreview({
   useEffect(() => {
     mapViewportRef.current = mapViewport;
   }, [mapViewport]);
+
+  useEffect(() => {
+    chartTypeRef.current = chartType;
+    colorPickingRef.current = colorPicking;
+    onColorSelectionRef.current = onColorSelection;
+  }, [chartType, colorPicking, onColorSelection]);
 
   useEffect(() => {
     if (!elRef.current) return;
@@ -91,7 +118,17 @@ export function ChartPreview({
         reportMapBounds('roam');
       });
     };
+    const selectChartItem = (params: ChartColorClick) => {
+      if (!colorPickingRef.current) return;
+      const selection = colorSelectionFromChartClick(
+        chartTypeRef.current,
+        params,
+        chart.getOption() as Record<string, unknown>,
+      );
+      if (selection) onColorSelectionRef.current?.(selection);
+    };
     chart.on('georoam', reportRoamedMapBounds);
+    chart.on('click', selectChartItem);
     const ro = new ResizeObserver(() => {
       chart.resize();
       if (hasTitleRef.current) chart.setOption(responsiveTitlePatch(el.clientWidth));
@@ -102,6 +139,7 @@ export function ChartPreview({
       ro.disconnect();
       if (roamFrameRef.current != null) cancelAnimationFrame(roamFrameRef.current);
       chart.off('georoam', reportRoamedMapBounds);
+      chart.off('click', selectChartItem);
       chart.dispose();
       chartRef.current = null;
     };
@@ -118,6 +156,8 @@ export function ChartPreview({
         && renderedMapViewportRevisionRef.current === mapViewportRevision;
       const mapCamera = preserveCurrentCamera ? currentMapCamera(chart) : null;
       const renderOption = structuredClone(option);
+      delete renderOption.__chartsdkAutoColorMap;
+      hydrateValueFormat(renderOption);
       for (const embedded of takeEmbeddedMaps(renderOption)) {
         if (!echarts.getMap(embedded.name)) echarts.registerMap(embedded.name, embedded.geoJSON as never);
       }
@@ -130,6 +170,7 @@ export function ChartPreview({
       // 임베드/최종 차트의 인터랙션 여부는 기존 map.roam 옵션을 계속 따른다.
       enableMapRoam(renderOption);
       if (mapCamera) applyMapCamera(renderOption, mapCamera);
+      applyColorEditorState(renderOption, colorPickingRef.current);
       hasTitleRef.current = hasChartTitle(renderOption);
       chart.setOption(withResponsiveTitle(renderOption, el.clientWidth), true);
       hasRenderedRef.current = true;
@@ -143,6 +184,42 @@ export function ChartPreview({
       onMapBoundsChangeRef.current?.(null, 'sync');
     }
   }, [chartType, mapViewportRevision, option]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !option) return;
+    const patches = colorPickingPatches(option, colorPicking);
+    if (patches) chart.setOption({ series: patches });
+  }, [colorPicking, option]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const previous = selectedLocationRef.current;
+    if (previous) chart.dispatchAction({ type: 'unselect', ...previous });
+    if (!colorPicking) {
+      selectedLocationRef.current = null;
+      return;
+    }
+    const located = locateColorSelection(
+      chart.getOption() as Record<string, unknown>,
+      chartType,
+      colorSelection,
+    );
+    selectedLocationRef.current = located;
+    if (located) chart.dispatchAction({ type: 'select', ...located });
+  }, [chartType, colorPicking, colorSelection, option]);
+
+  useEffect(() => {
+    if (!colorPicking) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onColorPickingChange?.(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [colorPicking, onColorPickingChange]);
 
   useEffect(() => {
     if (!mapViewportEditing) return;
@@ -173,6 +250,7 @@ export function ChartPreview({
       if (event.key === 'Shift') {
         shiftPressedRef.current = true;
         setBoxZoomArmed(true);
+        if (colorPickingRef.current) onColorPickingChange?.(false);
         return;
       }
       if (event.key === 'Escape' && boxDragRef.current) {
@@ -199,7 +277,7 @@ export function ChartPreview({
       document.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('blur', onBlur);
     };
-  }, [chartType, mapBoxZoomEnabled]);
+  }, [chartType, mapBoxZoomEnabled, onColorPickingChange]);
 
   const beginBoxDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     const chart = chartRef.current;
@@ -273,9 +351,10 @@ export function ChartPreview({
   return (
     <div
       data-testid="chart-preview"
+      data-color-picking={colorPicking}
       data-map-viewport-editing={mapViewportEditing}
       data-box-zoom-armed={boxZoomArmed}
-      className="relative h-full w-full"
+      className={cn('relative h-full w-full', colorPicking && 'cursor-crosshair')}
     >
       <div ref={elRef} className="absolute inset-0" />
       {boxZoomArmed && (
@@ -303,6 +382,45 @@ export function ChartPreview({
       )}
     </div>
   );
+}
+
+function applyColorEditorState(option: Record<string, unknown>, colorPicking: boolean): void {
+  const series = option.series;
+  for (const item of Array.isArray(series) ? series : series ? [series] : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const target = item as Record<string, any>;
+    target.selectedMode = colorPicking ? 'single' : false;
+    if (target.type === 'pie') target.selectedOffset = 0;
+    target.select = {
+      ...(target.select ?? {}),
+      itemStyle: {
+        ...(target.select?.itemStyle ?? {}),
+        borderColor: '#111827',
+        borderWidth: 2,
+      },
+    };
+    if (colorPicking && target.type === 'line') {
+      target.showSymbol = true;
+      target.symbolSize = Math.max(8, typeof target.symbolSize === 'number' ? target.symbolSize : 4);
+    }
+  }
+}
+
+function colorPickingPatches(option: Record<string, unknown>, colorPicking: boolean): Record<string, unknown>[] | null {
+  const source = Array.isArray(option.series) ? option.series : option.series ? [option.series] : [];
+  if (source.length === 0) return null;
+  const patches = source.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return {};
+    const line = item as Record<string, unknown>;
+    if (line.type !== 'line') return { selectedMode: colorPicking ? 'single' : false };
+    const symbolSize = typeof line.symbolSize === 'number' ? line.symbolSize : 4;
+    return {
+      selectedMode: colorPicking ? 'single' : false,
+      showSymbol: colorPicking ? true : line.showSymbol,
+      symbolSize: colorPicking ? Math.max(8, symbolSize) : symbolSize,
+    };
+  });
+  return patches;
 }
 
 function enableMapRoam(option: Record<string, unknown>): void {

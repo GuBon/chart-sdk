@@ -4,6 +4,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronUp, ChevronsRight } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
+import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
@@ -119,6 +120,12 @@ function optionsWithMapViewport(
   return next;
 }
 
+function autoColorMapFromOption(option: Record<string, unknown> | null): Record<string, string> | null {
+  const colors = option?.__chartsdkAutoColorMap;
+  if (!colors || typeof colors !== 'object' || Array.isArray(colors)) return null;
+  return colors as Record<string, string>;
+}
+
 /** 정식 편집 URL만 교체한다. 같은 ChartEditor를 다시 마운트하지 않아 로드 직후 사용자 변경을 덮어쓰지 않는다. */
 function replaceEditorPath(path: string) {
   if (window.location.pathname !== path) window.history.replaceState(window.history.state, '', path);
@@ -194,6 +201,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     undefined,
     () => createMapViewportSession(defaultsFor('bar').map?.viewport),
   );
+  const [colorSelection, setColorSelection] = useState<ColorSelection | null>(null);
+  const [colorPicking, setColorPicking] = useState(false);
+
+  const applyResolvedOption = (nextOption: Record<string, unknown> | null) => {
+    setOption(nextOption);
+    const colors = autoColorMapFromOption(nextOption);
+    if (colors) {
+      setOptions((current) => JSON.stringify(current.autoColorMap ?? {}) === JSON.stringify(colors)
+        ? current
+        : { ...current, autoColorMap: colors });
+    }
+  };
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
@@ -221,6 +240,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setInitialPreviewError(null);
     setResult(null);
     setResultKind(null);
+    setColorSelection(null);
+    setColorPicking(false);
     rawRequestId.current += 1;
     setRaw(null);
     setRawTable(null);
@@ -276,7 +297,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       void queryApi
         .preview({ chartType, options, rows: { columns: result.columns, rows: result.rows } })
         .then((r) => {
-          if (requestId === optionPreviewRequestId.current) setOption(r.option);
+          if (requestId === optionPreviewRequestId.current) applyResolvedOption(r.option);
         })
         .catch(() => {});
     }, 200);
@@ -382,6 +403,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setInitialPreviewLoading(false);
     setInitialPreviewError(null);
     dispatchMapViewport({ type: 'setEditing', editing: false });
+    setColorSelection(null);
+    setColorPicking(false);
   };
 
   // 사이드바 데이터소스 = 탐색 컨텍스트. 소스 변경은 드롭다운 필터만 바꾸고 구성은 보존(비파괴).
@@ -422,7 +445,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   }, [tableSelectionTarget]);
 
   const applyBuilderChange = (next: BuilderConfig) => {
-    setBuilder(normalizeBuilderForChartType(next, chartType));
+    const normalized = normalizeBuilderForChartType(next, chartType);
+    if ((normalized.seriesBy ?? null) !== (builder.seriesBy ?? null)) {
+      // The series namespace changes when a grouping dimension is added, removed, or replaced.
+      // Start that namespace at the beginning of the selected palette; filters and sorting keep
+      // using the persisted map because they do not change seriesBy.
+      setOptions((current) => ({ ...current, autoColorMap: undefined }));
+    }
+    setBuilder(normalized);
     setTableSelectionTarget(null);
     setDirty(true);
     resetResults();
@@ -534,6 +564,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setInitialPreviewLoading(false);
     setInitialPreviewError(null);
     setResultTab('result');
+    setColorSelection(null);
+    setColorPicking(false);
     try {
       const tableQuery = isTableQueryMode(builder, chartType);
       const res = await queryApi.runBuilder({
@@ -548,7 +580,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setResultKind(tableQuery ? 'table' : 'chart');
       setGeneratedSql(res.generatedSql ?? null);
       if (tableQuery) setOption(null);
-      else setOption(res.option ?? null);
+      else applyResolvedOption(res.option ?? null);
       setResultTab('result');
     } catch (e) {
       if (requestId !== runRequestId.current) return;
@@ -634,6 +666,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setOptions(next);
     if (!result || resultKind !== 'chart') setOption(null);
     setDirty(true);
+  };
+
+  const changeColorPicking = (picking: boolean) => {
+    setColorPicking(picking);
+    if (picking) dispatchMapViewport({ type: 'setEditing', editing: false });
   };
 
   const pendingViewport = pendingMapViewport(mapViewportSession);
@@ -805,6 +842,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 mapViewportEditing={mapViewportSession.editing}
                 mapViewport={mapViewportSession.draft}
                 mapViewportRevision={mapViewportSession.revision}
+                colorPicking={colorPicking}
+                colorSelection={colorSelection}
+                onColorSelection={setColorSelection}
+                onColorPickingChange={changeColorPicking}
                 onMapBoundsChange={(bounds, source) => {
                   if (source === 'sync') {
                     dispatchMapViewport({ type: 'syncVisible', bounds });
@@ -812,6 +853,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   }
                   if (!bounds) return;
                   if (source === 'box') {
+                    setColorPicking(false);
                     dispatchMapViewport({ type: 'boxSelect', bounds });
                     setDirty(true);
                     return;
@@ -865,18 +907,26 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   onSaveMapViewport={saveMapViewport}
                   onResetMapViewport={resetMapViewport}
                   onMapViewportSelectMode={(mode: MapViewportMode) => {
+                    if (mode === 'manual') setColorPicking(false);
                     dispatchMapViewport({ type: 'selectPanel', mode });
                   }}
                   onMapViewportChange={(viewport: MapViewport) => {
+                    setColorPicking(false);
                     dispatchMapViewport({ type: 'apply', viewport });
                     setDirty(true);
                   }}
+                  colorSelection={colorSelection}
+                  colorPicking={colorPicking}
+                  onColorSelectionChange={setColorSelection}
+                  onColorPickingChange={changeColorPicking}
                   onCollapse={() => setOptionEditorCollapsed(true)}
                   onChangeChartType={(to, next) => {
                     // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
                     // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
                     const normalized = normalizeBuilderForChartType(builder, to);
                     const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
+                    setColorSelection(null);
+                    setColorPicking(false);
                     if (to === 'map' || to === 'geoscatter') {
                       dispatchMapViewport({
                         type: 'restoreGlobal',

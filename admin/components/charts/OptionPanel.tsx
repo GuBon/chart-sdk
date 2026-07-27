@@ -19,13 +19,25 @@ import {
   type Options,
 } from '@chartsdk/chart-options';
 import { resolveChartTypography } from '@chartsdk/chart-options/display';
+import {
+  applyPalettePreset,
+  applySequentialPaletteDirection,
+  cartoPaletteForChartType,
+} from '@chartsdk/chart-options/palettes';
+import {
+  normalizeHexColor,
+  removeItemColorOverride,
+  upsertItemColorOverride,
+  type ColorSelection,
+} from '@chartsdk/chart-options/colorOverrides';
 import type { MapViewport, MapViewportMode } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { chartTypeLabel } from '@/lib/chartTypes';
 import type { MapViewportSession } from '@/lib/mapViewportSession';
-import { OptionControl, TypographyPolicy, coercePaletteIndex } from './OptionControl';
+import { OptionControl, TypographyPolicy } from './OptionControl';
 import { MapViewportControl } from './MapViewportControl';
+import { staticColorSelections } from '@/lib/chartColorSelection';
 
 export type OptionDockPreference = 'auto' | 'right' | 'bottom';
 export type OptionDock = Exclude<OptionDockPreference, 'auto'>;
@@ -49,6 +61,10 @@ interface Props {
   savingMapViewport: boolean;
   onSaveMapViewport: () => void;
   onResetMapViewport: () => void;
+  colorSelection: ColorSelection | null;
+  colorPicking: boolean;
+  onColorSelectionChange: (selection: ColorSelection | null) => void;
+  onColorPickingChange: (picking: boolean) => void;
   onCollapse?: () => void;
 }
 
@@ -72,6 +88,10 @@ export function OptionPanel({
   savingMapViewport,
   onSaveMapViewport,
   onResetMapViewport,
+  colorSelection,
+  colorPicking,
+  onColorSelectionChange,
+  onColorPickingChange,
   onCollapse,
 }: Props) {
   const [query, setQuery] = useState('');
@@ -98,6 +118,11 @@ export function OptionPanel({
     ? availableTabs.filter((tab) => definitions.some((definition) => optionEditorTabOf(definition) === tab))
     : activeTab ? [activeTab] : [];
   const typography = resolveChartTypography(options);
+  const colorTargets = staticColorSelections(chartType, columns, rows);
+  const effectiveColorSelection = colorSelection ?? colorTargets[0] ?? null;
+  const paletteColors = Array.isArray(options.palette) && options.palette.length > 0
+    ? options.palette.map(String)
+    : cartoPaletteForChartType(chartType, options.palettePreset);
 
   const valueOf = (definition: OptionDef) => {
     if (definition.key === 'chartType') return chartType;
@@ -105,13 +130,68 @@ export function OptionPanel({
     return value === undefined ? defaultOf(definition, chartType) : value;
   };
   const setValue = (definition: OptionDef, value: unknown) => {
-    const next = structuredClone(options);
-    setPath(next, definition.key, value);
+    let next = structuredClone(options);
+    if (definition.key === 'palettePreset') {
+      next = applyPalettePreset(next, chartType, value);
+      onColorPickingChange(false);
+    } else if (definition.key === 'paletteReversed') {
+      next = applySequentialPaletteDirection(next, chartType, value === true);
+    } else if (definition.key === 'palette') {
+      setPath(next, definition.key, value);
+      setPath(next, 'autoColorMap', {});
+    } else {
+      setPath(next, definition.key, value);
+    }
     onChangeOptions(next);
   };
-  const setPaletteActiveIndex = (index: number) => {
+  const applySelectedColor = (color: string) => {
+    if (!effectiveColorSelection) return;
+    const normalizedColor = normalizeHexColor(color);
+    if (!normalizedColor) return;
     const next = structuredClone(options);
-    setPath(next, 'paletteActiveIndex', index);
+    const colorMap = {
+      ...((getPath(next, 'colorMap') && typeof getPath(next, 'colorMap') === 'object')
+        ? getPath(next, 'colorMap') as Record<string, string>
+        : {}),
+    };
+    if (effectiveColorSelection.scope === 'series') {
+      colorMap[effectiveColorSelection.seriesName] = normalizedColor;
+      setPath(next, 'colorMap', colorMap);
+    } else {
+      setPath(next, 'itemColorOverrides', upsertItemColorOverride(
+        getPath(next, 'itemColorOverrides'),
+        effectiveColorSelection,
+        normalizedColor,
+      ));
+      if (effectiveColorSelection.kind === 'pie') {
+        delete colorMap[String(effectiveColorSelection.dimensions[0] ?? '')];
+        setPath(next, 'colorMap', colorMap);
+      }
+    }
+    onColorSelectionChange(effectiveColorSelection);
+    onChangeOptions(next);
+  };
+  const clearSelectedColorOverride = () => {
+    if (!effectiveColorSelection) return;
+    const next = structuredClone(options);
+    const colorMap = {
+      ...((getPath(next, 'colorMap') && typeof getPath(next, 'colorMap') === 'object')
+        ? getPath(next, 'colorMap') as Record<string, string>
+        : {}),
+    };
+    if (effectiveColorSelection.scope === 'series') {
+      delete colorMap[effectiveColorSelection.seriesName];
+      setPath(next, 'colorMap', colorMap);
+    } else {
+      setPath(next, 'itemColorOverrides', removeItemColorOverride(
+        getPath(next, 'itemColorOverrides'),
+        effectiveColorSelection,
+      ));
+    }
+    if (effectiveColorSelection.scope === 'item' && effectiveColorSelection.kind === 'pie') {
+      delete colorMap[String(effectiveColorSelection.dimensions[0] ?? '')];
+      setPath(next, 'colorMap', colorMap);
+    }
     onChangeOptions(next);
   };
   const changeType = (nextType: MajorType) => {
@@ -289,12 +369,26 @@ export function OptionPanel({
                           value={valueOf(definition)}
                           chartType={chartType}
                           columns={columns}
+                          colorTargets={colorTargets}
                           hasResult={hasResult}
                           disabled={disabled}
-                          paletteActiveIndex={coercePaletteIndex(options.paletteActiveIndex)}
+                          paletteColors={paletteColors}
+                          paletteReversed={options.paletteReversed === true}
+                          continuousPalette={options.colorTheme?.version === 2}
+                          colorMap={(options.colorMap ?? {}) as Record<string, string>}
+                          autoColorMap={(options.autoColorMap ?? {}) as Record<string, string>}
+                          itemColorOverrides={options.itemColorOverrides}
+                          colorSelection={effectiveColorSelection}
+                          colorPicking={colorPicking}
                           onChange={(value) => setValue(definition, value)}
                           onChangeType={changeType}
-                          onSelectPaletteIndex={setPaletteActiveIndex}
+                          onSelectColorTarget={(selection) => {
+                            onColorSelectionChange(selection);
+                            onColorPickingChange(false);
+                          }}
+                          onColorPickingChange={onColorPickingChange}
+                          onApplySelectedColor={applySelectedColor}
+                          onClearSelectedColor={clearSelectedColorOverride}
                         />
                       ))}
                     </div>

@@ -365,23 +365,156 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     expect(builderRuns).toBe(0);
   });
 
-  test('팔레트 swatch 선택 후 RGB 사용자지정 값이 미리보기에 반영된다', async ({ page }) => {
+  test('시리즈 칩에 테마 색상을 적용하고 직접 지정 버튼으로 색을 바꾼다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+    const seriesChip = page.locator('[data-testid^="series-color-chip-"]').first();
+    const seriesSwatch = seriesChip.locator('[data-testid^="series-color-swatch-"]');
+    await seriesChip.click();
     await page.getByTestId('palette-swatch-1').click();
-    await page.locator('#option-palette-r').fill('255');
-    await page.locator('#option-palette-g').fill('0');
-    await page.locator('#option-palette-b').fill('0');
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(204, 102, 119)');
 
-    await expect(page.locator('#option-palette-color')).toHaveValue('#ff0000');
-    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(84, 112, 198)');
-    await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(255, 0, 0)');
+    const chipBox = await seriesChip.boundingBox();
+    const swatchBox = await seriesSwatch.boundingBox();
+    expect(chipBox).not.toBeNull();
+    expect(swatchBox).not.toBeNull();
+    expect(swatchBox!.x).toBeGreaterThan(chipBox!.x + chipBox!.width / 2);
+    const gridColumns = await page.getByTestId('series-color-grid').evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean),
+    );
+    expect(gridColumns).toHaveLength(5);
+
+    const colorPicker = page.locator('#option-series-color-picker');
+    const directColorButton = page.getByTestId('series-color-edit');
+    const label = page.getByText('시리즈 색상', { exact: true });
+    const editBox = await directColorButton.boundingBox();
+    const labelBox = await label.boundingBox();
+    expect(editBox).not.toBeNull();
+    expect(labelBox).not.toBeNull();
+    expect(Math.abs((editBox!.y + editBox!.height / 2) - (labelBox!.y + labelBox!.height / 2))).toBeLessThan(4);
+    await colorPicker.evaluate((input) => {
+      const picker = input as HTMLInputElement & { dataset: DOMStringMap };
+      picker.showPicker = () => { picker.dataset.opened = 'true'; };
+    });
+    await directColorButton.click();
+    await expect(colorPicker).toHaveAttribute('data-opened', 'true');
+    await colorPicker.fill('#ff0000');
+
+    await expect(colorPicker).toHaveValue('#ff0000');
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
+    await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(204, 102, 119)');
+
+    await page.locator('#option-palettePreset').selectOption('bold');
+    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(127, 60, 141)');
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
+    await page.getByRole('button', { name: '지정 해제', exact: true }).click();
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(127, 60, 141)');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('차트에서 막대 하나를 선택해 색상을 적용하고 지정 해제한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await selectBase(page, 'sales public');
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    const preview = page.getByTestId('chart-preview');
+    await expect(preview.locator('canvas')).toBeVisible();
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+    await page.getByTestId('chart-color-pick').click();
+    await expect(preview).toHaveAttribute('data-color-picking', 'true');
+    await expect(page.getByText('색상을 바꿀 요소를 선택하세요 · Esc 종료')).toBeVisible();
+
+    const selectedItem = page.getByTestId('selected-chart-color-item');
+    const canvas = preview.locator('canvas');
+    const colorPoint = await canvas.evaluate((element) => {
+      const target = element as HTMLCanvasElement;
+      const context = target.getContext('2d');
+      if (!context) return null;
+      const pixels = context.getImageData(0, 0, target.width, target.height).data;
+      for (let y = 0; y < target.height; y += 2) {
+        for (let x = 0; x < target.width; x += 2) {
+          const offset = (y * target.width + x) * 4;
+          if (pixels[offset] === 136 && pixels[offset + 1] === 204 && pixels[offset + 2] === 238 && pixels[offset + 3] > 0) {
+            return { x: x / target.width, y: y / target.height };
+          }
+        }
+      }
+      return null;
+    });
+    expect(colorPoint).not.toBeNull();
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    await page.mouse.click(
+      bounds!.x + bounds!.width * colorPoint!.x,
+      bounds!.y + bounds!.height * colorPoint!.y,
+    );
+    await expect(selectedItem).toContainText('·');
+
+    const previewRequest = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options.itemColorOverrides?.length === 1;
+    });
+    await page.getByTestId('palette-swatch-2').click();
+    const request = await previewRequest;
+    expect(request.postDataJSON().options.itemColorOverrides).toEqual([
+      expect.objectContaining({
+        kind: 'cartesian',
+        occurrence: 0,
+        color: '#DDCC77',
+      }),
+    ]);
+    await expect(selectedItem.locator('span').last()).toHaveCSS('background-color', 'rgb(221, 204, 119)');
+
+    const clearRequest = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return Array.isArray(request.postDataJSON().options.itemColorOverrides)
+        && request.postDataJSON().options.itemColorOverrides.length === 0;
+    });
+    await page.getByRole('button', { name: '지정 해제', exact: true }).click();
+    expect((await clearRequest).postDataJSON().options.itemColorOverrides).toEqual([]);
+
+    await page.getByTestId('series-color-grid').locator('button').first().click();
+    await expect(preview).toHaveAttribute('data-color-picking', 'false');
+    await expect(selectedItem).toHaveCount(0);
+  });
+
+  test('X축은 전체 라벨이 기본이고 Y축은 자동 눈금에서 고정 간격으로 변경할 수 있다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await selectBase(page, 'sales public');
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await openOptionTab(page, '축');
+    await openOptionSection(page, 'X축');
+    await openOptionSection(page, 'Y축');
+    const xSection = page.locator('section').filter({ has: page.getByText('X축', { exact: true }) });
+    const xLabelRow = xSection.getByText('라벨 표시', { exact: true }).locator('..');
+    await expect(xLabelRow.getByRole('button', { name: '전체', exact: true })).toHaveClass(/bg-bg-panel/);
+    await xLabelRow.getByRole('button', { name: '간격 지정', exact: true }).click();
+    await expect(page.locator('#option-xAxis_labelEvery')).toBeVisible();
+    await page.locator('#option-xAxis_labelEvery').fill('3');
+
+    const ySection = page.locator('section').filter({ has: page.getByText('Y축', { exact: true }) });
+    const yTickRow = ySection.getByText('눈금 방식', { exact: true }).locator('..');
+    await expect(yTickRow.getByRole('button', { name: '자동', exact: true })).toHaveClass(/bg-bg-panel/);
+    await yTickRow.getByRole('button', { name: '고정 간격', exact: true }).click();
+    await expect(page.locator('#option-yAxis_interval')).toBeVisible();
+    await page.locator('#option-yAxis_interval').fill('20');
+
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Maximize, X } from 'lucide-react';
 import type { MajorType } from '@chartsdk/chart-options';
+import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import type { ChartDesignSize, PreviewFitMode } from '@chartsdk/chart-options/display';
 import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import { ChartDesignViewport } from './ChartDesignViewport';
@@ -17,6 +18,10 @@ interface Props {
   mapViewport?: MapViewport;
   mapViewportRevision?: number;
   onMapBoundsChange?: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
+  colorPicking?: boolean;
+  colorSelection?: ColorSelection | null;
+  onColorSelection?: (selection: Extract<ColorSelection, { scope: 'item' }>) => void;
+  onColorPickingChange?: (picking: boolean) => void;
   onClose: () => void;
 }
 
@@ -28,6 +33,10 @@ export function ChartFocusDialog({
   mapViewport,
   mapViewportRevision = 0,
   onMapBoundsChange,
+  colorPicking = false,
+  colorSelection = null,
+  onColorSelection,
+  onColorPickingChange,
   onClose,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -115,6 +124,10 @@ export function ChartFocusDialog({
           mapViewport={mapViewport}
           mapViewportRevision={mapViewportRevision}
           onMapBoundsChange={onMapBoundsChange}
+          colorPicking={colorPicking}
+          colorSelection={colorSelection}
+          onColorSelection={onColorSelection}
+          onColorPickingChange={onColorPickingChange}
         />
       </main>
     </div>
