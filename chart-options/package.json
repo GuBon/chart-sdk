@@ -9,6 +9,7 @@
   "exports": {
     ".": "./optionRegistry.ts",
     "./display": "./display.ts",
+    "./colorOverrides": "./colorOverrides.ts",
     "./geo": "./geo.ts",
     "./renderLayout": "./renderLayout.ts",
     "./sampling": "./sampling.ts",

@@ -111,21 +111,21 @@ public class ChartOptionConverter {
         applyTooltip(o, opt, chartType);
 
         // 신규 유형은 직교 폴스루를 타지 않고 전용 조립(축·시리즈 형태가 다르다).
-        if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows); return o; }
-        if ("heatmap".equals(chartType)) { buildHeatmap(o, opt, columns, dataRows); return o; }
-        if ("map".equals(chartType)) { buildMap(o, opt, columns, dataRows); return o; }
-        if ("geoscatter".equals(chartType)) { buildGeoScatter(o, opt, columns, dataRows); return o; }
+        if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows, itemColors); return o; }
+        if ("heatmap".equals(chartType)) { buildHeatmap(o, opt, columns, dataRows, itemColors); return o; }
+        if ("map".equals(chartType)) { buildMap(o, opt, columns, dataRows, itemColors); return o; }
+        if ("geoscatter".equals(chartType)) { buildGeoScatter(o, opt, columns, dataRows, itemColors); return o; }
 
         if ("pie".equals(chartType)) {
-            o.put("series", List.of(buildPieSeries(opt, variant, dataRows)));
+            o.put("series", List.of(buildPieSeries(opt, variant, dataRows, itemColors)));
             return o;
         }
 
         boolean horizontal = "bar".equals(chartType) && "horizontal".equals(variant);
         boolean scatter = "scatter".equals(chartType);
-        applyGrid(o, opt);
+        applyGrid(o, opt, horizontal);
         applyAxes(o, opt, scatter, horizontal, categories);
-        o.put("series", buildCartesianSeries(opt, chartType, variant, columns, dataRows, horizontal, scatter));
+        o.put("series", buildCartesianSeries(opt, chartType, variant, columns, dataRows, horizontal, scatter, itemColors));
         return o;
     }
 
@@ -213,8 +213,12 @@ public class ChartOptionConverter {
             }
         }
         List<Object> cats = new ArrayList<>(groups.keySet());
+        String seriesName = columns.size() > 1 ? string(columns.get(1).get("name"), "분포") : "분포";
         List<Object> data = new ArrayList<>();
-        for (List<Double> vs : groups.values()) data.add(fiveNumberSummary(vs));
+        for (Map.Entry<String, List<Double>> entry : groups.entrySet()) {
+            Object itemColor = itemColors.color("boxplot", seriesName, List.of(entry.getKey()), 0);
+            data.add(withItemColor(fiveNumberSummary(entry.getValue()), itemColor, "color", true));
+        }
 
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
@@ -300,17 +304,20 @@ public class ChartOptionConverter {
         s.put("name", "값");
         s.put("data", data);
         s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography.dataLabel()));
+        applySeriesEmphasis(s, opt, "heatmap");
         o.put("series", List.of(s));
     }
 
     /** 지도: 내장 행정구역 또는 DB Polygon GeoJSON 경계에 이름·값을 연결한다. */
     private void buildMap(Map<String, Object> o, Map<String, Object> opt,
-                          List<Map<String, Object>> columns, List<List<Object>> rows) {
+                          List<Map<String, Object>> columns, List<List<Object>> rows,
+                          ItemColorResolver itemColors) {
         int nameIndex = columnIndex(columns, SPATIAL_AREA_NAME);
         int valueIndex = columnIndex(columns, SPATIAL_AREA_VALUE);
         int geoJsonIndex = columnIndex(columns, SPATIAL_AREA_GEOJSON);
         boolean spatial = nameIndex >= 0 && valueIndex >= 0 && geoJsonIndex >= 0;
         List<Object> data = new ArrayList<>();
+        ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         List<Object> features = new ArrayList<>();
         MessageDigest digest = spatial ? sha256() : null;
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
@@ -335,7 +342,10 @@ public class ChartOptionConverter {
             point.put("name", name);
             double v = (r.size() > vi && r.get(vi) instanceof Number n) ? n.doubleValue() : 0;
             point.put("value", v);
-            data.add(point);
+            List<Object> dimensions = List.of(name);
+            int occurrence = itemOccurrences.next("map", "", dimensions);
+            Object itemColor = itemColors.color("map", "", dimensions, occurrence);
+            data.add(withItemColor(point, itemColor, "areaColor", false));
             if (v < min) min = v;
             if (v > max) max = v;
         }
@@ -391,7 +401,8 @@ public class ChartOptionConverter {
      * 지도 포인트: 경도(0열)·위도(1열)(+선택 크기값 2열) → geo 좌표계 + scatter (공식 effectScatter-map 예제 구조).
      * JSON 전송이라 symbolSize 콜백 불가 → 크기값이 있으면 포인트별 symbolSize 를 계산해 데이터 항목에 넣는다(6~28px sqrt).
      */
-    private void buildGeoScatter(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+    private void buildGeoScatter(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns,
+                                 List<List<Object>> rows, ItemColorResolver itemColors) {
         boolean hasSize = columns.size() > 2;
         double sMin = Double.POSITIVE_INFINITY, sMax = Double.NEGATIVE_INFINITY;
         if (hasSize) {
@@ -406,18 +417,22 @@ public class ChartOptionConverter {
         int base = map(opt.get("geoscatter")).get("symbolSize") instanceof Number n ? n.intValue() : 10;
 
         List<Object> data = new ArrayList<>();
+        ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         for (List<Object> r : rows) {
             double lng = (r.size() > 0 && r.get(0) instanceof Number n) ? n.doubleValue() : 0;
             double lat = (r.size() > 1 && r.get(1) instanceof Number n) ? n.doubleValue() : 0;
+            List<Object> dimensions = List.of(roundCoordinate(lng), roundCoordinate(lat));
+            int occurrence = itemOccurrences.next("geoscatter", "", dimensions);
+            Object itemColor = itemColors.color("geoscatter", "", dimensions, occurrence);
             if (!hasSize || Double.isInfinite(sMin)) {
-                data.add(List.of(lng, lat));
+                data.add(withItemColor(List.of(lng, lat), itemColor, "color", false));
                 continue;
             }
             double v = (r.size() > 2 && r.get(2) instanceof Number n) ? n.doubleValue() : 0;
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("value", List.of(lng, lat, v));
             point.put("symbolSize", sMax == sMin ? base : (int) Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-            data.add(point);
+            data.add(withItemColor(point, itemColor, "color", false));
         }
 
         o.remove("legend"); // 단일 포인트 시리즈 — 범례 무의미
@@ -609,14 +624,14 @@ public class ChartOptionConverter {
     // ── 시리즈 (직교) ────────────────────────────────────
     private List<Map<String, Object>> buildCartesianSeries(Map<String, Object> opt, String chartType, String variant,
                                                            List<Map<String, Object>> columns, List<List<Object>> dataRows,
-                                                           boolean horizontal, boolean scatter) {
+                                                           boolean horizontal, boolean scatter,
+                                                           ItemColorResolver itemColors) {
         Map<String, Object> barCfg = map(opt.get("bar"));
         Map<String, Object> lineCfg = map(opt.get("line"));
         Map<String, Object> scatterCfg = map(opt.get("scatter"));
         Map<String, Object> seriesTypes = map(opt.get("seriesTypes")); // 혼합(combo): 시리즈명 → "bar"/"line"
         boolean stacked = "stacked".equals(variant) || "stackedArea".equals(variant);
         boolean secondAxis = !horizontal && !scatter && Boolean.TRUE.equals(map(opt.get("yAxis")).get("secondAxis"));
-        boolean individual = "individual".equals(string(opt.get("colorMode"), "palette"));
         int bubbleIdx = scatter && "bubble".equals(variant) ? columnIndex(columns, string(scatterCfg.get("bubbleField"), null)) : -1;
 
         // 100% 정규화(누적 막대): 카테고리(행)별 합으로 나눠 각 카테고리 스택이 100%가 되게 한다.
@@ -637,18 +652,32 @@ public class ChartOptionConverter {
             s.put("name", colName);
 
             List<Object> data = new ArrayList<>();
+            ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
             for (int ri = 0; ri < dataRows.size(); ri++) {
                 List<Object> r = dataRows.get(ri);
                 Object y = r.size() > col ? r.get(col) : null;
+                Object itemValue;
+                List<Object> dimensions;
+                String itemKind;
                 if (scatter) {
                     Object x = r.isEmpty() ? null : r.get(0);
-                    if (bubbleIdx >= 0 && r.size() > bubbleIdx) data.add(java.util.Arrays.asList(x, y, r.get(bubbleIdx)));
-                    else data.add(java.util.Arrays.asList(x, y));
+                    itemValue = bubbleIdx >= 0 && r.size() > bubbleIdx
+                            ? java.util.Arrays.asList(x, y, r.get(bubbleIdx))
+                            : java.util.Arrays.asList(x, y);
+                    dimensions = java.util.Arrays.asList(x, y);
+                    itemKind = "scatter";
                 } else if (catTotals != null && y instanceof Number n && catTotals[ri] != 0) {
-                    data.add(n.doubleValue() / catTotals[ri]);
+                    itemValue = n.doubleValue() / catTotals[ri];
+                    dimensions = java.util.Arrays.asList(r.isEmpty() ? null : r.get(0));
+                    itemKind = "cartesian";
                 } else {
-                    data.add(y);
+                    itemValue = y;
+                    dimensions = java.util.Arrays.asList(r.isEmpty() ? null : r.get(0));
+                    itemKind = "cartesian";
                 }
+                int occurrence = itemOccurrences.next(itemKind, colName, dimensions);
+                Object itemColor = itemColors.color(itemKind, colName, dimensions, occurrence);
+                data.add(withItemColor(itemValue, itemColor, "color", false));
             }
             s.put("data", data);
 
@@ -717,26 +746,26 @@ public class ChartOptionConverter {
     }
 
     // ── 시리즈 (원형) ────────────────────────────────────
-    private Map<String, Object> buildPieSeries(Map<String, Object> opt, String variant, List<List<Object>> dataRows) {
+    private Map<String, Object> buildPieSeries(Map<String, Object> opt, String variant, List<List<Object>> dataRows,
+                                               ItemColorResolver itemColors) {
         Map<String, Object> pieCfg = map(opt.get("pie"));
-        boolean individual = "individual".equals(string(opt.get("colorMode"), "palette"));
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("type", "pie");
 
         List<Object> data = new ArrayList<>();
+        ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         int i = 0;
         for (List<Object> r : dataRows) {
             Map<String, Object> point = new LinkedHashMap<>();
-            point.put("name", r.isEmpty() ? "" : r.get(0));
+            Object name = r.isEmpty() ? "" : r.get(0);
+            point.put("name", name);
             point.put("value", r.size() > 1 ? r.get(1) : 0);
-            if (individual) {
-                Object color = ColorResolver.pickColor(opt, String.valueOf(r.isEmpty() ? "" : r.get(0)), i);
-                if (color != null) point.put("itemStyle", Map.of("color", color));
-            } else {
-                Object color = ColorResolver.paletteColor(opt, i);
-                if (color != null) point.put("itemStyle", Map.of("color", color));
-            }
-            data.add(point);
+            Object color = ColorResolver.pickColor(opt, String.valueOf(name), i);
+            if (color != null) point.put("itemStyle", Map.of("color", color));
+            List<Object> dimensions = java.util.Arrays.asList(name);
+            int occurrence = itemOccurrences.next("pie", "", dimensions);
+            Object itemColor = itemColors.color("pie", "", dimensions, occurrence);
+            data.add(withItemColor(point, itemColor, "color", false));
             i++;
         }
         s.put("data", data);
@@ -754,7 +783,31 @@ public class ChartOptionConverter {
         s.put("label", label);
         putIfNotNull(s, "startAngle", pieCfg.get("startAngle"));
         putIfNotNull(s, "minAngle", pieCfg.get("minAngle"));
+        applySeriesEmphasis(s, opt, "pie");
         return s;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object withItemColor(Object value, Object color, String colorKey, boolean matchBorderColor) {
+        if (color == null) return value;
+        Map<String, Object> item;
+        if (value instanceof Map<?, ?> existing) {
+            item = new LinkedHashMap<>((Map<String, Object>) existing);
+        } else {
+            item = new LinkedHashMap<>();
+            item.put("value", value);
+        }
+        Map<String, Object> itemStyle = item.get("itemStyle") instanceof Map<?, ?> existingStyle
+                ? new LinkedHashMap<>((Map<String, Object>) existingStyle)
+                : new LinkedHashMap<>();
+        itemStyle.put(colorKey, color);
+        if (matchBorderColor) itemStyle.put("borderColor", color);
+        item.put("itemStyle", itemStyle);
+        return item;
+    }
+
+    private double roundCoordinate(double value) {
+        return Math.round(value * 1_000_000d) / 1_000_000d;
     }
 
     // ── 색 매핑 ──────────────────────────────────────────
