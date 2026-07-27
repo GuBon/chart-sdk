@@ -13,10 +13,11 @@ import {
   type Options,
 } from '@chartsdk/chart-options';
 import { resolveChartTypography } from '@chartsdk/chart-options/display';
-import type { MapBounds } from '@chartsdk/chart-options/geo';
+import type { MapViewport, MapViewportMode } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { chartTypeLabel } from '@/lib/chartTypes';
+import type { MapViewportSession } from '@/lib/mapViewportSession';
 import { OptionControl, TypographyPolicy, coercePaletteIndex } from './OptionControl';
 import { MapViewportControl } from './MapViewportControl';
 
@@ -34,9 +35,14 @@ interface Props {
   onChangeChartType: (next: MajorType, nextOptions: Options) => void;
   onChangeOptions: (next: Options) => void;
   onChangeDockPreference: (next: OptionDockPreference) => void;
-  mapViewportEditing: boolean;
-  currentMapBounds: MapBounds | null;
-  onMapViewportEditingChange: (editing: boolean) => void;
+  mapViewportSession: MapViewportSession;
+  onMapViewportSelectMode: (mode: MapViewportMode) => void;
+  onMapViewportChange: (viewport: MapViewport) => void;
+  canSaveMapViewport: boolean;
+  canResetMapViewport: boolean;
+  savingMapViewport: boolean;
+  onSaveMapViewport: () => void;
+  onResetMapViewport: () => void;
   onCollapse?: () => void;
 }
 
@@ -55,9 +61,14 @@ export function OptionPanel({
   onChangeChartType,
   onChangeOptions,
   onChangeDockPreference,
-  mapViewportEditing,
-  currentMapBounds,
-  onMapViewportEditingChange,
+  mapViewportSession,
+  onMapViewportSelectMode,
+  onMapViewportChange,
+  canSaveMapViewport,
+  canResetMapViewport,
+  savingMapViewport,
+  onSaveMapViewport,
+  onResetMapViewport,
   onCollapse,
 }: Props) {
   const [query, setQuery] = useState('');
@@ -175,13 +186,15 @@ export function OptionPanel({
                         <MapViewportControl
                           key={definition.key}
                           chartType={chartType}
-                          value={valueOf(definition)}
-                          regionNames={chartType === 'map' ? rows.flatMap((row) => typeof row[0] === 'string' ? [row[0]] : []) : []}
+                          session={mapViewportSession}
                           disabled={disabled}
-                          editing={mapViewportEditing}
-                          currentBounds={currentMapBounds}
-                          onChange={(value) => setValue(definition, value)}
-                          onEditingChange={onMapViewportEditingChange}
+                          onChange={onMapViewportChange}
+                          onSelectMode={onMapViewportSelectMode}
+                          canSave={canSaveMapViewport}
+                          canReset={canResetMapViewport}
+                          saving={savingMapViewport}
+                          onSave={onSaveMapViewport}
+                          onReset={onResetMapViewport}
                         />
                       ) : (
                         <OptionControl

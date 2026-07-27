@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Maximize2 } from 'lucide-react';
 import { setPath, type Options } from '@chartsdk/chart-options';
 import type { MajorType } from '@chartsdk/chart-options';
-import type { MapBounds } from '@chartsdk/chart-options/geo';
+import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import {
   CHART_SIZE_PRESETS,
   resolveChartDesignSize,
@@ -14,6 +14,7 @@ import {
 import { Select } from '@/components/ui/Select';
 import { ChartDesignViewport } from './ChartDesignViewport';
 import { ChartFocusDialog } from './ChartFocusDialog';
+import type { MapBoundsChangeSource } from './ChartPreview';
 import { PreviewFitControls } from './PreviewFitControls';
 import { mapViewportStatus } from './MapViewportControl';
 
@@ -25,11 +26,25 @@ interface Props {
   error: string | null;
   wide: boolean;
   mapViewportEditing: boolean;
-  onMapBoundsChange: (bounds: MapBounds | null) => void;
+  mapViewport: MapViewport;
+  mapViewportRevision: number;
+  onMapBoundsChange: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
   onChangeOptions: (next: Options) => void;
 }
 
-export function ChartPreviewPanel({ option, options, chartType, loading, error, wide, mapViewportEditing, onMapBoundsChange, onChangeOptions }: Props) {
+export function ChartPreviewPanel({
+  option,
+  options,
+  chartType,
+  loading,
+  error,
+  wide,
+  mapViewportEditing,
+  mapViewport,
+  mapViewportRevision,
+  onMapBoundsChange,
+  onChangeOptions,
+}: Props) {
   const [fitMode, setFitMode] = useState<PreviewFitMode>('contain');
   const [zoom, setZoom] = useState(100);
   const [focusOpen, setFocusOpen] = useState(false);
@@ -55,8 +70,8 @@ export function ChartPreviewPanel({ option, options, chartType, loading, error, 
             <p className="truncate text-[11px] text-text-tertiary">논리 캔버스 {designSize.width}×{designSize.height}</p>
           </div>
           {(chartType === 'map' || chartType === 'geoscatter') && (
-            <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(options.map?.viewport)}`}>
-              표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(options.map?.viewport)}
+            <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(mapViewport)}`}>
+              표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(mapViewport)}
             </span>
           )}
           <div className="flex-1" />
@@ -91,10 +106,14 @@ export function ChartPreviewPanel({ option, options, chartType, loading, error, 
         {option ? (
           <ChartDesignViewport
             option={option}
+            chartType={chartType}
             designSize={designSize}
             fitMode={fitMode}
             zoom={zoom}
             mapViewportEditing={mapViewportEditing}
+            mapViewport={mapViewport}
+            mapViewportRevision={mapViewportRevision}
+            mapBoxZoomEnabled={!focusOpen}
             onMapBoundsChange={onMapBoundsChange}
           />
         ) : (
@@ -104,7 +123,18 @@ export function ChartPreviewPanel({ option, options, chartType, loading, error, 
         )}
       </div>
 
-      {focusOpen && option && <ChartFocusDialog option={option} designSize={designSize} onClose={() => setFocusOpen(false)} />}
+      {focusOpen && option && (
+        <ChartFocusDialog
+          option={option}
+          chartType={chartType}
+          designSize={designSize}
+          mapViewportEditing={mapViewportEditing}
+          mapViewport={mapViewport}
+          mapViewportRevision={mapViewportRevision}
+          onMapBoundsChange={onMapBoundsChange}
+          onClose={() => setFocusOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -991,14 +991,14 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
   });
 });
 
-// 지도 포인트(geoscatter) + 시군구 지도 — geo 좌표계·registerMap(kr-sigungu) 경로 검증.
-test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
+// 지도 포인트(geoscatter) + 행정 경계 지도 — geo 좌표계와 지도 렌더링 경로 검증.
+test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
   test('지도 포인트 유형은 숫자 경도·위도로 실행 시 미리보기가 렌더된다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
@@ -1041,12 +1041,12 @@ test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
     await expect(sql).not.toContainText('LIMIT 1000');
   });
 
-  test('지도 유형에서 지도 단위를 시군구로 바꿔도 미리보기가 렌더된다', async ({ page }) => {
+  test('지도 유형에서 지도 단위 전환 UI를 노출하지 않는다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
@@ -1055,8 +1055,9 @@ test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
     await page.getByRole('button', { name: '지도', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
-    // 지도 단위 세그먼트: 시도 → 시군구 (옵션 변경은 preview 재조립 — 재실행 불필요)
-    await page.getByRole('button', { name: '시군구', exact: true }).click();
+    await expect(page.getByText('지도 단위', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시도', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시군구', exact: true })).toHaveCount(0);
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
@@ -1065,58 +1066,175 @@ test.describe('S2 지도 확장 — 지도 포인트·시군구', () => {
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
     await page.getByRole('button', { name: '지도', exact: true }).click();
     await page.getByRole('combobox', { name: '지도 경계 방식' }).selectOption('spatial');
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await page.getByPlaceholder('차트 이름').fill('지도 영역 저장 테스트');
 
+    await openOptionTab(page, '영역');
     const control = page.getByTestId('map-viewport-control');
+    const areaActions = control.getByTestId('map-viewport-actions');
+    const topBar = page.locator('header').first();
     await expect(control).toBeVisible();
     await expect(control.getByRole('radio', { name: '데이터 전체' })).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByText('표시 영역: 데이터 전체')).toBeVisible();
+    await expect(topBar.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(areaActions.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
 
-    await control.getByRole('radio', { name: '지역 선택' }).click();
-    await expect(control.getByRole('checkbox', { name: '서울 권역' })).toBeVisible();
-    await expect(control.getByRole('checkbox', { name: '중부 권역' })).toBeVisible();
-    await expect(control.getByRole('checkbox', { name: '남부 권역' })).toBeVisible();
-    await control.getByRole('checkbox', { name: '서울 권역' }).check();
-    await control.getByRole('checkbox', { name: '남부 권역' }).check();
-    await expect(control.getByText('2개 지역 선택됨')).toBeVisible();
-    await expect(page.getByText('표시 영역: 서울 권역 외 1개')).toBeVisible();
-
-    await control.getByRole('radio', { name: '지도에서 조정' }).click();
     const previewCanvas = page.locator('[data-testid="chart-preview"] canvas');
+    await previewCanvas.hover();
+    await page.mouse.wheel(0, -300);
+    await expect(control.getByRole('radio', { name: '데이터 전체' })).toHaveAttribute('aria-checked', 'true');
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(areaActions.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
+
+    await page.waitForTimeout(500);
+    const beforeRegionMode = await previewCanvas.screenshot();
+    await control.getByRole('radio', { name: '지역 선택' }).click();
+    await page.waitForTimeout(500);
+    expect((await previewCanvas.screenshot()).equals(beforeRegionMode)).toBe(true);
+    const provinceSelect = control.getByRole('combobox', { name: '시/도', exact: true });
+    const citySelect = control.getByRole('combobox', { name: '시', exact: true });
+    const countySelect = control.getByRole('combobox', { name: '군', exact: true });
+    const districtSelect = control.getByRole('combobox', { name: '구', exact: true });
+    await expect(provinceSelect).toBeVisible();
+    await expect(provinceSelect.locator('option')).toHaveCount(17);
+    const provinceLabels = await provinceSelect.locator('option').allTextContents();
+    expect(provinceLabels).toContain('전남광주통합특별시');
+    expect(provinceLabels).not.toContain('광주광역시');
+    expect(provinceLabels).not.toContain('전라남도');
+    await expect(control.getByRole('combobox', { name: '시', exact: true })).toBeDisabled();
+    await expect(control.getByRole('combobox', { name: '군', exact: true })).toBeDisabled();
+    await expect(control.getByRole('combobox', { name: '구', exact: true })).toBeDisabled();
+
+    await provinceSelect.selectOption({ label: '전남광주통합특별시' });
+    await expect(citySelect.locator('option')).toContainText(['목포시']);
+    await expect(countySelect.locator('option')).toContainText(['담양군']);
+    await expect(districtSelect.locator('option')).toContainText(['광산구']);
+
+    await provinceSelect.selectOption({ label: '인천광역시' });
+    const incheonDistrictLabels = await districtSelect.locator('option').allTextContents();
+    expect(incheonDistrictLabels).toEqual(expect.arrayContaining(['제물포구', '영종구', '서해구', '검단구']));
+    expect(incheonDistrictLabels).not.toEqual(expect.arrayContaining(['중구', '동구', '서구']));
+
+    await provinceSelect.selectOption({ label: '경기도' });
+    await expect(citySelect).toBeEnabled();
+    await expect(countySelect).toBeEnabled();
+    await expect(districtSelect).toBeDisabled();
+    await citySelect.selectOption({ label: '수원시' });
+    await expect(districtSelect).toBeEnabled();
+    await districtSelect.selectOption({ label: '장안구' });
+    await expect(page.getByText('표시 영역: 경기도 수원시 장안구')).toBeVisible();
+    await provinceSelect.selectOption({ label: '서울특별시' });
+    await expect(citySelect).toBeDisabled();
+    await expect(countySelect).toBeDisabled();
+    await expect(districtSelect).toBeEnabled();
+    await districtSelect.selectOption({ label: '강남구' });
+    await expect(page.getByText('표시 영역: 서울특별시 강남구')).toBeVisible();
+    await expect(areaActions.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+    await topBar.getByRole('button', { name: '저장', exact: true }).click();
+    await expect(page.getByText('저장되었습니다')).toBeVisible();
+    await expect(topBar.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+
+    await page.waitForTimeout(1200);
+    const beforeManualMode = await previewCanvas.screenshot();
+    await control.getByRole('radio', { name: '지도에서 조정' }).click();
+    await page.waitForTimeout(250);
+    expect((await previewCanvas.screenshot()).equals(beforeManualMode)).toBe(true);
     await previewCanvas.hover();
     await page.waitForTimeout(100);
     const beforeWheelZoom = await previewCanvas.screenshot();
     await page.mouse.wheel(0, -600);
     await expect.poll(async () => (await previewCanvas.screenshot()).equals(beforeWheelZoom)).toBe(false);
-
-    await control.getByRole('button', { name: '지도 조정 시작' }).click();
+    const adjustedBounds = await control.getByTestId('map-bounds-summary').textContent();
+    await openOptionTab(page, '상호작용');
+    const tooltipSection = page.locator('section').filter({ has: page.getByText('툴팁', { exact: true }) });
+    const tooltipPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options.tooltip?.enabled === false;
+    });
+    await tooltipSection.getByRole('switch', { name: '툴팁 표시' }).click();
+    await tooltipPreview;
+    await openOptionTab(page, '영역');
+    await page.waitForTimeout(300);
+    await expect(control.getByTestId('map-bounds-summary')).toHaveText(adjustedBounds!);
     await expect(page.getByText('표시 영역: 지도 조정 중')).toBeVisible();
-    const applyCurrent = control.getByRole('button', { name: '현재 지도 영역 적용' });
-    await expect(applyCurrent).toBeEnabled();
-    await applyCurrent.click();
+    await expect(areaActions.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+    await areaActions.getByRole('button', { name: '저장', exact: true }).click();
+    await expect(page.getByText('지도 영역을 저장했습니다. 최상단 저장 전에는 임베드에 반영되지 않습니다.')).toBeVisible();
+    await expect(page.getByText('표시 영역: 지도 조정 중')).toBeVisible();
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(topBar.getByRole('button', { name: '초기화', exact: true })).toBeEnabled();
+
+    await previewCanvas.hover();
+    await page.mouse.wheel(0, -300);
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeEnabled();
+    await areaActions.getByRole('button', { name: '초기화', exact: true }).click();
+    await expect(page.getByText('마지막 영역 저장 상태로 복원했습니다')).toBeVisible();
     await expect(page.getByText('표시 영역: 사용자 지정')).toBeVisible();
 
+    await topBar.getByRole('button', { name: '초기화', exact: true }).click();
+    await expect(page.getByText('표시 영역: 서울특별시 강남구')).toBeVisible();
+    await expect(control.getByRole('combobox', { name: '시/도', exact: true })).toHaveValue('서울특별시');
+    await expect(control.getByRole('combobox', { name: '구', exact: true })).toHaveValue('서울특별시 강남구');
+    await page.waitForTimeout(1200);
+
+    const previewBox = await previewCanvas.boundingBox();
+    expect(previewBox).not.toBeNull();
+    await page.keyboard.down('Shift');
+    await page.mouse.move(previewBox!.x + previewBox!.width * 0.2, previewBox!.y + previewBox!.height * 0.2);
+    await page.mouse.down();
+    await page.mouse.move(previewBox!.x + previewBox!.width * 0.8, previewBox!.y + previewBox!.height * 0.75);
+    await expect(page.getByTestId('map-box-zoom-selection')).toBeVisible();
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await expect(control.getByRole('radio', { name: '지도에서 조정' })).toHaveAttribute('aria-checked', 'true');
+    await expect(areaActions.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+
+    const savedManualRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      if (request.method() !== 'PUT' || !/^\/api\/v1\/charts\/\d+$/.test(url.pathname)) return false;
+      return request.postDataJSON().options?.map?.viewport?.mode === 'manual';
+    });
+    await topBar.getByRole('button', { name: '저장', exact: true }).click();
+    const savedManualViewport = (await savedManualRequest).postDataJSON().options.map.viewport;
+    expect(savedManualViewport.bounds).toEqual({
+      west: expect.any(Number),
+      east: expect.any(Number),
+      south: expect.any(Number),
+      north: expect.any(Number),
+    });
+    await expect(page.getByText('표시 영역: 사용자 지정')).toBeVisible();
+    await expect(topBar.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await expect(areaActions.getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await page.waitForTimeout(1200);
+
+    const beforeCoordinateMode = await previewCanvas.screenshot();
     await control.getByRole('radio', { name: '좌표로 지정' }).click();
+    await page.waitForTimeout(250);
+    expect((await previewCanvas.screenshot()).equals(beforeCoordinateMode)).toBe(true);
     await control.getByRole('spinbutton', { name: '서쪽 경도' }).fill('126.7');
     await control.getByRole('spinbutton', { name: '동쪽 경도' }).fill('127.3');
     await control.getByRole('spinbutton', { name: '남쪽 위도' }).fill('37.3');
     await control.getByRole('spinbutton', { name: '북쪽 위도' }).fill('37.8');
-    const previewRequest = page.waitForRequest((request) => {
-      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+    await control.getByRole('button', { name: '좌표로 이동', exact: true }).click();
+    await expect(page.getByText('표시 영역: 좌표 지정')).toBeVisible();
+    const savedCoordinateRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      if (request.method() !== 'PUT' || !/^\/api\/v1\/charts\/\d+$/.test(url.pathname)) return false;
       return request.postDataJSON().options?.map?.viewport?.mode === 'coordinates';
     });
-    await control.getByRole('button', { name: '적용', exact: true }).click();
-    const request = await previewRequest;
+    await topBar.getByRole('button', { name: '저장', exact: true }).click();
+    const request = await savedCoordinateRequest;
     expect(request.postDataJSON().options.map.viewport).toEqual({
       mode: 'coordinates',
       bounds: { west: 126.7, east: 127.3, south: 37.3, north: 37.8 },
     });
-    await expect(page.getByText('표시 영역: 좌표 지정')).toBeVisible();
   });
 });

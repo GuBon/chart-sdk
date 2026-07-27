@@ -1,14 +1,21 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronUp, ChevronsRight } from 'lucide-react';
 import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-options';
-import type { MapBounds } from '@chartsdk/chart-options/geo';
+import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
 import { activeTables, builderValidationIssue, emptyBuilder, emptyJoin, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
+import {
+  createMapViewportSession,
+  isCompleteMapViewport,
+  mapViewportEquals,
+  mapViewportSessionReducer,
+  pendingMapViewport,
+} from '@/lib/mapViewportSession';
 import { tableSelectionLabel, type TableSelectionTarget } from '@/lib/tableSelection';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -101,6 +108,17 @@ function splitOptions(o: Options): { jsonb: Options; cols: Record<string, unknow
   return { jsonb, cols };
 }
 
+function optionsWithMapViewport(
+  options: Options,
+  chartType: MajorType,
+  viewport: MapViewport,
+): Options {
+  if (chartType !== 'map' && chartType !== 'geoscatter') return options;
+  const next = structuredClone(options);
+  next.map = { ...(next.map ?? {}), viewport: structuredClone(viewport) };
+  return next;
+}
+
 /** 정식 편집 URL만 교체한다. 같은 ChartEditor를 다시 마운트하지 않아 로드 직후 사용자 변경을 덮어쓰지 않는다. */
 function replaceEditorPath(path: string) {
   if (window.location.pathname !== path) window.history.replaceState(window.history.state, '', path);
@@ -165,8 +183,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [optionEditorCollapsed, setOptionEditorCollapsed] = useStoredBoolean('chartsdk.editor.optionEditorCollapsed', false);
   const [optionDockPreference, setOptionDockPreference, optionDockPreferenceRestored] = useStoredOptionDockPreference('chartsdk.editor.optionDock');
   const [autoOptionDock, setAutoOptionDock] = useState<OptionDock>('bottom');
-  const [mapViewportEditing, setMapViewportEditing] = useState(false);
-  const [currentMapBounds, setCurrentMapBounds] = useState<MapBounds | null>(null);
+  const [mapViewportSession, dispatchMapViewport] = useReducer(
+    mapViewportSessionReducer,
+    undefined,
+    () => createMapViewportSession(defaultsFor('bar').map?.viewport),
+  );
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
@@ -206,7 +227,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           const restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
           setBuilder(restoredBuilder);
           setChartType(c.chartType);
-          setOptions({ ...defaultsFor(c.chartType), ...c.options });
+          const restoredOptions = { ...defaultsFor(c.chartType), ...c.options };
+          setOptions(restoredOptions);
+          dispatchMapViewport({
+            type: 'restoreGlobal',
+            viewport: normalizeMapViewport(restoredOptions.map?.viewport),
+          });
           setGeneratedSql(c.sqlQuery || null);
           const canonicalPath = chartEditPath(c.id, c.mainTable);
           replaceEditorPath(canonicalPath);
@@ -334,8 +360,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setRunError(null);
     setInitialPreviewLoading(false);
     setInitialPreviewError(null);
-    setMapViewportEditing(false);
-    setCurrentMapBounds(null);
+    dispatchMapViewport({ type: 'setEditing', editing: false });
   };
 
   // 사이드바 데이터소스 = 탐색 컨텍스트. 소스 변경은 드롭다운 필터만 바꾸고 구성은 보존(비파괴).
@@ -578,6 +603,34 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setDirty(true);
   };
 
+  const pendingViewport = pendingMapViewport(mapViewportSession);
+  const mapViewportChangedFromCheckpoint = !mapViewportEquals(
+    pendingViewport,
+    mapViewportSession.checkpoint,
+  );
+  const canChangeMapViewportCheckpoint = (chartType === 'map' || chartType === 'geoscatter')
+    && !!result
+    && mapViewportChangedFromCheckpoint;
+  const canSaveMapViewport = canChangeMapViewportCheckpoint && isCompleteMapViewport(pendingViewport);
+  const canResetMapViewport = canChangeMapViewportCheckpoint;
+
+  const saveMapViewport = () => {
+    if (!canSaveMapViewport) return;
+    const next = optionsWithMapViewport(options, chartType, pendingViewport);
+    setOptions(next);
+    dispatchMapViewport({ type: 'saveCheckpoint', viewport: pendingViewport });
+    setDirty(true);
+    setToast('지도 영역을 저장했습니다. 최상단 저장 전에는 임베드에 반영되지 않습니다.');
+  };
+
+  const resetMapViewport = () => {
+    if (!canResetMapViewport) return;
+    const next = optionsWithMapViewport(options, chartType, mapViewportSession.checkpoint);
+    setOptions(next);
+    dispatchMapViewport({ type: 'resetCheckpoint' });
+    setToast('마지막 영역 저장 상태로 복원했습니다');
+  };
+
   return (
     <>
       {/* Top Bar — 편집 헤더 */}
@@ -704,8 +757,23 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 loading={initialPreviewLoading}
                 error={initialPreviewError}
                 wide={builderCollapsed}
-                mapViewportEditing={mapViewportEditing}
-                onMapBoundsChange={setCurrentMapBounds}
+                mapViewportEditing={mapViewportSession.editing}
+                mapViewport={mapViewportSession.draft}
+                mapViewportRevision={mapViewportSession.revision}
+                onMapBoundsChange={(bounds, source) => {
+                  if (source === 'sync') {
+                    dispatchMapViewport({ type: 'syncVisible', bounds });
+                    return;
+                  }
+                  if (!bounds) return;
+                  if (source === 'box') {
+                    dispatchMapViewport({ type: 'boxSelect', bounds });
+                    setDirty(true);
+                    return;
+                  }
+                  dispatchMapViewport({ type: 'roam', bounds });
+                  if (mapViewportSession.editing) setDirty(true);
+                }}
                 onChangeOptions={changeOptions}
               />
             </div>
@@ -745,11 +813,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   dockPreference={optionDockPreference}
                   actualDock={actualOptionDock}
                   onChangeDockPreference={setOptionDockPreference}
-                  mapViewportEditing={mapViewportEditing}
-                  currentMapBounds={currentMapBounds}
-                  onMapViewportEditingChange={(editing) => {
-                    if (editing) setCurrentMapBounds(null);
-                    setMapViewportEditing(editing);
+                  mapViewportSession={mapViewportSession}
+                  canSaveMapViewport={canSaveMapViewport}
+                  canResetMapViewport={canResetMapViewport}
+                  savingMapViewport={saving}
+                  onSaveMapViewport={saveMapViewport}
+                  onResetMapViewport={resetMapViewport}
+                  onMapViewportSelectMode={(mode: MapViewportMode) => {
+                    dispatchMapViewport({ type: 'selectPanel', mode });
+                  }}
+                  onMapViewportChange={(viewport: MapViewport) => {
+                    dispatchMapViewport({ type: 'apply', viewport });
+                    setDirty(true);
                   }}
                   onCollapse={() => setOptionEditorCollapsed(true)}
                   onChangeChartType={(to, next) => {
@@ -757,8 +832,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                     // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
                     const normalized = normalizeBuilderForChartType(builder, to);
                     const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
-                    setMapViewportEditing(false);
-                    setCurrentMapBounds(null);
+                    if (to === 'map' || to === 'geoscatter') {
+                      dispatchMapViewport({
+                        type: 'restoreGlobal',
+                        viewport: normalizeMapViewport(next.map?.viewport),
+                      });
+                    } else {
+                      dispatchMapViewport({ type: 'setEditing', editing: false });
+                    }
                     setChartType(to);
                     setOptions(next);
                     setBuilder(normalized);

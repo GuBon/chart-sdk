@@ -2,17 +2,34 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Maximize, X } from 'lucide-react';
+import type { MajorType } from '@chartsdk/chart-options';
 import type { ChartDesignSize, PreviewFitMode } from '@chartsdk/chart-options/display';
+import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import { ChartDesignViewport } from './ChartDesignViewport';
+import type { MapBoundsChangeSource } from './ChartPreview';
 import { PreviewFitControls } from './PreviewFitControls';
 
 interface Props {
   option: Record<string, unknown>;
+  chartType: MajorType;
   designSize: ChartDesignSize;
+  mapViewportEditing?: boolean;
+  mapViewport?: MapViewport;
+  mapViewportRevision?: number;
+  onMapBoundsChange?: (bounds: MapBounds | null, source: MapBoundsChangeSource) => void;
   onClose: () => void;
 }
 
-export function ChartFocusDialog({ option, designSize, onClose }: Props) {
+export function ChartFocusDialog({
+  option,
+  chartType,
+  designSize,
+  mapViewportEditing = false,
+  mapViewport,
+  mapViewportRevision = 0,
+  onMapBoundsChange,
+  onClose,
+}: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [fitMode, setFitMode] = useState<PreviewFitMode>('contain');
@@ -87,7 +104,18 @@ export function ChartFocusDialog({ option, designSize, onClose }: Props) {
         </button>
       </header>
       <main className="min-h-0 flex-1">
-        <ChartDesignViewport option={option} designSize={designSize} fitMode={fitMode} zoom={zoom} testId="chart-focus-viewport" />
+        <ChartDesignViewport
+          option={option}
+          chartType={chartType}
+          designSize={designSize}
+          fitMode={fitMode}
+          zoom={zoom}
+          testId="chart-focus-viewport"
+          mapViewportEditing={mapViewportEditing}
+          mapViewport={mapViewport}
+          mapViewportRevision={mapViewportRevision}
+          onMapBoundsChange={onMapBoundsChange}
+        />
       </main>
     </div>
   );

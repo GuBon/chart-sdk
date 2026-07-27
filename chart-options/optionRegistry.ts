@@ -630,13 +630,6 @@ export const OPTION_REGISTRY: OptionDef[] = [
 
   // ── 지도 (map=코로플레스 · geoscatter=위경도 포인트 공용) ──
   {
-    key: 'map.name', zone: 'type', section: '지도', label: '지도 단위',
-    control: 'segment', appliesTo: ['map', 'geoscatter'], default: 'kr-sido',
-    echarts: '@map.name',
-    choices: [{ value: 'kr-sido', label: '시도' }, { value: 'kr-sigungu', label: '시군구' }],
-    help: '시군구 지도는 지역명이 "시도명 시군구명"(예: 부산광역시 중구) 정식 표기여야 매칭된다',
-  },
-  {
     key: 'map.viewport', zone: 'type', section: '지도', label: '표시 영역',
     control: 'mapViewport', appliesTo: ['map', 'geoscatter'], default: { mode: 'data' },
     echarts: '@map.viewport',

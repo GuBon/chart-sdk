@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Crosshair, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
 import {
   normalizeMapBounds,
   normalizeMapViewport,
@@ -12,17 +12,27 @@ import {
 import type { MajorType } from '@chartsdk/chart-options';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { cn } from '@/lib/cn';
+import {
+  administrativeRegionOptions,
+  administrativeRegionSelectionFromViewport,
+  mapViewportForAdministrativeSelection,
+  type AdministrativeRegionSelection,
+} from '@/lib/koreaAdministrativeRegions';
+import type { MapViewportSession } from '@/lib/mapViewportSession';
 
 interface Props {
   chartType: MajorType;
-  value: unknown;
-  regionNames: string[];
+  session: MapViewportSession;
   disabled: boolean;
-  editing: boolean;
-  currentBounds: MapBounds | null;
   onChange: (viewport: MapViewport) => void;
-  onEditingChange: (editing: boolean) => void;
+  onSelectMode: (mode: MapViewportMode) => void;
+  canSave: boolean;
+  canReset: boolean;
+  saving: boolean;
+  onSave: () => void;
+  onReset: () => void;
 }
 
 const MODE_LABELS: Record<MapViewportMode, string> = {
@@ -36,28 +46,28 @@ type CoordinateDraft = Record<keyof MapBounds, string>;
 
 export function MapViewportControl({
   chartType,
-  value,
-  regionNames,
+  session,
   disabled,
-  editing,
-  currentBounds,
   onChange,
-  onEditingChange,
+  onSelectMode,
+  canSave,
+  canReset,
+  saving,
+  onSave,
+  onReset,
 }: Props) {
-  const viewport = normalizeMapViewport(value);
+  const viewport = normalizeMapViewport(session.draft);
+  const activeMode = session.activePanel;
+  const currentBounds = session.visibleBounds;
+  const editing = session.editing;
   const modes: MapViewportMode[] = chartType === 'map'
     ? ['data', 'regions', 'manual', 'coordinates']
     : ['data', 'manual', 'coordinates'];
-  const uniqueRegions = useMemo(
-    () => [...new Set(regionNames.map((name) => name.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko')),
-    [regionNames],
-  );
   const viewportBounds = 'bounds' in viewport ? viewport.bounds : undefined;
   const viewportWest = viewportBounds?.west;
   const viewportEast = viewportBounds?.east;
   const viewportSouth = viewportBounds?.south;
   const viewportNorth = viewportBounds?.north;
-  const [regionQuery, setRegionQuery] = useState('');
   const [coordinates, setCoordinates] = useState<CoordinateDraft>(() => coordinateDraft(viewportBounds));
 
   useEffect(() => {
@@ -67,28 +77,16 @@ export function MapViewportControl({
   }, [viewport.mode, viewportEast, viewportNorth, viewportSouth, viewportWest]);
 
   const selectMode = (mode: MapViewportMode) => {
-    onEditingChange(false);
-    if (mode === 'data') onChange({ mode: 'data' });
-    if (mode === 'regions') onChange(viewport.mode === 'regions' ? viewport : { mode: 'regions', regionKeys: [] });
-    if (mode === 'manual') onChange(viewport.mode === 'manual' ? viewport : { mode: 'manual' });
-    if (mode === 'coordinates') onChange(viewport.mode === 'coordinates' ? viewport : { mode: 'coordinates' });
+    if (mode === 'coordinates' && currentBounds) setCoordinates(coordinateDraft(currentBounds));
+    onSelectMode(mode);
   };
 
-  const selectedRegions = viewport.mode === 'regions' ? viewport.regionKeys : [];
-  const filteredRegions = uniqueRegions.filter((name) => name.toLocaleLowerCase('ko').includes(regionQuery.trim().toLocaleLowerCase('ko')));
-  const unavailableRegions = selectedRegions.filter((name) => !uniqueRegions.includes(name));
+  const administrativeSelection = administrativeRegionSelectionFromViewport(viewport);
+  const regionOptions = administrativeRegionOptions(administrativeSelection);
   const coordinateBounds = normalizeMapBounds(coordinates);
 
-  const toggleRegion = (name: string) => {
-    const next = selectedRegions.includes(name)
-      ? selectedRegions.filter((region) => region !== name)
-      : [...selectedRegions, name];
-    onChange({ mode: 'regions', regionKeys: next });
-  };
-
-  const useCurrentBounds = () => {
-    if (!currentBounds) return;
-    setCoordinates(coordinateDraft(currentBounds));
+  const changeAdministrativeRegion = (next: AdministrativeRegionSelection) => {
+    onChange(mapViewportForAdministrativeSelection(next));
   };
 
   return (
@@ -96,11 +94,30 @@ export function MapViewportControl({
       <div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[13px] font-medium text-text-primary">표시 영역</span>
-          <span className="text-[11px] text-text-tertiary">초기 화면</span>
+          <div data-testid="map-viewport-actions" className="inline-flex overflow-hidden rounded-md border border-border bg-bg-panel">
+            <button
+              type="button"
+              disabled={!canReset || saving}
+              title="지도 영역만 마지막 영역 저장 상태로 복원"
+              onClick={onReset}
+              className="h-6 border-r border-border px-2 text-[11px] font-medium text-text-secondary hover:bg-muted hover:text-text-primary disabled:pointer-events-none disabled:opacity-40"
+            >
+              초기화
+            </button>
+            <button
+              type="button"
+              disabled={!canSave || saving}
+              title="현재 지도 영역만 임시 저장"
+              onClick={onSave}
+              className="h-6 bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {saving ? '저장 중…' : '저장'}
+            </button>
+          </div>
         </div>
         <div role="radiogroup" aria-label="지도 표시 영역" className="mt-2 grid grid-cols-2 gap-1.5">
           {modes.map((mode) => {
-            const active = viewport.mode === mode;
+            const active = activeMode === mode;
             return (
               <button
                 key={mode}
@@ -124,76 +141,109 @@ export function MapViewportControl({
         </div>
       </div>
 
-      {viewport.mode === 'data' && (
-        <p className="text-[11px] leading-4 text-text-tertiary">현재 데이터가 모두 들어오도록 영역을 자동으로 맞춥니다. 데이터가 바뀌면 영역도 다시 계산됩니다.</p>
-      )}
-
-      {viewport.mode === 'regions' && (
+      {activeMode === 'data' && (
         <div className="flex flex-col gap-2">
-          <Input
-            aria-label="지도 지역 검색"
-            icon={<Search className="size-3.5" />}
-            size="sm"
-            value={regionQuery}
-            onChange={(event) => setRegionQuery(event.target.value)}
-            placeholder="현재 데이터의 지역 검색"
-          />
-          <div className="max-h-40 overflow-y-auto rounded border border-border bg-bg-panel p-1">
-            {filteredRegions.length > 0 ? filteredRegions.map((name) => (
-              <label key={name} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-text-secondary hover:bg-muted">
-                <input
-                  type="checkbox"
-                  checked={selectedRegions.includes(name)}
-                  onChange={() => toggleRegion(name)}
-                  className="size-3.5 accent-primary"
-                />
-                <span className="min-w-0 flex-1 truncate">{name}</span>
-              </label>
-            )) : (
-              <p className="px-2 py-3 text-center text-xs text-text-tertiary">선택할 수 있는 Polygon 지역이 없습니다.</p>
-            )}
-          </div>
-          <p className="text-[11px] text-text-tertiary">{selectedRegions.length > 0 ? `${selectedRegions.length}개 지역 선택됨` : '한 개 이상의 지역을 선택하세요.'}</p>
-          {unavailableRegions.length > 0 && (
-            <div className="flex items-start gap-2 rounded bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-text-secondary">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-              <div className="min-w-0 flex-1">
-                <p>저장된 지역 중 현재 데이터에 없는 지역이 있습니다: {unavailableRegions.join(', ')}</p>
-                <button type="button" onClick={() => onChange({ mode: 'data' })} className="mt-1 font-medium text-text-primary hover:underline">데이터 전체로 전환</button>
-              </div>
-            </div>
-          )}
+          <p className="text-[11px] leading-4 text-text-tertiary">
+            현재 데이터가 모두 들어오도록 영역을 자동으로 맞춥니다. 이 방식을 선택하는 것만으로 지도는 이동하지 않습니다.
+          </p>
+          <Button size="sm" className="h-8 w-full text-xs" onClick={() => onChange({ mode: 'data' })}>
+            데이터 범위에 맞춤
+          </Button>
         </div>
       )}
 
-      {viewport.mode === 'manual' && (
+      {activeMode === 'regions' && (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-4 gap-1.5">
+            <div className="min-w-0">
+              <Select
+                aria-label="시/도"
+                value={administrativeSelection.province}
+                placeholder="시/도"
+                options={regionOptions.provinces}
+                onChange={(event) => changeAdministrativeRegion({
+                  province: event.target.value,
+                  city: '',
+                  county: '',
+                  district: '',
+                })}
+                className="min-w-0 px-2 pr-6 text-xs"
+              />
+            </div>
+            <div className="min-w-0">
+              <Select
+                aria-label="시"
+                value={administrativeSelection.city}
+                placeholder="시"
+                options={regionOptions.cities}
+                disabled={!administrativeSelection.province || regionOptions.cities.length === 0}
+                onChange={(event) => changeAdministrativeRegion({
+                  ...administrativeSelection,
+                  city: event.target.value,
+                  county: '',
+                  district: '',
+                })}
+                className="min-w-0 px-2 pr-6 text-xs"
+              />
+            </div>
+            <div className="min-w-0">
+              <Select
+                aria-label="군"
+                value={administrativeSelection.county}
+                placeholder="군"
+                options={regionOptions.counties}
+                disabled={!administrativeSelection.province || regionOptions.counties.length === 0}
+                onChange={(event) => changeAdministrativeRegion({
+                  ...administrativeSelection,
+                  city: '',
+                  county: event.target.value,
+                  district: '',
+                })}
+                className="min-w-0 px-2 pr-6 text-xs"
+              />
+            </div>
+            <div className="min-w-0">
+              <Select
+                aria-label="구"
+                value={administrativeSelection.district}
+                placeholder="구"
+                options={regionOptions.districts}
+                disabled={!administrativeSelection.province || regionOptions.districts.length === 0}
+                onChange={(event) => changeAdministrativeRegion({
+                  ...administrativeSelection,
+                  county: '',
+                  district: event.target.value,
+                })}
+                className="min-w-0 px-2 pr-6 text-xs"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] leading-4 text-text-tertiary">
+            시/도를 선택한 뒤 필요한 하위 행정구역을 선택하세요. 비워 두면 선택한 상위 지역 전체를 표시합니다.
+          </p>
+        </div>
+      )}
+
+      {activeMode === 'manual' && (
         <div className="flex flex-col gap-2">
           <p className="text-[11px] leading-4 text-text-tertiary">
-            {editing
-              ? '미리보기 지도를 드래그하거나 휠로 확대·축소한 뒤 현재 영역을 적용하세요.'
-              : '미리보기 지도는 언제든 드래그·휠로 조정할 수 있습니다. 현재 화면을 저장하려면 지도 조정을 시작하세요.'}
+            이 패널을 선택한 동안에는 드래그·휠이 저장할 영역을 조정합니다. 다른 패널에서는 지도 이동이 단순 탐색으로만 동작합니다.
           </p>
-          {viewport.bounds && !editing && <BoundsSummary bounds={viewport.bounds} />}
+          <p className="text-[11px] leading-4 text-text-tertiary">
+            지도 위에서 Shift+드래그하면 사각형 범위를 한 번에 지정할 수 있습니다.
+          </p>
+          {(currentBounds ?? viewportBounds) && <BoundsSummary bounds={(currentBounds ?? viewportBounds)!} />}
           {editing ? (
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" className="h-7 px-2.5 text-xs" onClick={() => onEditingChange(false)}>초기화</Button>
-              <Button size="sm" className="h-7 px-2.5 text-xs" disabled={!currentBounds} onClick={() => {
-                if (!currentBounds) return;
-                onChange({ mode: 'manual', bounds: currentBounds });
-                onEditingChange(false);
-              }}>
-                현재 지도 영역 적용
-              </Button>
-            </div>
+            <p className="text-[11px] font-medium text-primary">현재 영역을 조정 중입니다.</p>
           ) : (
-            <Button variant="secondary" size="sm" className="h-8 w-full text-xs" icon={<Crosshair className="size-3.5" />} onClick={() => onEditingChange(true)}>
-              지도 조정 시작
+            <Button size="sm" className="h-8 w-full text-xs" onClick={() => onSelectMode('manual')}>
+              현재 화면에서 영역 조정 시작
             </Button>
           )}
         </div>
       )}
 
-      {viewport.mode === 'coordinates' && (
+      {activeMode === 'coordinates' && (
         <div className="flex flex-col gap-2.5">
           <div className="grid grid-cols-2 gap-2">
             <CoordinateInput label="서쪽 경도" value={coordinates.west} min={-180} max={180} onChange={(west) => setCoordinates((current) => ({ ...current, west }))} />
@@ -202,13 +252,14 @@ export function MapViewportControl({
             <CoordinateInput label="북쪽 위도" value={coordinates.north} min={-90} max={90} onChange={(north) => setCoordinates((current) => ({ ...current, north }))} />
           </div>
           <p className={cn('text-[11px] leading-4', coordinateBounds ? 'text-text-tertiary' : 'text-danger')}>
-            {coordinateBounds ? 'WGS84 경계 좌표를 사용합니다.' : '서쪽 < 동쪽, 남쪽 < 북쪽 범위의 올바른 좌표를 입력하세요.'}
+            {coordinateBounds
+              ? '입력한 WGS84 경계로 지도를 이동한 뒤 영역 저장으로 확정하세요.'
+              : '서쪽 < 동쪽, 남쪽 < 북쪽 범위의 올바른 좌표를 입력하세요.'}
           </p>
-          <div className="flex items-center justify-end gap-2">
-            <Button variant="secondary" size="sm" className="h-7 px-2.5 text-xs" disabled={!currentBounds} onClick={useCurrentBounds}>현재 화면 좌표 가져오기</Button>
-            <Button size="sm" className="h-7 px-2.5 text-xs" disabled={!coordinateBounds} onClick={() => {
+          <div className="flex justify-end">
+            <Button size="sm" className="h-8 w-full text-xs" disabled={!coordinateBounds} onClick={() => {
               if (coordinateBounds) onChange({ mode: 'coordinates', bounds: coordinateBounds });
-            }}>적용</Button>
+            }}>좌표로 이동</Button>
           </div>
         </div>
       )}
@@ -248,7 +299,7 @@ function CoordinateInput({ label, value, min, max, onChange }: { label: string; 
 
 function BoundsSummary({ bounds }: { bounds: MapBounds }) {
   return (
-    <p className="rounded bg-muted px-2.5 py-2 font-mono text-[10px] leading-4 text-text-tertiary">
+    <p data-testid="map-bounds-summary" className="rounded bg-muted px-2.5 py-2 font-mono text-[10px] leading-4 text-text-tertiary">
       W {formatCoordinate(bounds.west)} · E {formatCoordinate(bounds.east)}<br />
       S {formatCoordinate(bounds.south)} · N {formatCoordinate(bounds.north)}
     </p>
