@@ -17,6 +17,7 @@
     "./maps/*.json": "./maps/*.json"
   },
   "scripts": {
-    "gen": "node scripts/generate-defaults.ts"
+    "gen": "node scripts/generate-defaults.ts",
+    "test:unit": "node scripts/validate-korea-maps.mjs"
   }
 }

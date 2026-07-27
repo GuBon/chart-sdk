@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS geometry_demo.korea_sigungu_statistics (
     region_name      text NOT NULL,
     region_name_eng  text,
     base_year        integer,
+    boundary_base_date date NOT NULL,
     population       bigint NOT NULL,
     households       bigint NOT NULL,
     statistic_value  numeric(8, 1) NOT NULL,
@@ -26,7 +27,8 @@ WITH document AS (
     SELECT feature -> 'properties' ->> 'code' AS region_code,
            feature -> 'properties' ->> 'name' AS region_name,
            feature -> 'properties' ->> 'name_eng' AS region_name_eng,
-           NULLIF(feature -> 'properties' ->> 'base_year', '')::integer AS base_year,
+           2024 AS base_year,
+           to_date(feature -> 'properties' ->> 'boundary_base_date', 'YYYYMMDD') AS boundary_base_date,
            ST_Multi(
                ST_Force2D(
                    ST_SetSRID(ST_GeomFromGeoJSON((feature -> 'geometry')::text), 4326)
@@ -43,6 +45,7 @@ INSERT INTO geometry_demo.korea_sigungu_statistics (
     region_name,
     region_name_eng,
     base_year,
+    boundary_base_date,
     population,
     households,
     statistic_value,
@@ -53,6 +56,7 @@ SELECT region_code,
        region_name,
        region_name_eng,
        base_year,
+       boundary_base_date,
        50000 + ((rn * 7919) % 950000),
        18000 + ((rn * 3571) % 410000),
        round(12.5 + ((rn * 137) % 875)::numeric / 10, 1),
@@ -63,6 +67,7 @@ ON CONFLICT (region_code) DO UPDATE SET
     region_name = EXCLUDED.region_name,
     region_name_eng = EXCLUDED.region_name_eng,
     base_year = EXCLUDED.base_year,
+    boundary_base_date = EXCLUDED.boundary_base_date,
     population = EXCLUDED.population,
     households = EXCLUDED.households,
     statistic_value = EXCLUDED.statistic_value,
@@ -148,7 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_korea_point_events_50k_region_name
     ON geometry_demo.korea_point_events_50k (region_name);
 
 COMMENT ON TABLE geometry_demo.korea_sigungu_statistics IS
-    '실제 한국 시군구 경계 251개와 경계별 가상 통계값';
+    '2026-07-20 행정구역 기준 한국 시군구 경계 253개와 경계별 가상 통계값';
 COMMENT ON TABLE geometry_demo.korea_point_events_50k IS
     '실제 한국 경계 내부에 생성한 지도 산점도용 Point 50,000개';
 

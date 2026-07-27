@@ -77,12 +77,14 @@ docker compose --profile spatial-test up -d
 
 위 프로필은 `localhost:55433`의 `chartsdk_spatial_test` DB와 Admin용 `postgis-geometry-test` 데이터소스를 준비한다. `geometry_demo.parcel_boundaries_10k`에는 10,000개의 가상 필지가 들어 있다.
 
+`geometry_demo.korea_sigungu_statistics`에는 2026-07-20 행정구역 체계의 시·군·구 경계 253개와 2024~2026년 가상 통계가 들어 있다. 경계 좌표의 공식 원본 기준일은 SGIS 2025-06-30이며, 이후 전남광주통합특별시와 인천광역시 개편 경계는 공식 하위 경계를 합쳐 반영했다. `region_name`은 지도 매칭용 결합 이름이고, `sido_name`과 `sigungu_name`은 시·도/시·군·구 분석용 분리 컬럼이다. 상세 출처와 가공 내역은 [`chart-options/maps/LICENSE.md`](chart-options/maps/LICENSE.md)를 따른다.
+
 | 차트 | 공간 컬럼 | 이름/값 컬럼 |
 |---|---|---|
 | 동적 Polygon 지도 | `boundary` (`geometry(Polygon,3857)`) 또는 `boundary_geography` | `parcel_name` / `assessed_value` |
 | 지도 포인트 | `centroid` (`geometry(Point,3857)`) 또는 `centroid_geography` | 크기값 `area_sqm` |
 
-`district`, `land_use`, `observed_on`은 필터·집계 검증에 사용할 수 있다. 초기화 SQL은 [`docker/postgis/init/01-geometry-chart-data.sql`](docker/postgis/init/01-geometry-chart-data.sql)이다.
+`district`, `land_use`, `observed_on`은 필터·집계 검증에 사용할 수 있다. 공간 데이터 초기화 SQL은 [`docker/postgis/init`](docker/postgis/init) 아래에 실행 순서대로 있다.
 
 ```bash
 DATABASE_URL=jdbc:postgresql://localhost:5433/chartsol

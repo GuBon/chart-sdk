@@ -256,12 +256,12 @@ Geo charts need a GeoJSON registered with `echarts.registerMap(name, geoJson)` b
 2. For each not-yet-registered name it fetches `GET {apiBase}/maps/{name}.json` **once** (cached module-side; re-renders do not re-fetch), then calls `registerMap`.
 3. `apiBase` is resolved with the same priority as chart data (`window.CHARTSDK_API_BASE` → `script[data-api-base]` → `sdk.js` origin → host origin).
 
-The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). Bundled maps (KOSTAT open data — see `chart-options/maps/LICENSE.md`):
+The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). Bundled maps use the official SGIS boundaries and MOIS administrative codes; the exact sources, effective dates, and 2026 boundary derivation are documented in `chart-options/maps/LICENSE.md`.
 
 | Asset | Regions | Region name format in chart data |
 |---|---|---|
-| `kr-sido.json` | 대한민국 17개 시·도 | 정식 시·도명 — `서울특별시`, `경상남도` |
-| `kr-sigungu.json` | 251개 시·군·구 | `시도명 시군구명` — `부산광역시 중구` (원본의 중복 시군구명을 시도 접두로 해소한 전처리본) |
+| `kr-sido.json` | 2026-07-20 기준 대한민국 16개 시·도 | 정식 시·도명 — `서울특별시`, `전남광주통합특별시` |
+| `kr-sigungu.json` | 253개 시·군·구(일반구 포함) | `시도명 시군구명` — `인천광역시 제물포구`, `경기도 수원시 장안구` |
 
 Region names must match the GeoJSON `properties.name` exactly. Geo-scatter (지도 포인트) charts use raw `[경도, 위도(, 크기값)]` coordinates instead of region names; per-point `symbolSize` is precomputed server-side (JSON cannot carry callbacks). Geo-scatter builder execution returns every coordinate row matching its JOIN/WHERE conditions without the default 1,000-row result cap, so the saved cache and embed payload preserve the same complete point set.
 
