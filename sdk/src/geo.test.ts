@@ -130,4 +130,23 @@ describe('ensureMapsRegistered', () => {
 
     expect((option.geo as Record<string, unknown>).boundingCoords).toEqual([[126.7, 37.8], [127.3, 37.3]]);
   });
+
+  it('지역 선택 방식으로만 전환하면 기존 화면 경계를 그대로 유지한다', async () => {
+    ec.getMap.mockReturnValue({ geoJSON: GEO });
+    const { ensureMapsRegistered } = await import('./geo');
+    const option: Record<string, unknown> = {
+      __chartsdkMapViewport: {
+        mode: 'regions',
+        regionKeys: [],
+        bounds: { west: 126.7, east: 127.3, south: 37.3, north: 37.8 },
+      },
+      series: [{ type: 'map', map: 'kr-sido', data: [{ name: '서울특별시', value: 10 }] }],
+    };
+
+    await ensureMapsRegistered('http://api', option);
+
+    expect((option.series as Array<Record<string, unknown>>)[0].boundingCoords)
+      .toEqual([[126.7, 37.8], [127.3, 37.3]]);
+    expect(option.__chartsdkMapViewport).toBeUndefined();
+  });
 });

@@ -77,22 +77,28 @@ export function applyMapViewport(
   const mapSeries = seriesOf(option).filter((series) => series.type === 'map');
   const geo = firstObject(option.geo);
   let bounds: MapBounds | null = null;
+  let preserveExactBounds = false;
 
   if (viewport.mode === 'manual' || viewport.mode === 'coordinates') {
     bounds = viewport.bounds ?? null;
   } else if (mapSeries.length > 0) {
     const series = mapSeries[0];
     const mapName = typeof series.map === 'string' ? series.map : '';
-    const names = viewport.mode === 'regions' && viewport.regionKeys.length > 0
-      ? viewport.regionKeys
-      : mapDataNames(series.data);
-    bounds = boundsFromRegisteredMap(resolveMap(mapName), names);
-    if (!bounds && viewport.mode === 'regions') bounds = viewport.bounds ?? null;
+    if (viewport.mode === 'regions' && viewport.regionKeys.length === 0 && viewport.bounds) {
+      // 표시 방식만 바꾼 시점에는 아직 선택 지역이 없다. 기존 화면을 유지하고,
+      // 첫 지역을 고른 순간부터 해당 지역의 경계를 계산한다.
+      bounds = viewport.bounds;
+      preserveExactBounds = true;
+    } else {
+      const names = viewport.mode === 'regions' ? viewport.regionKeys : mapDataNames(series.data);
+      bounds = boundsFromRegisteredMap(resolveMap(mapName), names);
+      if (!bounds && viewport.mode === 'regions') bounds = viewport.bounds ?? null;
+    }
   } else if (geo) {
     bounds = boundsFromGeoSeries(option);
   }
 
-  if (bounds && (viewport.mode === 'data' || viewport.mode === 'regions')) bounds = padMapBounds(bounds);
+  if (bounds && !preserveExactBounds && (viewport.mode === 'data' || viewport.mode === 'regions')) bounds = padMapBounds(bounds);
   const boundingCoords = bounds ? mapBoundsToBoundingCoords(bounds) : null;
   for (const series of mapSeries) {
     if (boundingCoords) series.boundingCoords = boundingCoords;
