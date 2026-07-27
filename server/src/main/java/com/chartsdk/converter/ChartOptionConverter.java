@@ -25,9 +25,16 @@ import java.util.Map;
 public class ChartOptionConverter {
     private static final String EMBEDDED_MAPS_KEY = "__chartsdkMaps";
     private static final String MAP_VIEWPORT_KEY = "__chartsdkMapViewport";
+    private static final String TOOLTIP_METADATA_KEY = "__chartsdkTooltip";
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
     private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
+    private static final List<String> LEGACY_DEFAULT_PALETTE = List.of(
+            "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
+            "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888"
+    );
+    private static final int AXIS_NAME_GAP = 56;
+    private static final int AXIS_ENDPOINT_NAME_GAP = 8;
     // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않는다. 예약 높이는 사용자 글꼴 크기에서 계산하며 mock과 수식이 같아야 한다.
     private record Typography(int title, int legend, int axis, int dataLabel, int tooltip) {}
     private record LayoutMetrics(int titleHeight, int legendHeight, int visualMapHeight) {}
@@ -54,7 +61,23 @@ public class ChartOptionConverter {
     }
 
     public Map<String, Object> convert(QueryRows rows, String chartType, Map<String, Object> options) {
-        Map<String, Object> opt = deepMerge(defaults.forType(chartType), options == null ? Map.of() : options);
+        Map<String, Object> normalizedOptions = migrateLegacyInteractionOptions(
+                options == null ? Map.of() : options,
+                chartType
+        );
+        Map<String, Object> opt = deepMerge(defaults.forType(chartType), normalizedOptions);
+        boolean legacyColorTheme = !normalizedOptions.isEmpty()
+                && number(map(normalizedOptions.get("colorTheme")).get("version"), 0) != 2;
+        if (legacyColorTheme) {
+            // colorTheme 도입 전 저장된 지도/히트맵은 종전 Safe + 2색 visualMap 결과를 유지한다.
+            opt.remove("colorTheme");
+            opt.put("paletteReversed", false);
+            if (("map".equals(chartType) || "heatmap".equals(chartType))
+                    && !normalizedOptions.containsKey("palette")) {
+                opt.put("palette", LEGACY_DEFAULT_PALETTE);
+                if (!normalizedOptions.containsKey("palettePreset")) opt.put("palettePreset", "safe");
+            }
+        }
         String variant = string(opt.get("variant"), "basic");
 
         List<Map<String, Object>> columns = rows.columns();
@@ -62,7 +85,23 @@ public class ChartOptionConverter {
         List<Object> categories = new ArrayList<>();
         for (List<Object> r : dataRows) categories.add(r.isEmpty() ? null : r.get(0));
 
+        List<String> colorNames = new ArrayList<>();
+        if ("pie".equals(chartType)) {
+            categories.forEach(category -> colorNames.add(String.valueOf(category)));
+        } else {
+            for (int c = 1; c < columns.size(); c++) colorNames.add(string(columns.get(c).get("name"), ""));
+        }
+        Map<String, Object> autoColorMap = ColorResolver.resolveSeriesColors(opt, colorNames);
+        opt.put("autoColorMap", autoColorMap);
+        ItemColorResolver itemColors = ItemColorResolver.from(opt);
+
         Map<String, Object> o = new LinkedHashMap<>();
+        o.put("__chartsdkAutoColorMap", autoColorMap);
+        o.put("__chartsdkValueFormat", Map.of(
+                "tooltip", string(map(opt.get("tooltip")).get("valueFormat"), "raw"),
+                "yAxis", string(map(opt.get("yAxis")).get("format"), "raw"),
+                "unit", string(map(opt.get("yAxis")).get("unit"), "")
+        ));
         // 배경: 임베드가 어떤 호스트 페이지(다크 포함) 위에서도 자기완결적으로 보이도록 불투명 기본(흰색).
         // 저장된 옵션에 backgroundColor 가 있으면 그 값을 쓴다(차트별 설정). SDK 는 data-chart-background 로 재정의 가능.
         o.put("backgroundColor", string(opt.get("backgroundColor"), "#ffffff"));
@@ -397,6 +436,7 @@ public class ChartOptionConverter {
         s.put("symbolSize", base);
         Object color = ColorResolver.paletteColor(opt, 0);
         if (color != null) s.put("itemStyle", Map.of("color", color));
+        applySeriesEmphasis(s, opt, "scatter");
         s.put("data", data);
         o.put("series", List.of(s));
         applyMapViewportMetadata(o, opt);
@@ -414,9 +454,11 @@ public class ChartOptionConverter {
         return "kr-sigungu".equals(name) ? "kr-sigungu" : "kr-sido";
     }
 
-    /** heatmap·map 공용 연속 visualMap — 팔레트[0]을 고강도색으로. */
+    /** heatmap·map 공용 visualMap. v2는 순차형 전체 단계, 구 저장 데이터는 종전 2색 계약을 유지한다. */
     private Map<String, Object> visualMap(double min, double max, Map<String, Object> opt) {
-        Object top = ColorResolver.paletteColor(opt, 0);
+        List<Object> palette = ColorResolver.orderedPalette(opt);
+        Object top = palette.isEmpty() ? null : palette.get(0);
+        boolean continuousPalette = number(map(opt.get("colorTheme")).get("version"), 0) == 2;
         Typography typography = typography(opt);
         LayoutMetrics metrics = layoutMetrics(typography);
         Map<String, Object> vm = new LinkedHashMap<>();
@@ -428,7 +470,12 @@ public class ChartOptionConverter {
         // 제목이 하단이면 visualMap 을 제목 위로 올려 겹침 방지(규칙 1의 map/heatmap 변형).
         vm.put("bottom", titleAtBottom(opt) ? metrics.titleHeight() : 0);
         vm.put("textStyle", Map.of("fontSize", typography.legend()));
-        vm.put("inRange", Map.of("color", List.of("#f7f7f7", top != null ? top : "#5470C6")));
+        vm.put("inRange", Map.of(
+                "color",
+                continuousPalette && !palette.isEmpty()
+                        ? palette
+                        : List.of("#f7f7f7", top != null ? top : "#5470C6")
+        ));
         return vm;
     }
 
@@ -612,12 +659,8 @@ public class ChartOptionConverter {
             if ("line".equals(seriesType)) applyLine(s, lineCfg);
             if (scatter && bubbleIdx < 0 && scatterCfg.get("symbolSize") != null) s.put("symbolSize", scatterCfg.get("symbolSize"));
             if (scatter && scatterCfg.get("symbol") != null) s.put("symbol", scatterCfg.get("symbol"));
-            if (individual) {
-                Object color = ColorResolver.pickColor(opt, colName, c - 1);
-                ColorResolver.applySeriesColor(s, seriesType, color);
-            } else {
-                ColorResolver.applySeriesColor(s, seriesType, ColorResolver.paletteColor(opt, c - 1));
-            }
+            ColorResolver.applySeriesColor(s, seriesType, ColorResolver.pickColor(opt, colName, c - 1));
+            applySeriesEmphasis(s, opt, seriesType);
             if (secondAxis && c >= 2) s.put("yAxisIndex", 1);
             series.add(s);
         }

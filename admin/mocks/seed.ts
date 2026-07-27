@@ -234,7 +234,7 @@ export function chartDetail(summary: ChartSummary): Chart {
     defineMode: 'builder',
     sqlQuery: 'SELECT category, SUM(amount) AS total FROM sales GROUP BY category',
     builderConfig: { table: { datasourceId: summary.datasourceId, schema: 'public', name: 'sales' }, xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null, sample: null },
-    options: { colorMode: 'palette', legend: { show: true } },
+    options: { legend: { show: true } },
     refreshMode: 'ttl',
     cacheTtlSeconds: 3600,
     createdAt: '2026-06-01T10:00:00Z',

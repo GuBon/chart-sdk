@@ -14,8 +14,19 @@
  *   - tier  : 구현 시급도 (언제 만드는가) → T1 = MVP 기본 품질, T2 = 자주, T3 = 고급
  *
  * 관련 문서: PRD v1.6 (7.2 전환규칙 · 9.2 options 키) / 화면설계서 v2.4 (4.4 옵션 패널)
- * 대상 라이브러리: Apache ECharts v6
+ * 대상 라이브러리: Apache ECharts v5.6.0
  */
+
+import {
+  CARTO_QUALITATIVE_CHOICES,
+  DEFAULT_COLOR_THEME,
+  DEFAULT_PALETTE,
+  DEFAULT_PALETTE_PRESET,
+  DEFAULT_SEQUENTIAL_PRESET,
+  cartoPalette,
+  normalizeColorTheme,
+  switchPaletteForChartType,
+} from '@chartsdk/chart-options/palettes';
 
 // ── 기본 타입 ─────────────────────────────────────────────────────
 
@@ -275,26 +286,38 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 색상 ──
-  // boxplot: 팔레트/개별색 = 상자 색. heatmap·map: 팔레트[0]을 visualMap 그라디언트 상단색으로 사용(개별색 무의미 → 제외).
+  // boxplot: 팔레트/개별색 = 상자 색. heatmap·map은 순차형 팔레트 전체를 visualMap에 쓰되 선택한 항목의 itemStyle이 우선한다.
   {
-    key: 'colorMode', zone: 'common', section: '색상', label: '색 모드',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: 'palette',
-    echarts: '@color',
-    choices: [{ value: 'palette', label: '팔레트' }, { value: 'individual', label: '개별' }],
+    key: 'palettePreset', zone: 'common', section: '색상', label: '테마',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
+    default: DEFAULT_PALETTE_PRESET,
+    defaultByType: { heatmap: DEFAULT_SEQUENTIAL_PRESET, map: DEFAULT_SEQUENTIAL_PRESET },
+    echarts: '@palettePreset',
+    choices: CARTO_QUALITATIVE_CHOICES,
+    help: '차트 대분류에 맞는 CARTOColors 테마만 표시합니다.',
   },
   {
-    key: 'palette', zone: 'common', section: '색상', label: '팔레트 프리셋',
+    key: 'palette', zone: 'common', section: '색상', label: '테마 색상',
     control: 'palette', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
-    default: ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4'],
+    default: DEFAULT_PALETTE,
+    defaultByType: {
+      heatmap: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
+      map: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
+    },
     echarts: 'color',
-    help: 'heatmap·map 은 팔레트[0]을 visualMap 그라디언트 상단색으로 사용',
+    help: '선택한 시리즈·차트 요소에 테마 색상을 적용합니다. 지도·히트맵은 전체 색상 단계를 값 범위에 사용합니다.',
   },
   {
-    key: 'colorMap', zone: 'common', section: '색상', label: '개별 색 지정',
-    control: 'colorMap', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: {},
-    showIf: (o) => o.colorMode === 'individual',
+    key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
+    control: 'toggle', appliesTo: ['heatmap', 'map'], default: false,
+    echarts: '@visualMap.inRange.color.reverse',
+    help: '낮은 값과 높은 값에 적용되는 순차형 팔레트의 방향을 서로 바꿉니다.',
+  },
+  {
+    key: 'colorMap', zone: 'common', section: '색상', label: '시리즈 색상',
+    control: 'colorMap', appliesTo: MAJOR_TYPES, default: {},
     echarts: '@colorMap',
-    help: '실행 성공 후 활성(동적). 막대=항목/시리즈, 선=시리즈, 원형=조각. colorMap에 없으면 팔레트 순서 자동',
+    help: '시리즈 칩을 선택하거나 차트에서 막대·점·조각·지역을 선택한 뒤 색상을 적용합니다. 테마를 바꿔도 직접 지정한 색상은 유지됩니다.',
   },
 
   // ── 범례 ──

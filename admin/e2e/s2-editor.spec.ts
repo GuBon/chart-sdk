@@ -1000,12 +1000,45 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     });
   }
 
+  test('지도는 순차형 테마 19개와 그라데이션 방향 반전을 제공한다', async ({ page }) => {
+    await runBar(page);
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+    const theme = page.locator('#option-palettePreset');
+    await expect(theme.locator('option')).toHaveCount(6);
+    await page.getByPlaceholder('차트 이름').fill('색상 테마 초기화 테스트');
+    await page.locator('header').getByRole('button', { name: '저장', exact: true }).click();
+    await expect(page.getByText('저장되었습니다')).toBeVisible();
+
+    await openOptionTab(page, '기본');
+    await page.getByRole('button', { name: '지도', exact: true }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+
+    await expect(theme).toHaveValue('teal');
+    await expect(theme.locator('option')).toHaveCount(19);
+    await expect(page.getByTestId('palette-gradient')).toBeVisible();
+    await theme.selectOption('burg');
+    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(255, 198, 196)');
+
+    await page.getByRole('switch', { name: '색상 방향 반전' }).click();
+    await expect(page.getByTestId('palette-gradient')).toHaveAttribute('aria-label', /반전됨/);
+    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(103, 32, 68)');
+
+    await page.locator('header').getByRole('button', { name: '초기화', exact: true }).click();
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+    await expect(theme).toHaveValue('safe');
+    await expect(theme.locator('option')).toHaveCount(6);
+  });
+
   test('표본 추출 실행 결과에 방식·집계 주의문구가 표시된다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('switch', { name: '표본 추출' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByText('주의: 전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.')).toBeVisible();

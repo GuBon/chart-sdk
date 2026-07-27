@@ -52,6 +52,11 @@ cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 
 계층·수치·라이브 스위프 절차는 [`docs/테스트_전략.md`](docs/테스트_전략.md)가 단일 관리한다.
 
+## 서드파티 고지
+
+차트 테마의 정성형·순차형 색상 팔레트는 CARTO의 **CARTOColors**를 사용한다. 상세 출처와 라이선스는
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 참조한다.
+
 ## Docker PostgreSQL
 
 로컬 PostgreSQL이 5432를 쓰는 환경을 피하기 위해 Docker DB는 `localhost:5433`으로 노출한다.

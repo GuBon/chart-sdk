@@ -12,6 +12,7 @@
     "./geo": "./geo.ts",
     "./renderLayout": "./renderLayout.ts",
     "./sampling": "./sampling.ts",
+    "./palettes": "./palettes.ts",
     "./layout-contract-cases.json": "./layout-contract-cases.json",
     "./sampling-contract-cases.json": "./sampling-contract-cases.json",
     "./maps/*.json": "./maps/*.json"
