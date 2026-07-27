@@ -41,7 +41,7 @@ class ChartServiceTest {
         when(currentUser.currentUserId()).thenReturn(OptionalLong.empty());
         when(charts.previewDefinition(null, 12L)).thenReturn(new ChartDefinition(
                 12L, 1L, "SELECT category, SUM(amount) AS total FROM sales GROUP BY category", "bar",
-                Map.of(), "manual", 3600, 3, null
+                Map.of(), Map.of(), "manual", 3600, 3, null
         ));
         when(compute.serve(12L, "manual", 3600, 3, null))
                 .thenReturn(new CachedChartRows(queryRows, Instant.parse("2026-07-20T00:00:00Z")));

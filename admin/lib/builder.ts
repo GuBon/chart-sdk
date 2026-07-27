@@ -201,6 +201,13 @@ function joinValidationIssue(cfg: BuilderConfig, tables: SchemaTable[]): string 
 }
 
 export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: ChartType): BuilderConfig {
+  const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
+  cfg = {
+    ...cfg,
+    seriesBy: supportsSeriesBy ? cfg.seriesBy ?? null : null,
+    seriesOrder: supportsSeriesBy ? cfg.seriesOrder ?? 'asc' : 'asc',
+    yAxis: supportsSeriesBy && cfg.seriesBy ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+  };
   if (chartType === 'scatter') {
     return {
       ...cfg,
@@ -276,7 +283,9 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
   return {
     ...cfg,
     // 원형은 조각별 단일 값 컬럼.
-    yAxis: chartType === 'pie' ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    seriesBy: supportsSeriesBy ? cfg.seriesBy ?? null : null,
+    seriesOrder: supportsSeriesBy ? cfg.seriesOrder ?? 'asc' : 'asc',
+    yAxis: chartType === 'pie' || ((chartType === 'bar' || chartType === 'line') && cfg.seriesBy) ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
     sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
     geoPoint: undefined,
     geoArea: undefined,
@@ -317,6 +326,7 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     for (const r of refs) {
       if (r.indexOf('.') < 0) return '조인 시 컬럼은 "테이블.컬럼" 형식이어야 합니다.';
       if (!activeHandles.includes(parseColumn(r, tableHandle(cfg.table)).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
+      cfg.seriesBy,
     }
   }
   const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
@@ -357,6 +367,10 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (spatialGeoArea) {
     const areaColumn = cfg.geoArea?.spatialColumn;
     const nameColumn = cfg.geoArea?.nameColumn;
+  if (cfg.seriesBy && !(chartType === 'bar' || chartType === 'line')) return '계열 기준은 막대와 선 차트에서만 사용할 수 있습니다.';
+  if (cfg.seriesBy && cfg.yAxis.length !== 1) return '계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.';
+  if (cfg.seriesBy && cfg.seriesBy === cfg.xAxis) return 'X축과 계열 기준은 서로 다른 컬럼이어야 합니다.';
+  if (cfg.seriesBy && !columnType(cfg.seriesBy, cfg, tables)) return '계열 기준 컬럼을 선택하세요.';
     const valueColumn = cfg.geoArea?.valueColumn;
     if (!areaColumn) return '공간 Polygon 컬럼을 선택하세요.';
     if (!isSpatialAreaType(columnType(areaColumn, cfg, tables))) {
@@ -430,7 +444,7 @@ export function normalizeSampleConfig(sample: BuilderConfig['sample']): BuilderC
 }
 
 export function emptyBuilder(): BuilderConfig {
-  return { table: null, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: null };
+  return { table: null, joins: [], xAxis: null, xAxisBucket: null, seriesBy: null, seriesOrder: 'asc', yAxis: [], where: [], orderBy: null, sample: null };
 }
 
 export function normalizeBuilder(cfg: BuilderConfig): BuilderConfig {

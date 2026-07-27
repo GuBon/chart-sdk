@@ -1,6 +1,7 @@
 package com.chartsdk.web;
 
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
@@ -57,6 +58,7 @@ public class QueryController {
         Map<String, Object> cfg = body.builderConfig();
         FederatedQueryRunner.BuiltResult built = runner.runBuilder(body.datasourceId(), cfg, chartType, rawMode);
         QueryRows rows = built.rows();
+        if (!rawMode) rows = SeriesPivot.pivot(rows, cfg);
 
         Map<String, Object> result = rowsResult(rows);
         if (!rawMode) {

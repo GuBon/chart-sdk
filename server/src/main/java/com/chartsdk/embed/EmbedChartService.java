@@ -4,6 +4,7 @@ import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.token.EmbedPrincipal;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -37,12 +38,13 @@ public class EmbedChartService {
         // 서빙 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
         CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
                 chart.version(), chart.sampling());
+        var displayRows = SeriesPivot.pivot(rows.rows(), chart.builderConfig());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
-        response.put("rowCount", rows.rows().rowCount());
+        response.put("rowCount", displayRows.rowCount());
         response.put("truncated", rows.rows().truncated()); // 신규 차트 계산은 전체 결과이며, 레거시/제한 결과 호환 메타데이터는 유지한다.
-        response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
+        response.put("option", converter.convert(displayRows, chart.chartType(), chart.options()));
         if (rows.sampling() != null) rows.sampling().putInto(response);
         return response;
     }
@@ -67,6 +69,7 @@ public class EmbedChartService {
                 rs.getString("sql_query"),
                 rs.getString("chart_type"),
                 readJson(rs.getString("options")),
+                readJson(rs.getString("builder_config")),
                 rs.getString("refresh_mode"),
                 rs.getInt("cache_ttl_seconds"),
                 rs.getInt("version"),
@@ -84,7 +87,8 @@ public class EmbedChartService {
     }
 
     record ChartDefinition(long id, long datasourceId, String sqlQuery, String chartType,
-                           Map<String, Object> options, String refreshMode, int cacheTtlSeconds, int version,
+                           Map<String, Object> options, Map<String, Object> builderConfig,
+                           String refreshMode, int cacheTtlSeconds, int version,
                            SamplingMetadata sampling) {
     }
 }

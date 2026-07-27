@@ -8,12 +8,29 @@ import org.junit.jupiter.api.Test;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BuilderSqlBuilderTest {
+    @Test
+    void seriesByAddsSecondGroupDimensionBeforeSingleValue() {
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("table", "sales");
+        cfg.put("xAxis", "category");
+        cfg.put("seriesBy", "customer_id");
+        cfg.put("yAxis", List.of(Map.of("column", "amount", "agg", "sum", "alias", "population")));
+        cfg.put("where", List.of());
+
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, "bar", false);
+
+        assertThat(sql.text()).contains("\"category\"")
+                .contains("\"customer_id\" AS \"customer_id\"")
+                .contains("SUM(\"public\".\"sales\".\"amount\") AS \"population\"")
+                .contains("GROUP BY \"public\".\"sales\".\"category\", \"public\".\"sales\".\"customer_id\"");
+    }
     private record SamplingContractCase(
             String name,
             String agg,

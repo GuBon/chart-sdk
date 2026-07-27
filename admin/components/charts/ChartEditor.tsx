@@ -428,7 +428,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
     // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined, geoArea: undefined });
+    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, seriesBy: null, seriesOrder: 'asc', yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined, geoArea: undefined });
     setTableSelectionTarget(null);
     resetResults();
     setDirty(true);

@@ -54,6 +54,7 @@ public final class BuilderSqlBuilder {
     private static final String BASE_ALIAS = "__chartsdk_base";
     private static final String KEYS_ALIAS = "__chartsdk_keys";
     private static final String RESULT_X = "__chartsdk_x";
+    private static final String RESULT_SERIES = "__chartsdk_series";
     private static final String RESULT_Y_PREFIX = "__chartsdk_y_";
     private static final String SPATIAL_LONGITUDE = "__chartsdk_longitude";
     private static final String SPATIAL_LATITUDE = "__chartsdk_latitude";
@@ -119,6 +120,7 @@ public final class BuilderSqlBuilder {
         SamplingMetadata sampling = rawMode ? null : resolveSampling(); // rows 탭은 표본 집계와 별도 원본 미리보기
 
         String xAxis = str(cfg.get("xAxis"));
+        String seriesBy = str(cfg.get("seriesBy"));
         List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
         if (rawMode) {
             // 원본 데이터 모드: SELECT * + WHERE + LIMIT (집계·정렬·버킷·표본 무시 — 생성규칙 §3B)
@@ -138,13 +140,14 @@ public final class BuilderSqlBuilder {
         if (xAxis == null) throw invalidReq("xAxis is required.");
         if (yAxis.isEmpty()) throw invalidReq("At least one yAxis is required.");
         Ref x = resolveRef(xAxis);
+        Ref series = seriesBy == null ? null : resolveRef(seriesBy);
 
         // 차트 종류별 검증 (생성규칙 §9) — 표본 형태 결정·렌더러 교체보다 먼저(표본+원본값 등 오류 조기 차단).
         boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
-        validateChartShape(x, yAxis, allNone);
+        validateChartShape(x, series, yAxis, allNone);
 
         if (sampling != null && sampling.approximate() && "RESULT_RANDOM".equals(sampling.method())) {
-            return buildResultRandom(x, yAxis, joins, sampling);
+            return buildResultRandom(x, series, yAxis, joins, sampling);
         }
 
         // 표본 SQL 형태 — INDEX_RANDOM: CTE 래핑 + 별칭 렌더러 / SYSTEM: TABLESAMPLE / 그 외: 평이.
@@ -192,6 +195,7 @@ public final class BuilderSqlBuilder {
 
         List<String> selects = new ArrayList<>();
         selects.add(xSql);
+        if (series != null) selects.add(render(series) + " AS " + SqlIdentifier.quote(series.column()));
         for (Map<String, Object> y : yAxis) {
             Ref col = resolveRef(str(y.get("column")));
             String agg = str(y.get("agg"));
@@ -207,13 +211,14 @@ public final class BuilderSqlBuilder {
 
         List<Object> params = new ArrayList<>(leadingParams);
         String where = buildWhere(params);
-        String order = buildOrder(yAxis.size());
+        String order = buildOrder(yAxis.size(), series != null);
 
         String groupBy;
         if (allNone) {
             groupBy = ""; // 분포(scatter)·원본 행: 집계 없음 → GROUP BY 없음 (기존 모순 버그 수정)
         } else {
-            groupBy = " GROUP BY " + (bucket == null ? render(x) : "1");
+            groupBy = " GROUP BY " + (bucket == null ? render(x) : "1")
+                    + (series == null ? "" : ", " + render(series));
         }
 
         String sql = cteHead + "SELECT " + String.join(", ", selects) + from + where + groupBy + order;
@@ -242,7 +247,7 @@ public final class BuilderSqlBuilder {
      * VIEW 또는 JOIN+WHERE 결과를 모집단 CTE로 만든 뒤 고정 개수 행을 뽑고 집계한다.
      * PostgreSQL은 seeded random top-k, DuckDB는 native reservoir를 사용하지만 API 의미는 RESULT_RANDOM으로 같다.
      */
-    private Sql buildResultRandom(Ref x, List<Map<String, Object>> yAxis, String joins,
+    private Sql buildResultRandom(Ref x, Ref series, List<Map<String, Object>> yAxis, String joins,
                                   SamplingMetadata sampling) {
         int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
                 : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
@@ -250,6 +255,7 @@ public final class BuilderSqlBuilder {
 
         List<String> projected = new ArrayList<>();
         projected.add(render(x) + " AS " + SqlIdentifier.quote(RESULT_X));
+        if (series != null) projected.add(render(series) + " AS " + SqlIdentifier.quote(RESULT_SERIES));
         List<Ref> yRefs = new ArrayList<>();
         for (int i = 0; i < yAxis.size(); i++) {
             Ref ref = resolveRef(str(yAxis.get(i).get("column")));
@@ -304,6 +310,8 @@ public final class BuilderSqlBuilder {
 
         List<String> selects = new ArrayList<>();
         selects.add(xSql);
+        String sampledSeries = series == null ? null : sampleColumn(RESULT_SERIES);
+        if (sampledSeries != null) selects.add(sampledSeries + " AS " + SqlIdentifier.quote(series.column()));
         for (int i = 0; i < yAxis.size(); i++) {
             String agg = str(yAxis.get(i).get("agg"));
             String alias = str(yAxis.get(i).get("alias"));
@@ -313,8 +321,9 @@ public final class BuilderSqlBuilder {
         }
         selects.addAll(hiddenResultSampleColumns(yAxis));
 
-        String groupBy = " GROUP BY " + (bucket == null ? sampledX : "1");
-        String order = buildOrder(yAxis.size());
+        String groupBy = " GROUP BY " + (bucket == null ? sampledX : "1")
+                + (sampledSeries == null ? "" : ", " + sampledSeries);
+        String order = buildOrder(yAxis.size(), series != null);
         String sql = cte + "SELECT " + String.join(", ", selects) + " FROM " + sample
                 + groupBy + order;
         return new Sql(sql, params, sampling);
@@ -574,7 +583,7 @@ public final class BuilderSqlBuilder {
     }
 
     // ── ORDER BY ─────────────────────────────────────────
-    private String buildOrder(int seriesCount) {
+    private String buildOrder(int seriesCount, boolean hasSeriesBy) {
         Map<String, Object> order = asMap(cfg.get("orderBy"));
         if (order == null) return "";
         String target = str(order.get("target"));
@@ -585,7 +594,7 @@ public final class BuilderSqlBuilder {
         } else if (target.matches("y\\d+")) {
             int idx = Integer.parseInt(target.substring(1));
             if (idx >= seriesCount) throw invalidReq("orderBy target out of range: " + target);
-            pos = idx + 2;
+            pos = idx + (hasSeriesBy ? 3 : 2);
         } else {
             throw invalidReq("Invalid orderBy target: " + target);
         }
@@ -630,7 +639,13 @@ public final class BuilderSqlBuilder {
     }
 
     // ── 검증 헬퍼 ────────────────────────────────────────
-    private void validateChartShape(Ref x, List<Map<String, Object>> yAxis, boolean allNone) {
+    private void validateChartShape(Ref x, Ref series, List<Map<String, Object>> yAxis, boolean allNone) {
+        if (series != null) {
+            if (!("bar".equals(chartType) || "line".equals(chartType))) {
+                throw invalidReq("seriesBy is supported only for bar and line charts.");
+            }
+            if (yAxis.size() != 1) throw invalidReq("seriesBy requires exactly one yAxis field.");
+        }
         boolean anyNone = yAxis.stream().anyMatch(y -> "none".equals(str(y.get("agg"))));
         if (allNone && cfg.get("sample") != null) {
             throw invalidReq("Sample cannot be used with raw values.");

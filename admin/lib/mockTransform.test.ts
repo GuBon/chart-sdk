@@ -255,3 +255,143 @@ describe('mock 변환기 표본 집계 계약', () => {
     ]);
   });
 });
+
+describe('계열 피벗·색상 계약', () => {
+  const config: BuilderConfig = {
+    table: { datasourceId: 1, schema: 'public', name: 'regional_population' },
+    joins: [], xAxis: 'region', xAxisBucket: null, seriesBy: 'year', seriesOrder: 'asc',
+    yAxis: [{ column: 'population', agg: 'sum' }], where: [], orderBy: null, sample: null,
+  };
+
+  it('연도를 결과 시리즈 컬럼으로 즉시 전개한다', () => {
+    const pivoted = buildAggregateRows(config, 'bar');
+    expect(pivoted.columns.map((column) => column.name)).toEqual(['region', '2012', '2013', '2014', '2015']);
+    expect(pivoted.rows).toHaveLength(5);
+    expect(buildGeneratedSql(config, 'bar')).toContain('GROUP BY "region", "year"');
+  });
+
+  it('CARTO Safe를 기본으로 쓰고 12개 초과 색을 반복하지 않는다', () => {
+    const many: QueryResult = {
+      columns: [{ name: 'region', type: 'text' }, ...Array.from({ length: 14 }, (_, i) => ({ name: `s${i}`, type: 'number' }))],
+      rows: [['서울', ...Array.from({ length: 14 }, (_, i) => i)]], rowCount: 1, truncated: false, elapsedMs: 0,
+    };
+    const option = assembleOption(many, 'bar', {});
+    const colors = Object.values(option.__chartsdkAutoColorMap as Record<string, string>);
+    expect(colors).toHaveLength(14);
+    expect(new Set(colors).size).toBe(14);
+    expect(colors[0]).toBe('#88CCEE');
+    expect(colors[12]).not.toBe(colors[0]);
+  });
+});
+
+describe('순차형 visualMap 색상 계약', () => {
+  it.each(['map', 'heatmap'] as const)('%s는 새 테마의 7단계 전체를 낮은 값부터 사용한다', (chartType) => {
+    const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
+    const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
+
+    expect(colors).toEqual(cartoPalette('teal'));
+  });
+
+  it.each(['map', 'heatmap'] as const)('%s 색상 방향을 반전한다', (chartType) => {
+    const options = optionsWithDefaults(chartType);
+    options.paletteReversed = true;
+    options.colorTheme.sequentialReversed = true;
+    const option = assembleOption(result, chartType, options);
+    const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
+
+    expect(colors).toEqual([...cartoPalette('teal')].reverse());
+  });
+
+  it('구 저장 지도는 기존 2색 visualMap 출력을 유지한다', () => {
+    const legacy = optionsWithDefaults('map', {
+      palettePreset: 'safe',
+      palette: cartoPalette('safe'),
+    });
+    const option = assembleOption(result, 'map', legacy);
+    const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
+
+    expect(colors).toEqual(['#f7f7f7', '#88CCEE']);
+  });
+});
+
+describe('개별 데이터 색상 계약', () => {
+  it('막대 하나만 data itemStyle로 덮어쓴다', () => {
+    const option = assembleOption(result, 'bar', {
+      itemColorOverrides: [{
+        kind: 'cartesian',
+        seriesName: 's1',
+        dimensions: ['B'],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect(series.data[0]).toBe(10);
+    expect(series.data[1]).toEqual({ value: 20, itemStyle: { color: '#FFB000' } });
+  });
+
+  it('선의 점 색상만 바꾸고 선 전체 색상은 유지한다', () => {
+    const option = assembleOption(result, 'line', {
+      colorMap: { s1: '#112233' },
+      itemColorOverrides: [{
+        kind: 'cartesian',
+        seriesName: 's1',
+        dimensions: ['A'],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect(series.lineStyle.color).toBe('#112233');
+    expect(series.data[0].itemStyle.color).toBe('#FFB000');
+  });
+
+  it('분산형 점은 x·y 값으로 식별해 색을 덮어쓴다', () => {
+    const scatterResult: QueryResult = {
+      columns: [{ name: 'x', type: 'number' }, { name: 'y', type: 'number' }],
+      rows: [[5, 10], [5, 20]],
+      rowCount: 2,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(scatterResult, 'scatter', {
+      itemColorOverrides: [{
+        kind: 'scatter',
+        seriesName: 'y',
+        dimensions: [5, 20],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const data = (option.series as Array<Record<string, any>>)[0].data;
+
+    expect(data[0]).toEqual([5, 10]);
+    expect(data[1]).toEqual({ value: [5, 20], itemStyle: { color: '#FFB000' } });
+  });
+
+  it('지도 지역 하나만 visualMap 위에 areaColor를 지정한다', () => {
+    const mapResult: QueryResult = {
+      columns: [{ name: 'region', type: 'text' }, { name: 'value', type: 'number' }],
+      rows: [['서울특별시', 10], ['부산광역시', 20]],
+      rowCount: 2,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(mapResult, 'map', {
+      itemColorOverrides: [{
+        kind: 'map',
+        seriesName: '__map__',
+        dimensions: ['부산광역시'],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const data = (option.series as Array<Record<string, any>>)[0].data;
+
+    expect(data[0].itemStyle).toBeUndefined();
+    expect(data[1].itemStyle.areaColor).toBe('#FFB000');
+    expect(option.visualMap).toBeDefined();
+  });
+});

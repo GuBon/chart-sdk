@@ -249,6 +249,7 @@ public class ChartRepository {
                     rs.getString("sql_query"),
                     rs.getString("chart_type"),
                     readJson(rs.getString("options")),
+                    readJson(rs.getString("builder_config")),
                     rs.getString("refresh_mode"),
                     rs.getInt("cache_ttl_seconds"),
                     rs.getInt("version"),

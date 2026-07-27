@@ -369,6 +369,17 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
       .toBe('박스 플롯은 집계 없이 원본값만 사용합니다.');
     // 비숫자 값 컬럼(category) → 거부
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'category', agg: 'none' }] }), 'boxplot', TABLES))
+
+  it('계열 기준은 막대·선의 단일 Y만 허용하고 차트 전환 시 정리한다', () => {
+    const series = bar({
+      seriesBy: 'date',
+      seriesOrder: 'asc',
+      yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }],
+    });
+    expect(builderValidationIssue(series, 'bar', TABLES)).toBe('계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.');
+    expect(normalizeBuilderForChartType(series, 'bar').yAxis).toHaveLength(1);
+    expect(normalizeBuilderForChartType(series, 'scatter').seriesBy).toBeNull();
+  });
       .toBe('박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.');
   });
 

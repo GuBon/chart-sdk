@@ -115,7 +115,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     .join('');
   const orderSql = () => {
     if (!cfg.orderBy) return '';
-    const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + 2; // y0 → 2번째 컬럼
+    const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + (cfg.seriesBy ? 3 : 2);
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
   if (spatialGeoArea) {
@@ -149,6 +149,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
   if (rawMode) {
     const selects = [
       qcol(cfg.xAxis),
+      ...(cfg.seriesBy ? [qcol(cfg.seriesBy)] : []),
       ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
     ];
     return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}`;
@@ -176,6 +177,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     const yAliases = cfg.yAxis.map((_, i) => `__chartsdk_y_${i}`);
     const projected = [
       `${qcol(cfg.xAxis)} AS ${qident(xAlias)}`,
+      ...(cfg.seriesBy ? [`${qcol(cfg.seriesBy)} AS ${qident('__chartsdk_series')}`] : []),
       ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
     ];
     const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
@@ -204,6 +206,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     });
     const selects = [
       xCol,
+      ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(colName(cfg.seriesBy))}`] : []),
       ...cfg.yAxis.map((y, i) => `${aggSql[y.agg](qcol(`__chartsdk_sample.${yAliases[i]}`))} AS ${qident(aliasOf(y))}`),
       `COUNT(*) AS ${qident('__chartsdk_sample_count')}`,
       `(SELECT ${qident('sampled')} FROM ${nCte}) AS ${qident('__chartsdk_sample_total')}`,
@@ -212,7 +215,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     return `WITH ${ctes.join(',\n')}
 SELECT ${selects.join(', ')}
 FROM ${sample}
-GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}`;
+GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${cfg.seriesBy ? `, ${qcol('__chartsdk_sample.__chartsdk_series')}` : ''}${orderSql()}`;
   }
 
   const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
@@ -230,6 +233,7 @@ GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}`;
   }) : [];
   const selects = [
     xCol,
+    ...(cfg.seriesBy ? [sourceColumn(cfg.seriesBy)] : []),
     ...cfg.yAxis.map((y) => `${aggSql[y.agg](sourceColumn(y.column))} AS ${qident(aliasOf(y))}`),
     ...(approximate
       ? [
@@ -241,7 +245,7 @@ GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${orderSql()}`;
         ]
       : []),
   ];
-  const group = cfg.xAxisBucket ? '1' : xSource;
+  const group = `${cfg.xAxisBucket ? '1' : xSource}${cfg.seriesBy ? `, ${sourceColumn(cfg.seriesBy)}` : ''}`;
   if (indexRandom) {
     const indexPlan = plan!;
     const seed = indexPlan.seed ?? DEFAULT_SAMPLE_SEED;
@@ -440,6 +444,19 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       elapsedMs: sampling?.approximate ? 12 : 20,
       ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
     };
+  if (cfg.seriesBy && (chartType === 'bar' || chartType === 'line')) {
+    const years = ['2012', '2013', '2014', '2015'];
+    const regions = ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도'];
+    const columns: Cols = [
+      { name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' },
+      ...years.map((year) => ({ name: year, type: 'numeric' })),
+    ];
+    const rows: Rows = regions.map((region, regionIndex) => [
+      region,
+      ...years.map((_year, yearIndex) => 2_500_000 + regionIndex * 1_150_000 + yearIndex * 85_000),
+    ]);
+    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 24 };
+  }
   }
   // 지도 포인트: 대한민국 범위 내 경도·위도(+선택 크기값) 원본 좌표.
   if (chartType === 'geoscatter') {

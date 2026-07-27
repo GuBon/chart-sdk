@@ -4,6 +4,7 @@ import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.SqlLiterals;
@@ -119,14 +120,15 @@ public class ChartService {
         CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
                 chart.version(), chart.sampling());
         Map<String, Object> response = new LinkedHashMap<>();
+        var displayRows = SeriesPivot.pivot(rows.rows(), chart.builderConfig());
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
-        response.put("rowCount", rows.rows().rowCount());
+        response.put("rowCount", displayRows.rowCount());
         response.put("truncated", rows.rows().truncated());
-        response.put("option", converter.convert(rows.rows(), chart.chartType(), chart.options()));
+        response.put("option", converter.convert(displayRows, chart.chartType(), chart.options()));
         if (includeRows) {
-            response.put("columns", rows.rows().columns());
-            response.put("rows", rows.rows().rows());
+            response.put("columns", displayRows.columns());
+            response.put("rows", displayRows.rows());
             response.put("elapsedMs", rows.rows().elapsedMs());
         }
         if (rows.sampling() != null) rows.sampling().putInto(response);

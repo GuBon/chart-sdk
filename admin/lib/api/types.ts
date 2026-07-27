@@ -89,6 +89,9 @@ export interface BuilderConfig {
   joins?: JoinSpec[]; // 생성규칙 11장. 미지정/[] = 단일 테이블
   xAxis: string | null;
   xAxisBucket: XAxisBucket;
+  /** 막대·선 전용 두 번째 그룹 차원. 결과는 X × 계열 피벗으로 표시한다. */
+  seriesBy?: string | null;
+  seriesOrder?: 'asc' | 'desc' | 'data';
   yAxis: YAxisField[];
   where: WhereCond[];
   orderBy: OrderBy | null;

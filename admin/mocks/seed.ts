@@ -129,6 +129,18 @@ export const schemaTables: SchemaTable[] = [
   },
   {
     datasourceId: 1,
+    schema: 'public',
+    name: 'regional_population',
+    relationType: 'TABLE',
+    estimatedRowCount: 68,
+    columns: [
+      { name: 'region', type: 'text' },
+      { name: 'year', type: 'int' },
+      { name: 'population', type: 'bigint' },
+    ],
+  },
+  {
+    datasourceId: 1,
     schema: 'analytics',
     name: 'sales_summary',
     relationType: 'VIEW',

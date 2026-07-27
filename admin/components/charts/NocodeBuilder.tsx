@@ -81,7 +81,8 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const areaNameOptions = colOptions.filter((column) => !/\b(?:geometry|geography)\b/i.test(column.type));
   const numericOptions = colOptions.filter((column) => isNumericType(column.type));
   // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]). 버킷·표본은 원본값 모드에서 숨김.
-  const maxSeries = isPie || isMap || isBoxplot ? 1 : isGeoScatter ? 2 : Infinity;
+  const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
+  const maxSeries = isPie || isMap || isBoxplot || !!config.seriesBy ? 1 : isGeoScatter ? 2 : Infinity;
   const hideBucket = isScatter || isBoxplot || isGeoScatter;
   const hideSampleRow = isScatter || isBoxplot || isGeoScatter || spatialGeoArea;
   const rawY = isScatter || isBoxplot || isGeoScatter; // Y 기본 집계 없음
@@ -107,8 +108,24 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
 
   const setY = (i: number, p: Partial<YAxisField>) =>
     patch({ yAxis: config.yAxis.map((y, idx) => (idx === i ? { ...y, ...p } : y)) });
-  const addY = () => patch({ yAxis: [...config.yAxis, { column: firstCol, agg: rawY ? 'none' : 'sum' }] });
-  const removeY = (i: number) => patch({ yAxis: config.yAxis.filter((_, idx) => idx !== i) });
+  const addY = () => patch({
+    yAxis: [
+      ...config.yAxis,
+      {
+        column: firstValueCol,
+        agg: 'none',
+      },
+    ],
+  });
+  const removeY = (i: number) => {
+    const yAxis = config.yAxis.filter((_, idx) => idx !== i);
+    patch({ yAxis, orderBy: !config.xAxis && yAxis.length === 0 ? null : config.orderBy });
+  };
+  const changeSeriesBy = (seriesBy: string) => patch({
+    seriesBy: seriesBy || null,
+    seriesOrder: config.seriesOrder ?? 'asc',
+    yAxis: seriesBy ? config.yAxis.slice(0, 1) : config.yAxis,
+  });
 
   const setW = (i: number, p: Partial<WhereCond>) =>
     patch({ where: config.where.map((w, idx) => (idx === i ? { ...w, ...p } : w)) });
@@ -456,20 +473,27 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                   <Select id={`builder-y-column-${i}`} name={`builderYColumn${i}`} value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
                 </div>
                 <div className="w-36">
-                  <Select id={`builder-y-agg-${i}`} name={`builderYAgg${i}`} value={y.agg} onChange={(e) => setY(i, { agg: e.target.value as YAxisField['agg'] })} options={yAggChoices} />
+                  <Select
+                    id={`builder-y-agg-${i}`}
+                    name={`builderYAgg${i}`}
+                    aria-label={`Y축 ${i + 1} 값 방식`}
+                    value={y.agg}
+                    onChange={(e) => setY(i, { agg: e.target.value as YAxisField['agg'] })}
+                    options={yAggChoices}
+                  />
                 </div>
                 <span className="text-[13px] text-text-secondary">별칭</span>
                 <div className="w-28">
                   <Input size="sm" value={y.alias ?? ''} onChange={(e) => setY(i, { alias: e.target.value })} placeholder="(자동)" />
                 </div>
-                <button type="button" aria-label="시리즈 제거" onClick={() => removeY(i)} className="text-text-tertiary hover:text-danger">
+                <button type="button" aria-label="값 제거" onClick={() => removeY(i)} className="text-text-tertiary hover:text-danger">
                   <X className="size-3.5" />
                 </button>
               </div>
             ))}
             <div className="flex items-center gap-3">
               <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || config.yAxis.length >= maxSeries}>
-                + 시리즈 추가
+                + 값 추가
               </Button>
               <span className="flex items-center gap-1.5 text-[13px] text-text-tertiary">
                 시리즈 나누기
@@ -486,9 +510,40 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                 <div className="w-40">
                   <Select aria-label="조건 컬럼" value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
                 </div>
+            <p className="text-xs text-text-tertiary">
+              원본값이 기본이며, 집계를 선택하면 X축과 계열 기준으로 그룹화합니다.
+            </p>
                 <div className="w-32">
                   <Select aria-label="조건 연산자" value={w.op} onChange={(e) => changeWhereOp(i, e.target.value as WhereCond['op'])} options={OP_CHOICES} />
                 </div>
+        {!spatialGeometry && supportsSeriesBy && <Row label="계열(그룹) 기준">
+          <div className="w-60">
+            <Select
+              id="builder-series-by"
+              aria-label="계열 그룹 기준"
+              value={config.seriesBy ?? ''}
+              onChange={(event) => changeSeriesBy(event.target.value)}
+              options={colOptions.filter((column) => column.value !== config.xAxis)}
+              placeholder="사용 안 함"
+            />
+          </div>
+          {config.seriesBy && (
+            <div className="w-32">
+              <Select
+                aria-label="계열 정렬"
+                value={config.seriesOrder ?? 'asc'}
+                onChange={(event) => patch({ seriesOrder: event.target.value as BuilderConfig['seriesOrder'] })}
+                options={[
+                  { value: 'asc', label: '오름차순' },
+                  { value: 'desc', label: '내림차순' },
+                  { value: 'data', label: '데이터 순서' },
+                ]}
+              />
+            </div>
+          )}
+          <span className="text-[13px] text-text-tertiary">예: 지역(X) · 인구수(Y) · 연도(계열)</span>
+        </Row>}
+
                 <WhereValueControl cond={w} onChange={(value) => setW(i, { value })} />
                 <button type="button" aria-label="조건 제거" onClick={() => removeW(i)} className="text-text-tertiary hover:text-danger">
                   <X className="size-3.5" />
