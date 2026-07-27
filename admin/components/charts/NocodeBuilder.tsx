@@ -11,7 +11,7 @@ import {
   VALUELESS_OPS,
   activeTables,
   aggChoicesForChart,
-  builderValidationIssue,
+  builderExecutionIssue,
   builderWarning,
   columnsForBuilder,
   createSampleConfig,
@@ -20,6 +20,7 @@ import {
   isNumericType,
   isSpatialAreaType,
   isSpatialPointType,
+  isTableQueryMode,
   orderTargets,
   tableHandle,
   tableRefKey,
@@ -49,6 +50,7 @@ interface Props {
   datasources: Datasource[];
   tableSelectionTarget: TableSelectionTarget | null;
   onRequestTableSelection: (target: TableSelectionTarget) => void;
+  onPreviewBaseTable: (table: SchemaTable) => void;
   onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
@@ -58,7 +60,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onPreviewBaseTable, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -72,6 +74,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const geoAreaMode = config.geoArea?.mode ?? 'regions';
   const spatialGeoArea = isMap && geoAreaMode === 'spatial';
   const spatialGeometry = spatialGeoPoint || spatialGeoArea;
+  const tableQueryMode = isTableQueryMode(config, chartType);
   const spatialPointOptions = colOptions
     .filter((column) => isSpatialPointType(column.type))
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
@@ -84,15 +87,15 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
   const maxSeries = isPie || isMap || isBoxplot || !!config.seriesBy ? 1 : isGeoScatter ? 2 : Infinity;
   const hideBucket = isScatter || isBoxplot || isGeoScatter;
-  const hideSampleRow = isScatter || isBoxplot || isGeoScatter || spatialGeoArea;
-  const rawY = isScatter || isBoxplot || isGeoScatter; // Y 기본 집계 없음
+  const hideSampleRow = isScatter || isBoxplot || isGeoScatter || spatialGeoArea || tableQueryMode;
   const xLabel = isMap ? '지역' : isBoxplot ? '카테고리' : isGeoScatter ? '경도' : 'X축';
-  const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 · 집계';
+  const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 값';
   const yAggChoices = aggChoicesForChart(chartType);
-  const validationIssue = builderValidationIssue(config, chartType, tables);
+  const executionIssue = builderExecutionIssue(config, chartType, tables);
   const warning = builderWarning(config);
-  const canRun = !validationIssue;
+  const canRun = !executionIssue;
   const firstCol = (isGeoScatter ? numericOptions[0] : colOptions[0])?.value ?? '';
+  const firstValueCol = numericOptions[0]?.value ?? colOptions[0]?.value ?? '';
 
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
@@ -103,7 +106,12 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
 
   const changeXAxis = (xAxis: string) => {
     const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
-    patch({ xAxis, xAxisBucket: isDate && !hideBucket ? 'month' : null });
+    const nextXAxis = xAxis || null;
+    patch({
+      xAxis: nextXAxis,
+      xAxisBucket: isDate && !hideBucket ? 'month' : null,
+      orderBy: !nextXAxis && config.yAxis.length === 0 ? null : config.orderBy,
+    });
   };
 
   const setY = (i: number, p: Partial<YAxisField>) =>
@@ -193,6 +201,9 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     : baseSchemaTable?.relationType === 'VIEW'
       ? 'View 조회 결과에서 무작위 행 표본'
       : sampleTotalHint(baseSchemaTable?.estimatedRowCount);
+  const sortTargets = tableQueryMode
+    ? colOptions.map((column) => ({ value: `column:${column.value}`, label: `${column.label} (원본)` }))
+    : orderTargets(config);
 
   return (
     <div
@@ -216,8 +227,10 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
             <span className="hidden xl:inline">접기</span>
           </button>
           <div className="flex-1" />
-          {validationIssue ? (
-            <span className="min-w-0 truncate text-xs text-danger" title={validationIssue}>{validationIssue}</span>
+          {executionIssue ? (
+            <span className="min-w-0 truncate text-xs text-danger" title={executionIssue}>{executionIssue}</span>
+          ) : tableQueryMode ? (
+            <span className="min-w-0 truncate text-xs text-text-tertiary">축 없이 조건·정렬 결과만 실행합니다.</span>
           ) : warning ? (
             <span className="min-w-0 truncate text-xs text-amber-600" title={warning}>{warning}</span>
           ) : null}
@@ -269,7 +282,8 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
             table={baseSchemaTable}
             datasourceName={baseSchemaTable ? dsName(baseSchemaTable.datasourceId) : null}
             active={tableSelectionTarget?.kind === 'base'}
-            onClick={() => onRequestTableSelection({ kind: 'base' })}
+            onClick={() => baseSchemaTable ? onPreviewBaseTable(baseSchemaTable) : onRequestTableSelection({ kind: 'base' })}
+            onChangeClick={baseSchemaTable ? () => onRequestTableSelection({ kind: 'base' }) : undefined}
           />
         </Row>
 
@@ -448,7 +462,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           <div className="w-60">
             <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder={isMap ? '지역명 컬럼' : '컬럼 선택'} />
           </div>
-          {isMap && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시 / 시군구 지도는 부산광역시 중구)</span>}
+          {isMap && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시)</span>}
           {isGeoScatter && <span className="text-[13px] text-text-tertiary">경도(숫자) 컬럼 — 위도는 아래 첫 번째, 점 크기값은 두 번째(선택)</span>}
           {isDateType(xType) && !hideBucket && (
             <div className="flex items-center gap-2">
@@ -495,27 +509,13 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || config.yAxis.length >= maxSeries}>
                 + 값 추가
               </Button>
-              <span className="flex items-center gap-1.5 text-[13px] text-text-tertiary">
-                시리즈 나누기
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary">예정</span>
-              </span>
             </div>
-          </div>
-        </Row>}
-
-        <Row label="조건">
-          <div className="flex flex-col gap-2">
-            {config.where.map((w, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className="w-40">
-                  <Select aria-label="조건 컬럼" value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
-                </div>
             <p className="text-xs text-text-tertiary">
               원본값이 기본이며, 집계를 선택하면 X축과 계열 기준으로 그룹화합니다.
             </p>
-                <div className="w-32">
-                  <Select aria-label="조건 연산자" value={w.op} onChange={(e) => changeWhereOp(i, e.target.value as WhereCond['op'])} options={OP_CHOICES} />
-                </div>
+          </div>
+        </Row>}
+
         {!spatialGeometry && supportsSeriesBy && <Row label="계열(그룹) 기준">
           <div className="w-60">
             <Select
@@ -544,6 +544,16 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           <span className="text-[13px] text-text-tertiary">예: 지역(X) · 인구수(Y) · 연도(계열)</span>
         </Row>}
 
+        <Row label="조건">
+          <div className="flex flex-col gap-2">
+            {config.where.map((w, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div className="w-40">
+                  <Select aria-label="조건 컬럼" value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
+                </div>
+                <div className="w-32">
+                  <Select aria-label="조건 연산자" value={w.op} onChange={(e) => changeWhereOp(i, e.target.value as WhereCond['op'])} options={OP_CHOICES} />
+                </div>
                 <WhereValueControl cond={w} onChange={(value) => setW(i, { value })} />
                 <button type="button" aria-label="조건 제거" onClick={() => removeW(i)} className="text-text-tertiary hover:text-danger">
                   <X className="size-3.5" />
@@ -562,7 +572,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               aria-label="정렬 기준"
               value={config.orderBy?.target ?? ''}
               onChange={(e) => patch({ orderBy: e.target.value ? { target: e.target.value, direction: config.orderBy?.direction ?? 'desc' } : null })}
-              options={orderTargets(config)}
+              options={sortTargets}
               placeholder="없음"
             />
           </div>
@@ -668,6 +678,7 @@ function TableSelectionField({
   active,
   compact = false,
   onClick,
+  onChangeClick,
 }: {
   testId?: string;
   label: string;
@@ -676,30 +687,45 @@ function TableSelectionField({
   active: boolean;
   compact?: boolean;
   onClick: () => void;
+  onChangeClick?: () => void;
 }) {
   return (
-    <button
-      type="button"
-      data-testid={testId}
-      aria-label={`${label} ${table ? '변경' : '선택'}`}
-      aria-pressed={active}
-      onClick={onClick}
-      title={table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : label}
-      className={cn(
-        'relative flex h-8 items-center rounded-md border bg-bg-panel pl-3 text-left text-[13px] text-text-primary outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20',
-        compact ? 'w-48' : 'w-72',
-        active ? 'border-primary pr-16 ring-2 ring-primary/15' : 'border-border pr-8',
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        data-testid={testId}
+        aria-label={`${label} ${table && onChangeClick ? '원본 데이터 보기' : table ? '변경' : '선택'}`}
+        aria-pressed={active}
+        onClick={onClick}
+        title={table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : label}
+        className={cn(
+          'relative flex h-8 items-center rounded-md border bg-bg-panel pl-3 text-left text-[13px] text-text-primary outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20',
+          compact ? 'w-48' : 'w-72',
+          active ? 'border-primary pr-16 ring-2 ring-primary/15' : 'border-border pr-12',
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+          {table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : '테이블·View 선택'}
+        </span>
+        {active ? (
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium text-primary">선택 중</span>
+        ) : table && onChangeClick ? (
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] text-text-tertiary">보기</span>
+        ) : (
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-secondary" />
+        )}
+      </button>
+      {onChangeClick && (
+        <button
+          type="button"
+          onClick={onChangeClick}
+          aria-label={`${label} 변경`}
+          className="h-8 rounded-md border border-border bg-bg-panel px-3 text-xs text-text-secondary hover:border-primary/50 hover:text-text-primary"
+        >
+          변경
+        </button>
       )}
-    >
-      <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-        {table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : '테이블·View 선택'}
-      </span>
-      {active ? (
-        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium text-primary">선택 중</span>
-      ) : (
-        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-secondary" />
-      )}
-    </button>
+    </div>
   );
 }
 

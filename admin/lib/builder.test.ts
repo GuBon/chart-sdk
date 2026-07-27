@@ -3,6 +3,7 @@ import type { BuilderConfig, SchemaTable, TableRef } from '@/lib/api';
 import {
   activeTables,
   aggChoicesForChart,
+  builderExecutionIssue,
   builderValidationIssue,
   builderWarning,
   columnType,
@@ -15,6 +16,7 @@ import {
   isNumericType,
   isSpatialAreaType,
   isSpatialPointType,
+  isTableQueryMode,
   migrateBuilderConfig,
   migrateTableRef,
   normalizeBuilder,
@@ -74,6 +76,35 @@ const crossJoin = (): BuilderConfig => ({
   yAxis: [{ column: 'users_2.tier', agg: 'count' }], where: [], orderBy: null, sample: null,
 });
 
+describe('축 없는 조회 실행', () => {
+  it('X/Y가 모두 없으면 차트 검증은 실패하지만 실행 검증은 통과한다', () => {
+    const cfg = bar({ xAxis: null, yAxis: [] });
+
+    expect(isTableQueryMode(cfg, 'bar')).toBe(true);
+    expect(builderValidationIssue(cfg, 'bar', TABLES)).toBe('X축 컬럼을 선택하세요.');
+    expect(builderExecutionIssue(cfg, 'bar', TABLES)).toBeNull();
+  });
+
+  it('조회 모드는 원본 컬럼 정렬만 허용한다', () => {
+    const invalid = bar({ xAxis: null, yAxis: [], orderBy: { target: 'x', direction: 'desc' } });
+    const valid = bar({ xAxis: null, yAxis: [], orderBy: { target: 'column:amount', direction: 'desc' } });
+
+    expect(builderExecutionIssue(invalid, 'bar', TABLES)).toContain('원본 컬럼');
+    expect(builderExecutionIssue(valid, 'bar', TABLES)).toBeNull();
+  });
+
+  it('공간 컬럼 구성은 X/Y가 없어도 조회 모드가 아니라 차트 모드다', () => {
+    const cfg = bar({
+      xAxis: null,
+      yAxis: [],
+      geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: null },
+    });
+
+    expect(isTableQueryMode(cfg, 'geoscatter')).toBe(false);
+    expect(builderExecutionIssue(cfg, 'geoscatter', TABLES)).toBeNull();
+  });
+});
+
 describe('타입 판정', () => {
   it('isDateType 은 date/timestamp/time 계열을 인식한다', () => {
     expect(isDateType('date')).toBe(true);
@@ -106,6 +137,9 @@ describe('타입 판정', () => {
 });
 
 describe('aggChoicesForChart', () => {
+  it('Y축 값 방식은 원본값을 기본 선택지로 먼저 제공한다', () => {
+    expect(aggChoicesForChart('bar')[0]).toEqual({ value: 'none', label: '원본값 (집계 없음)' });
+  });
   it('분포(scatter)는 원본값(none)만 허용한다', () => {
     const choices = aggChoicesForChart('scatter');
     expect(choices).toHaveLength(1);
@@ -335,6 +369,17 @@ describe('orderTargets · 기타', () => {
     expect(normalized.joins).toEqual([]);
     expect(normalized.sample).toBeNull();
   });
+
+  it('계열 기준은 막대·선의 단일 Y만 허용하고 차트 전환 시 정리한다', () => {
+    const series = bar({
+      seriesBy: 'date',
+      seriesOrder: 'asc',
+      yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }],
+    });
+    expect(builderValidationIssue(series, 'bar', TABLES)).toBe('계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.');
+    expect(normalizeBuilderForChartType(series, 'bar').yAxis).toHaveLength(1);
+    expect(normalizeBuilderForChartType(series, 'scatter').seriesBy).toBeNull();
+  });
 });
 
 describe('신규 유형 — boxplot · heatmap · map', () => {
@@ -369,17 +414,6 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
       .toBe('박스 플롯은 집계 없이 원본값만 사용합니다.');
     // 비숫자 값 컬럼(category) → 거부
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'category', agg: 'none' }] }), 'boxplot', TABLES))
-
-  it('계열 기준은 막대·선의 단일 Y만 허용하고 차트 전환 시 정리한다', () => {
-    const series = bar({
-      seriesBy: 'date',
-      seriesOrder: 'asc',
-      yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }],
-    });
-    expect(builderValidationIssue(series, 'bar', TABLES)).toBe('계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.');
-    expect(normalizeBuilderForChartType(series, 'bar').yAxis).toHaveLength(1);
-    expect(normalizeBuilderForChartType(series, 'scatter').seriesBy).toBeNull();
-  });
       .toBe('박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.');
   });
 

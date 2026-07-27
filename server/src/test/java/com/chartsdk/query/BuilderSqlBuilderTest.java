@@ -239,6 +239,31 @@ class BuilderSqlBuilderTest {
     }
 
     @Test
+    void rowsModeSupportsValidatedSourceColumnOrderingWithoutAxes() {
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "xAxis", "",
+                "yAxis", List.of(),
+                "where", List.of(Map.of("column", "amount", "op", "gte", "value", 100)),
+                "orderBy", Map.of("target", "column:amount", "direction", "desc")
+        ), "bar", true);
+
+        assertThat(sql.text()).isEqualTo("SELECT * FROM \"public\".\"sales\" WHERE \"public\".\"sales\".\"amount\" >= ? ORDER BY \"public\".\"sales\".\"amount\" DESC LIMIT 1000");
+        assertThat(sql.params()).containsExactly(100);
+    }
+
+    @Test
+    void rowsModeRejectsUnknownSourceOrderColumn() {
+        assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "yAxis", List.of(),
+                "orderBy", Map.of("target", "column:not_a_column", "direction", "asc")
+        ), "bar", true))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("Unknown column");
+    }
+
+    @Test
     void barChartCanUseRawTupleValuesWithoutGrouping() {
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
                 "table", "sales",

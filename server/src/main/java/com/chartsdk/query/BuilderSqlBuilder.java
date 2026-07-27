@@ -123,10 +123,12 @@ public final class BuilderSqlBuilder {
         String seriesBy = str(cfg.get("seriesBy"));
         List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
         if (rawMode) {
-            // 원본 데이터 모드: SELECT * + WHERE + LIMIT (집계·정렬·버킷·표본 무시 — 생성규칙 §3B)
+            // 행 조회 모드: SELECT * + WHERE + 선택 원본 컬럼 정렬 + LIMIT.
+            // x/y 기반 차트 정렬(target=x/yN)은 기존 원본 조회 호환을 위해 무시한다.
             List<Object> params = new ArrayList<>();
             String where = buildWhere(params);
-            return new Sql("SELECT *" + " FROM " + render(baseRef) + joins + where
+            String order = buildRawOrder();
+            return new Sql("SELECT *" + " FROM " + render(baseRef) + joins + where + order
                     + " LIMIT " + QueryExecutor.MAX_ROWS, params, null);
         }
 
@@ -601,6 +603,20 @@ public final class BuilderSqlBuilder {
         String direction = str(order.get("direction"));
         boolean asc = "asc".equalsIgnoreCase(direction);
         return " ORDER BY " + pos + (asc ? " ASC" : " DESC");
+    }
+
+    /** X/Y 없는 조회 전용 정렬. column: 접두사가 붙은 검증된 원본 컬럼 참조만 허용한다. */
+    private String buildRawOrder() {
+        Map<String, Object> order = asMap(cfg.get("orderBy"));
+        if (order == null) return "";
+        String target = str(order.get("target"));
+        if (target == null || !target.startsWith("column:")) return "";
+        String columnRef = target.substring("column:".length());
+        if (columnRef.isBlank()) throw invalidReq("Raw order column is required.");
+        Ref column = resolveRef(columnRef);
+        String direction = str(order.get("direction"));
+        boolean asc = "asc".equalsIgnoreCase(direction);
+        return " ORDER BY " + render(column) + (asc ? " ASC" : " DESC");
     }
 
     // ── 표본 (스펙 검증 → SamplingMetadata) ────────────────

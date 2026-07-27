@@ -272,6 +272,23 @@ function baseRelationForConfig(cfg: BuilderConfig): SchemaTable | undefined {
     && table.schema === cfg.table!.schema
     && table.name === cfg.table!.name,
   );
+/** X/Y 없는 실행 결과용 행 조회 SQL 표시. 조건과 원본 컬럼 정렬만 적용한다. */
+export function buildRowsSql(cfg: BuilderConfig): string {
+  if (!cfg.table) return '';
+  const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((join) => join.table.datasourceId)]).size >= 2;
+  const where = cfg.where.length ? ` WHERE ${cfg.where.map((condition) => whereSql(condition)).join(' AND ')}` : '';
+  const joins = (cfg.joins ?? [])
+    .map((join) => ` ${join.type === 'inner' ? 'INNER' : 'LEFT'} JOIN ${qtable(join.table, multi)} ON ${qcol(join.on.leftColumn)} = ${qcol(join.on.rightColumn)}`)
+    .join('');
+  const target = cfg.orderBy?.target.startsWith('column:')
+    ? cfg.orderBy.target.slice('column:'.length)
+    : null;
+  const order = target && cfg.orderBy
+    ? ` ORDER BY ${qcol(target)} ${cfg.orderBy.direction.toUpperCase()}`
+    : '';
+  return `SELECT *\nFROM ${qtable(cfg.table, multi)}${joins}${where}${order}\nLIMIT 1000`;
+}
+
 }
 
 function populationEstimateForConfig(cfg: BuilderConfig): number {
@@ -497,7 +514,47 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   };
 }
 
-/** 원본 데이터(mode:rows) — 집계 이전 세부 행 */
+function sampleValue(type: string, i: number): unknown {
+  const t = type.toLowerCase();
+  if (t.includes('geometry') || t.includes('geography')) {
+    const [lng, lat] = SAMPLE_SPATIAL_POINTS[i % SAMPLE_SPATIAL_POINTS.length];
+    return `POINT(${lng} ${lat})`;
+  }
+  if (t.includes('int') || t.includes('numeric')) return (i + 1) * 7;
+  if (t.includes('date') || t.includes('time')) return `2026-0${(i % 6) + 1}-15`;
+  return ['의류', '식품', '가전', '도서', '생활'][i % 5];
+}
+
+function compareValues(actual: unknown, expected: unknown): number {
+  if (typeof actual === 'number') return actual - Number(expected);
+  return String(actual ?? '').localeCompare(String(expected ?? ''), 'ko');
+}
+
+function matchesCondition(actual: unknown, condition: BuilderConfig['where'][number]): boolean {
+  const expected = condition.value;
+  switch (condition.op) {
+    case 'is_null': return actual == null;
+    case 'is_not_null': return actual != null;
+    case 'eq': return actual != null && compareValues(actual, expected) === 0;
+    case 'neq': return actual == null || compareValues(actual, expected) !== 0;
+    case 'gt': return actual != null && compareValues(actual, expected) > 0;
+    case 'gte': return actual != null && compareValues(actual, expected) >= 0;
+    case 'lt': return actual != null && compareValues(actual, expected) < 0;
+    case 'lte': return actual != null && compareValues(actual, expected) <= 0;
+    case 'contains': return String(actual ?? '').toLocaleLowerCase('ko').includes(String(expected ?? '').toLocaleLowerCase('ko'));
+    case 'starts_with': return String(actual ?? '').toLocaleLowerCase('ko').startsWith(String(expected ?? '').toLocaleLowerCase('ko'));
+    case 'in': return actual != null && (Array.isArray(expected) ? expected : [expected]).some((value) => compareValues(actual, value) === 0);
+    case 'between': {
+      const values = Array.isArray(expected) ? expected : [];
+      return values.length === 2
+        && actual != null
+        && compareValues(actual, values[0]) >= 0
+        && compareValues(actual, values[1]) <= 0;
+    }
+  }
+}
+
+/** X/Y 없는 실행 결과(mode:rows) — 전체 컬럼에 조건·원본 컬럼 정렬을 적용한다. */
 export function buildRawRows(cfg: BuilderConfig): QueryResult {
   const rawNumeric = cfg.yAxis.some((y) => y.agg === 'none');
   const columns: Cols = [
@@ -513,17 +570,7 @@ export function buildRawRows(cfg: BuilderConfig): QueryResult {
 
 /** 테이블 원본 미리보기(GET schema preview) — 컬럼 타입별 가짜 값 */
 export function buildTablePreview(table: SchemaTable): QueryResult {
-  const sampleFor = (type: string, i: number): unknown => {
-    const t = type.toLowerCase();
-    if (t.includes('geometry') || t.includes('geography')) {
-      const [lng, lat] = SAMPLE_SPATIAL_POINTS[i % SAMPLE_SPATIAL_POINTS.length];
-      return `POINT(${lng} ${lat})`;
-    }
-    if (t.includes('int') || t.includes('numeric')) return (i + 1) * 7;
-    if (t.includes('date') || t.includes('time')) return `2026-0${(i % 6) + 1}-15`;
-    return ['의류', '식품', '가전', '도서', '생활'][i % 5];
-  };
-  const rows: Rows = Array.from({ length: 12 }, (_, i) => table.columns.map((c) => sampleFor(c.type, i)));
+  const rows: Rows = Array.from({ length: 12 }, (_, i) => table.columns.map((c) => sampleValue(c.type, i)));
   return { columns: table.columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 12 };
 }
 

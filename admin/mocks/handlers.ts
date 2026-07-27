@@ -4,9 +4,9 @@ import { http, HttpResponse } from 'msw';
 import type { Datasource } from '@/lib/api/types';
 import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
 import type { User, UserToken } from '@/lib/api';
-import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildTablePreview } from './mockTransform';
+import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql, buildTablePreview } from './mockTransform';
 import type { BuilderConfig, ChartMainTable, ChartType, TableRef } from '@/lib/api';
-import { builderValidationIssue } from '@/lib/builder';
+import { builderExecutionIssue } from '@/lib/builder';
 
 // 쓰기 가능한 가변 상태(세션 한정)
 let datasources: Datasource[] = seedDatasources.map((d) => ({ ...d }));
@@ -273,9 +273,11 @@ export const handlers = [
   // ── 노코드 실행/미리보기(S2) — 목 변환기 ───────────
   http.post('/api/v1/query/run-builder', async ({ request }) => {
     const body = (await request.json()) as { builderConfig: BuilderConfig; chartType: ChartType; options: Record<string, unknown>; mode?: 'aggregate' | 'rows' };
-    const validationIssue = builderValidationIssue(body.builderConfig, body.chartType, schemaTables);
+    const validationIssue = builderExecutionIssue(body.builderConfig, body.chartType, schemaTables);
     if (validationIssue) return err(400, 'INVALID_BUILDER_CONFIG', validationIssue);
-    if (body.mode === 'rows') return HttpResponse.json(buildRawRows(body.builderConfig));
+    if (body.mode === 'rows') {
+      return HttpResponse.json({ ...buildRawRows(body.builderConfig), generatedSql: buildRowsSql(body.builderConfig) });
+    }
     const result = buildAggregateRows(body.builderConfig, body.chartType);
     const option = assembleOption(result, body.chartType, body.options);
     return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig, body.chartType), option });

@@ -2,13 +2,16 @@ package com.chartsdk.web;
 
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.web.dto.BuilderQueryRequest;
 import com.chartsdk.web.dto.QueryRunRequest;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -46,5 +49,30 @@ class QueryControllerTest {
 
         verify(queries).execute(7L, "SELECT * FROM sales");
         assertThat(result).containsEntry("truncated", false).doesNotContainKey("option");
+    }
+
+    @Test
+    void axislessBuilderRowsReturnGeneratedSqlWithoutChartOption() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        ChartOptionConverter converter = mock(ChartOptionConverter.class);
+        FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
+        Map<String, Object> cfg = Map.of(
+                "table", Map.of("datasourceId", 7L, "schema", "public", "name", "sales"),
+                "xAxis", "",
+                "yAxis", List.of(),
+                "where", List.of(),
+                "orderBy", Map.of("target", "column:amount", "direction", "desc")
+        );
+        BuilderSqlBuilder.Sql sql = new BuilderSqlBuilder.Sql(
+                "SELECT * FROM \"public\".\"sales\" ORDER BY \"amount\" DESC LIMIT 1000", List.of());
+        when(runner.runBuilder(7L, cfg, "bar", true))
+                .thenReturn(new FederatedQueryRunner.BuiltResult(EMPTY, sql, Set.of(7L)));
+
+        Map<String, Object> result = new QueryController(queries, converter, runner).runBuilder(
+                new BuilderQueryRequest(7L, cfg, "bar", Map.of(), "rows"));
+
+        assertThat(result)
+                .containsEntry("generatedSql", "SELECT * FROM \"public\".\"sales\" ORDER BY \"amount\" DESC LIMIT 1000")
+                .doesNotContainKey("option");
     }
 }

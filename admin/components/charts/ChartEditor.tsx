@@ -7,7 +7,7 @@ import { defaultsFor, type MajorType, type Options } from '@chartsdk/chart-optio
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
-import { activeTables, builderValidationIssue, emptyBuilder, emptyJoin, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
+import { activeTables, builderExecutionIssue, builderValidationIssue, emptyBuilder, emptyJoin, isTableQueryMode, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import {
   createMapViewportSession,
@@ -155,6 +155,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   const [result, setResult] = useState<QueryResult | null>(null);
   const [raw, setRaw] = useState<QueryResult | null>(null);
+  const [rawTable, setRawTable] = useState<SchemaTable | null>(null);
+  const [resultKind, setResultKind] = useState<'chart' | 'table' | null>(null);
   const [option, setOption] = useState<Record<string, unknown> | null>(null);
   const [generatedSql, setGeneratedSql] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -165,6 +167,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [rawError, setRawError] = useState<string | null>(null);
   const [resultTab, setResultTab] = useState<ResultTab>('result');
   const rawRequestId = useRef(0);
+  const runRequestId = useRef(0);
+  const optionPreviewRequestId = useRef(0);
+  const runBuilderRef = useRef<() => Promise<void>>(async () => {});
+  const autoRunTimerRef = useRef<number | null>(null);
   const editorBodyRef = useRef<HTMLDivElement>(null);
   const builderWorkspaceRef = useRef<HTMLElement>(null);
   const visualWorkspaceRef = useRef<HTMLElement>(null);
@@ -214,6 +220,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setInitialPreviewLoading(true);
     setInitialPreviewError(null);
     setResult(null);
+    setResultKind(null);
+    rawRequestId.current += 1;
+    setRaw(null);
+    setRawTable(null);
+    setRawRunning(false);
+    setRawError(null);
     setOption(null);
     setGeneratedSql(null);
 
@@ -243,7 +255,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         if (previewResult.status === 'fulfilled') {
           const cachedResult = queryResultFromPreview(previewResult.value);
           setOption(previewResult.value.option);
-          if (cachedResult) setResult(cachedResult);
+          if (cachedResult) {
+            setResult(cachedResult);
+            setResultKind('chart');
+          }
           setResultTab('result');
         } else {
           setInitialPreviewError('저장된 미리보기를 불러오지 못했습니다. [실행]하면 다시 계산합니다.');
@@ -255,15 +270,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   // 옵션/대분류 변경 → SQL 재실행 없이 option 재조립(2B preview). 디바운스.
   useEffect(() => {
-    if (!result) return;
+    const requestId = ++optionPreviewRequestId.current;
+    if (!result || resultKind !== 'chart') return;
     const t = setTimeout(() => {
       void queryApi
         .preview({ chartType, options, rows: { columns: result.columns, rows: result.rows } })
-        .then((r) => setOption(r.option))
+        .then((r) => {
+          if (requestId === optionPreviewRequestId.current) setOption(r.option);
+        })
         .catch(() => {});
     }, 200);
     return () => clearTimeout(t);
-  }, [chartType, options, result]);
+  }, [chartType, options, result, resultKind]);
 
   // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
   const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth', {
@@ -345,16 +363,19 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setBuilderCollapsed(false);
   };
 
-  const invalidateRaw = () => {
+  const resetRawPreview = () => {
     rawRequestId.current += 1;
     setRaw(null);
+    setRawTable(null);
     setRawRunning(false);
     setRawError(null);
   };
 
   const resetResults = () => {
+    runRequestId.current += 1;
+    setRunning(false);
     setResult(null);
-    invalidateRaw();
+    setResultKind(null);
     setOption(null);
     setGeneratedSql(null);
     setRunError(null);
@@ -364,7 +385,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   };
 
   // 사이드바 데이터소스 = 탐색 컨텍스트. 소스 변경은 드롭다운 필터만 바꾸고 구성은 보존(비파괴).
-  const changeDatasource = (id: number) => setDatasourceId(id);
+  const changeDatasource = (id: number) => {
+    setDatasourceId(id);
+    resetRawPreview();
+  };
 
   const requestTableSelection = (target: TableSelectionTarget) => {
     setPendingBaseTable(null);
@@ -407,15 +431,17 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 실행·저장에 쓰는 primary 데이터소스는 base 테이블에서 파생(사이드바 탐색 소스와 무관).
   const primaryDatasourceId = builder.table?.datasourceId ?? datasourceId;
 
-  const previewBaseTable = async (t: SchemaTable) => {
+  const previewRawTable = async (t: SchemaTable) => {
     const requestId = ++rawRequestId.current;
+    setRawTable(t);
+    setRaw(null);
     setRawRunning(true);
     setRawError(null);
+    setResultTab('raw');
     try {
       const preview = await schemaApi.preview(t.schema, t.name, t.datasourceId);
       if (requestId !== rawRequestId.current) return;
       setRaw(preview);
-      setResultTab('raw');
     } catch (e) {
       if (requestId !== rawRequestId.current) return;
       setRaw(null);
@@ -433,7 +459,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     resetResults();
     setDirty(true);
     // 원본 미리보기는 부가 기능 — 실패해도 테이블 선택은 유지(미처리 rejection·크래시 방지).
-    await previewBaseTable(t);
+    await previewRawTable(t);
   };
 
   // 왼쪽 목록의 선택 결과를 현재 선택 대상(base/기존 조인/새 조인)에 적용한다.
@@ -444,7 +470,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     if (tableSelectionTarget.kind === 'base') {
       if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
         setTableSelectionTarget(null);
-        await previewBaseTable(t);
+        await previewRawTable(t);
         return;
       }
       if (builder.table) {
@@ -493,57 +519,64 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   );
 
   const runBuilder = async () => {
-    const issue = builderValidationIssue(builder, chartType, tables);
+    if (autoRunTimerRef.current != null) {
+      window.clearTimeout(autoRunTimerRef.current);
+      autoRunTimerRef.current = null;
+    }
+    const issue = builderExecutionIssue(builder, chartType, tables);
     if (issue || primaryDatasourceId == null) {
       if (issue) setRunError(issue);
       return;
     }
+    const requestId = ++runRequestId.current;
     setRunning(true);
     setRunError(null);
     setInitialPreviewLoading(false);
     setInitialPreviewError(null);
     setResultTab('result');
-    invalidateRaw();
     try {
-      // 실행 버튼은 집계만 수행한다. 조인 원본 조회는 [원본 데이터] 탭을 열 때 지연 실행해 중복 조인을 피한다.
-      const res = await queryApi.runBuilder({ datasourceId: primaryDatasourceId, builderConfig: builder, chartType, options, mode: 'aggregate' });
-      setResult(res);
-      setGeneratedSql(res.generatedSql ?? null);
-      setOption(res.option ?? null);
-      setResultTab('result');
-    } catch (e) {
-      setRunError(e instanceof ApiError ? e.message : '실행에 실패했습니다.');
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const loadRaw = async () => {
-    if (!builder.table || primaryDatasourceId == null) return;
-    const requestId = ++rawRequestId.current;
-    setRawRunning(true);
-    setRawError(null);
-    try {
-      const rawResult = await queryApi.runBuilder({
+      const tableQuery = isTableQueryMode(builder, chartType);
+      const res = await queryApi.runBuilder({
         datasourceId: primaryDatasourceId,
         builderConfig: builder,
         chartType,
         options,
-        mode: 'rows',
+        mode: tableQuery ? 'rows' : 'aggregate',
       });
-      if (requestId === rawRequestId.current) setRaw(rawResult);
+      if (requestId !== runRequestId.current) return;
+      setResult(res);
+      setResultKind(tableQuery ? 'table' : 'chart');
+      setGeneratedSql(res.generatedSql ?? null);
+      if (tableQuery) setOption(null);
+      else setOption(res.option ?? null);
+      setResultTab('result');
     } catch (e) {
-      if (requestId === rawRequestId.current) {
-        setRawError(e instanceof ApiError ? e.message : '원본 데이터 조회에 실패했습니다.');
-      }
+      if (requestId !== runRequestId.current) return;
+      setRunError(e instanceof ApiError ? e.message : '실행에 실패했습니다.');
     } finally {
-      if (requestId === rawRequestId.current) setRawRunning(false);
+      if (requestId === runRequestId.current) setRunning(false);
     }
   };
+  runBuilderRef.current = runBuilder;
+
+  // 필수 필드가 완성되는 순간 자동 실행한다. 저장된 차트 진입은 캐시를 복원하고,
+  // 사용자가 빌더를 실제로 바꾼 경우에만 고객 DB를 다시 조회한다.
+  useEffect(() => {
+    if (!dirty || initialPreviewLoading || primaryDatasourceId == null) return;
+    if (builderValidationIssue(builder, chartType, tables)) return;
+    const timer = window.setTimeout(() => {
+      if (autoRunTimerRef.current === timer) autoRunTimerRef.current = null;
+      void runBuilderRef.current();
+    }, 350);
+    autoRunTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (autoRunTimerRef.current === timer) autoRunTimerRef.current = null;
+    };
+  }, [builder, chartType, tables, dirty, initialPreviewLoading, primaryDatasourceId]);
 
   const changeResultTab = (tab: ResultTab) => {
     setResultTab(tab);
-    if (tab === 'raw' && raw == null && !rawRunning) void loadRaw();
   };
 
   useEffect(() => {
@@ -599,7 +632,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   const changeOptions = (next: Options) => {
     setOptions(next);
-    if (!result) setOption(null);
+    if (!result || resultKind !== 'chart') setOption(null);
     setDirty(true);
   };
 
@@ -609,6 +642,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     mapViewportSession.checkpoint,
   );
   const canChangeMapViewportCheckpoint = (chartType === 'map' || chartType === 'geoscatter')
+    && resultKind === 'chart'
     && !!result
     && mapViewportChangedFromCheckpoint;
   const canSaveMapViewport = canChangeMapViewportCheckpoint && isCompleteMapViewport(pendingViewport);
@@ -630,6 +664,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     dispatchMapViewport({ type: 'resetCheckpoint' });
     setToast('마지막 영역 저장 상태로 복원했습니다');
   };
+
+  const rawTableLabel = rawTable
+    ? `${datasources.find((datasource) => datasource.id === rawTable.datasourceId)?.name ?? `ds${rawTable.datasourceId}`} · ${rawTable.schema}.${rawTable.name}`
+    : null;
 
   return (
     <>
@@ -674,7 +712,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 datasources={datasources}
                 tables={tables.filter((t) => t.datasourceId === datasourceId)}
                 datasourceId={datasourceId}
-                selectedTable={selectedTableKey}
+                selectedTable={tableSelectionTarget
+                  ? selectedTableKey
+                  : rawTable
+                    ? tableRefKey(rawTable)
+                    : null}
                 selection={tableSelectionTarget && selectionLabel
                   ? { label: selectionLabel }
                   : null}
@@ -682,6 +724,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 focusRequestKey={tableSelectionFocusKey}
                 onChangeDatasource={changeDatasource}
                 onSelectTable={selectTable}
+                onPreviewTable={previewRawTable}
                 onCancelSelection={cancelTableSelection}
                 onCollapse={() => {
                   cancelTableSelection();
@@ -711,6 +754,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   datasources={datasources}
                   tableSelectionTarget={tableSelectionTarget}
                   onRequestTableSelection={requestTableSelection}
+                  onPreviewBaseTable={previewRawTable}
                   onCollapse={() => setBuilderCollapsed(true)}
                   onChange={(b) => {
                     // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
@@ -732,6 +776,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   onTab={changeResultTab}
                   running={resultTab === 'raw' ? rawRunning : running}
                   error={resultTab === 'raw' ? rawError : runError}
+                  rawTableLabel={rawTableLabel}
                 />
               </div>
             </section>
@@ -807,9 +852,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 <OptionPanel
                   chartType={chartType}
                   options={options}
-                  columns={result?.columns ?? []}
-                  rows={result?.rows ?? []}
-                  hasResult={!!result}
+                  columns={resultKind === 'chart' ? result?.columns ?? [] : []}
+                  rows={resultKind === 'chart' ? result?.rows ?? [] : []}
+                  hasResult={resultKind === 'chart' && !!result}
                   dockPreference={optionDockPreference}
                   actualDock={actualOptionDock}
                   onChangeDockPreference={setOptionDockPreference}

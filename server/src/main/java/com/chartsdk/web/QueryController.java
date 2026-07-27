@@ -61,8 +61,8 @@ public class QueryController {
         if (!rawMode) rows = SeriesPivot.pivot(rows, cfg);
 
         Map<String, Object> result = rowsResult(rows);
+        result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
         if (!rawMode) {
-            result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
             result.put("option", converter.convert(rows, chartType, options(body)));
             SamplingMetadata sampling = built.sampling();
             if (sampling != null) sampling.putInto(result);

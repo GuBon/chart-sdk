@@ -11,7 +11,7 @@ import {
 } from '@chartsdk/chart-options/sampling';
 import { DataTable } from './DataTable';
 
-// S2 하단 결과 영역(258:228): [실행 결과](집계) / [원본 데이터](raw) 탭 + "N행 · Nms".
+// S2 하단 결과 영역: [원본 데이터](선택 테이블) / [실행 결과](차트·조회) 탭 + "N행 · Nms".
 export type ResultTab = 'result' | 'raw';
 
 interface Props {
@@ -21,9 +21,10 @@ interface Props {
   onTab: (t: ResultTab) => void;
   running: boolean;
   error: string | null;
+  rawTableLabel: string | null;
 }
 
-export function ResultsPanel({ result, raw, tab, onTab, running, error }: Props) {
+export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTableLabel }: Props) {
   const active = tab === 'result' ? result : raw;
   const sampling = active ? normalizeSampling(active) : undefined;
 
@@ -31,9 +32,12 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error }: Props)
     <div className="flex h-full flex-col">
       <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex gap-1 rounded-md bg-muted p-0.5">
-          <Tab label="실행 결과" active={tab === 'result'} onClick={() => onTab('result')} />
           <Tab label="원본 데이터" active={tab === 'raw'} onClick={() => onTab('raw')} />
+          <Tab label="실행 결과" active={tab === 'result'} onClick={() => onTab('result')} />
         </div>
+        {tab === 'raw' && rawTableLabel && (
+          <span className="min-w-0 truncate text-xs text-text-secondary" title={rawTableLabel}>{rawTableLabel}</span>
+        )}
         {active && (
           <span className="text-xs text-text-tertiary">
             {active.rowCount}행 · {active.elapsedMs}ms
@@ -70,7 +74,9 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error }: Props)
           <DataTable data={active} sampleGroups={sampling?.approximate ? sampling.groups : undefined} />
         ) : (
           <p className="p-4 text-[13px] text-text-tertiary">
-            {tab === 'result' ? '구성 후 [실행]을 누르면 집계 결과가 표시됩니다.' : '테이블을 선택하면 원본 데이터가 표시됩니다.'}
+            {tab === 'result'
+              ? '차트 구성을 완성하거나 축 없이 조건·정렬을 설정한 뒤 [실행]을 누르세요.'
+              : '왼쪽 데이터 패널 또는 노코드 구성의 원본 테이블을 누르면 원본 데이터가 표시됩니다.'}
           </p>
         )}
       </div>

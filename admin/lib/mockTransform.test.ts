@@ -35,6 +35,25 @@ function valueAt(root: unknown, path: string): unknown {
 
 describe('mock 변환기 레이아웃 계약', () => {
   it.each(contractCases as LayoutContractCase[])('$name', ({ chartType, options, expected, absent = [] }) => {
+describe('mock 축 없는 조회', () => {
+  it('전체 테이블 컬럼에 조건과 원본 컬럼 정렬을 적용한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'regional_population' },
+      joins: [], xAxis: null, xAxisBucket: null, yAxis: [],
+      where: [{ column: 'population', op: 'gte', value: 35 }],
+      orderBy: { target: 'column:population', direction: 'desc' },
+      sample: null,
+    };
+
+    const result = buildRawRows(config);
+    expect(result.columns.map((column) => column.name)).toEqual(['region', 'year', 'population']);
+    expect(result.rows).toHaveLength(8);
+    expect(result.rows[0][2]).toBe(84);
+    expect(result.rows.at(-1)?.[2]).toBe(35);
+    expect(buildRowsSql(config)).toContain('WHERE "population" >= ? ORDER BY "population" DESC');
+  });
+});
+
     const option = assembleOption(result, chartType, options);
     for (const [path, value] of Object.entries(expected)) expect(valueAt(option, path), path).toEqual(value);
     for (const path of absent) expect(valueAt(option, path), path).toBeUndefined();

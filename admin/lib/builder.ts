@@ -13,6 +13,7 @@ import {
 
 // 노코드 빌더 UI 상수 — 생성규칙 3·3A·4장의 라벨.
 export const AGG_CHOICES: { value: AggType; label: string }[] = [
+  { value: 'none', label: '원본값 (집계 없음)' },
   { value: 'sum', label: '합계 (SUM)' },
   { value: 'avg', label: '평균 (AVG)' },
   { value: 'stddev', label: '표준편차 (STDDEV)' },
@@ -21,7 +22,6 @@ export const AGG_CHOICES: { value: AggType; label: string }[] = [
   { value: 'count_distinct', label: '고유 개수' },
   { value: 'min', label: '최소 (MIN)' },
   { value: 'max', label: '최대 (MAX)' },
-  { value: 'none', label: '원본값' },
 ];
 
 export const OP_CHOICES: { value: WhereOp; label: string }[] = [
@@ -292,7 +292,15 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
   };
 }
 
-export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
+/** X/Y 없이 조건·정렬된 행만 조회하는 실행 전용 모드. 공간 차트의 전용 컬럼 구성은 차트 모드로 본다. */
+export function isTableQueryMode(cfg: BuilderConfig, chartType: ChartType): boolean {
+  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
+  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
+  return !spatialGeoPoint && !spatialGeoArea && !cfg.xAxis && cfg.yAxis.length === 0;
+}
+
+/** 테이블·조인·공통 옵션 검증. 차트 모양(X/Y)과 조회 전용 정렬 검증은 호출자가 이어서 수행한다. */
+function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[]): string | null {
   if (!cfg.table) return '테이블을 선택하세요.';
   if (cfg.sample?.rate != null && (cfg.sample.rate < MIN_SAMPLE_RATE || cfg.sample.rate > MAX_SAMPLE_RATE ||
       Math.abs(cfg.sample.rate * 10 - Math.round(cfg.sample.rate * 10)) > 1e-7)) {
@@ -313,8 +321,12 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   // 조인 시 모든 컬럼 참조는 qualified "핸들.컬럼" + 활성 테이블 (11.2)
   if (hasJoins(cfg)) {
     const activeHandles = activeTables(cfg).map(tableHandle);
+    const rawOrderColumn = cfg.orderBy?.target.startsWith('column:')
+      ? cfg.orderBy.target.slice('column:'.length)
+      : null;
     const refs = [
       cfg.xAxis,
+      cfg.seriesBy,
       ...cfg.yAxis.map((y) => y.column),
       cfg.geoPoint?.spatialColumn,
       cfg.geoPoint?.sizeColumn,
@@ -322,18 +334,43 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       cfg.geoArea?.nameColumn,
       cfg.geoArea?.valueColumn,
       ...cfg.where.map((w) => w.column),
+      rawOrderColumn,
     ].filter(Boolean) as string[];
     for (const r of refs) {
       if (r.indexOf('.') < 0) return '조인 시 컬럼은 "테이블.컬럼" 형식이어야 합니다.';
       if (!activeHandles.includes(parseColumn(r, tableHandle(cfg.table)).table ?? '')) return `조인에 없는 테이블 참조: ${r}`;
-      cfg.seriesBy,
     }
   }
+  return null;
+}
+
+/** 실행 버튼 검증. 완성된 차트 구성 또는 X/Y가 모두 없는 테이블 조회 구성을 허용한다. */
+export function builderExecutionIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
+  const commonIssue = builderCommonValidationIssue(cfg, tables);
+  if (commonIssue) return commonIssue;
+  if (!isTableQueryMode(cfg, chartType)) return builderValidationIssue(cfg, chartType, tables);
+
+  if (cfg.orderBy) {
+    const prefix = 'column:';
+    if (!cfg.orderBy.target.startsWith(prefix)) return '조회 정렬 기준으로 원본 컬럼을 선택하세요.';
+    const column = cfg.orderBy.target.slice(prefix.length);
+    if (!column || !columnType(column, cfg, tables)) return '조회 정렬 컬럼을 선택하세요.';
+  }
+  return null;
+}
+
+export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
+  const commonIssue = builderCommonValidationIssue(cfg, tables);
+  if (commonIssue) return commonIssue;
   const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
   const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
   if (!spatialGeoPoint && !spatialGeoArea && !cfg.xAxis) return 'X축 컬럼을 선택하세요.';
   if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
   if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
+  if (cfg.seriesBy && !(chartType === 'bar' || chartType === 'line')) return '계열 기준은 막대와 선 차트에서만 사용할 수 있습니다.';
+  if (cfg.seriesBy && cfg.yAxis.length !== 1) return '계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.';
+  if (cfg.seriesBy && cfg.seriesBy === cfg.xAxis) return 'X축과 계열 기준은 서로 다른 컬럼이어야 합니다.';
+  if (cfg.seriesBy && !columnType(cfg.seriesBy, cfg, tables)) return '계열 기준 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
   if (chartType === 'map' && !spatialGeoArea && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
@@ -367,10 +404,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (spatialGeoArea) {
     const areaColumn = cfg.geoArea?.spatialColumn;
     const nameColumn = cfg.geoArea?.nameColumn;
-  if (cfg.seriesBy && !(chartType === 'bar' || chartType === 'line')) return '계열 기준은 막대와 선 차트에서만 사용할 수 있습니다.';
-  if (cfg.seriesBy && cfg.yAxis.length !== 1) return '계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.';
-  if (cfg.seriesBy && cfg.seriesBy === cfg.xAxis) return 'X축과 계열 기준은 서로 다른 컬럼이어야 합니다.';
-  if (cfg.seriesBy && !columnType(cfg.seriesBy, cfg, tables)) return '계열 기준 컬럼을 선택하세요.';
     const valueColumn = cfg.geoArea?.valueColumn;
     if (!areaColumn) return '공간 Polygon 컬럼을 선택하세요.';
     if (!isSpatialAreaType(columnType(areaColumn, cfg, tables))) {
