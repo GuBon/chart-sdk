@@ -5,11 +5,17 @@ import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import {
   defaultOf,
   getPath,
+  OPTION_EDITOR_TAB_LABELS,
+  optionEditorSectionOf,
+  optionEditorSectionOrder,
+  optionEditorTabOf,
+  optionEditorTabsFor,
   setPath,
   switchMajor,
   visibleDefs,
   type MajorType,
   type OptionDef,
+  type OptionEditorTab,
   type Options,
 } from '@chartsdk/chart-options';
 import { resolveChartTypography } from '@chartsdk/chart-options/display';
@@ -46,10 +52,7 @@ interface Props {
   onCollapse?: () => void;
 }
 
-const ZONE_LABEL: Record<string, string> = { common: '공통', axis: '좌표 · 축', type: '대분류 전용' };
-const ZONE_ORDER = ['common', 'axis', 'type'];
-
-/** optionRegistry를 검색·존·섹션으로 구성한다. 개별 입력 종류의 렌더링은 OptionControl이 담당한다. */
+/** optionRegistry를 작업 탭·섹션으로 구성한다. 개별 입력 종류의 렌더링은 OptionControl이 담당한다. */
 export function OptionPanel({
   chartType,
   options,
@@ -72,16 +75,28 @@ export function OptionPanel({
   onCollapse,
 }: Props) {
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [activeTabByType, setActiveTabByType] = useState<Partial<Record<MajorType, OptionEditorTab>>>({});
+  const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
   const [resetNotice, setResetNotice] = useState<{ message: string; prevType: MajorType; prevOptions: Options } | null>(null);
 
   const disabled = !hasResult;
   const normalizedQuery = query.toLowerCase().trim();
-  const definitions = visibleDefs(chartType, options).filter(
+  const allDefinitions = visibleDefs(chartType, options);
+  const definitions = allDefinitions.filter(
     (definition) => !normalizedQuery
       || definition.label.toLowerCase().includes(normalizedQuery)
-      || definition.section.toLowerCase().includes(normalizedQuery),
+      || definition.section.toLowerCase().includes(normalizedQuery)
+      || optionEditorSectionOf(definition).toLowerCase().includes(normalizedQuery)
+      || OPTION_EDITOR_TAB_LABELS[optionEditorTabOf(definition)].toLowerCase().includes(normalizedQuery),
   );
+  const availableTabs = optionEditorTabsFor(chartType).filter(
+    (tab) => allDefinitions.some((definition) => optionEditorTabOf(definition) === tab),
+  );
+  const requestedActiveTab = activeTabByType[chartType] ?? 'basic';
+  const activeTab = availableTabs.includes(requestedActiveTab) ? requestedActiveTab : availableTabs[0];
+  const renderedTabs = normalizedQuery
+    ? availableTabs.filter((tab) => definitions.some((definition) => optionEditorTabOf(definition) === tab))
+    : activeTab ? [activeTab] : [];
   const typography = resolveChartTypography(options);
 
   const valueOf = (definition: OptionDef) => {
@@ -109,12 +124,16 @@ export function OptionPanel({
       ? { message: `${chartTypeLabel(previousType)} 전용 설정이 초기화되었습니다.`, prevType: previousType, prevOptions: previousOptions }
       : null);
   };
-  const toggleSection = (key: string) => setCollapsed((previous) => {
-    const next = new Set(previous);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    return next;
-  });
+  const setActiveTab = (tab: OptionEditorTab) => {
+    setActiveTabByType((previous) => ({ ...previous, [chartType]: tab }));
+  };
+  const toggleSection = (key: string, open: boolean) => {
+    setSectionOverrides((previous) => ({ ...previous, [key]: !open }));
+  };
+  const focusTab = (tab: OptionEditorTab) => {
+    setActiveTab(tab);
+    document.getElementById(`option-tab-${tab}`)?.focus();
+  };
 
   return (
     <div className="flex flex-col">
@@ -159,23 +178,90 @@ export function OptionPanel({
         )}
       </div>
 
-      {ZONE_ORDER.map((zone) => {
-        const zoneDefinitions = definitions.filter((definition) => definition.zone === zone);
-        if (zoneDefinitions.length === 0) return null;
-        const sections = [...new Set(zoneDefinitions.map((definition) => definition.section))];
+      <div
+        role="tablist"
+        aria-label="시각화 옵션 분류"
+        className="flex min-w-0 gap-1 overflow-x-auto border-b border-border px-4 pt-1"
+      >
+        {availableTabs.map((tab, index) => {
+          const selected = tab === activeTab;
+          return (
+            <button
+              key={tab}
+              id={`option-tab-${tab}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`option-tabpanel-${tab}`}
+              tabIndex={selected ? 0 : -1}
+              data-testid={`option-tab-${tab}`}
+              onClick={() => setActiveTab(tab)}
+              onKeyDown={(event) => {
+                let nextIndex: number | null = null;
+                if (event.key === 'ArrowRight') nextIndex = (index + 1) % availableTabs.length;
+                if (event.key === 'ArrowLeft') nextIndex = (index - 1 + availableTabs.length) % availableTabs.length;
+                if (event.key === 'Home') nextIndex = 0;
+                if (event.key === 'End') nextIndex = availableTabs.length - 1;
+                if (nextIndex == null) return;
+                event.preventDefault();
+                focusTab(availableTabs[nextIndex]);
+              }}
+              className={`shrink-0 border-b-2 px-2.5 py-2 text-xs font-medium transition-colors ${
+                selected
+                  ? 'border-primary text-text-primary'
+                  : 'border-transparent text-text-tertiary hover:text-text-primary'
+              }`}
+            >
+              {OPTION_EDITOR_TAB_LABELS[tab]}
+            </button>
+          );
+        })}
+      </div>
+
+      {normalizedQuery && definitions.length === 0 && (
+        <p className="px-4 py-6 text-center text-xs text-text-tertiary">일치하는 옵션이 없습니다.</p>
+      )}
+
+      {renderedTabs.map((tab) => {
+        const tabDefinitions = definitions.filter((definition) => optionEditorTabOf(definition) === tab);
+        if (tabDefinitions.length === 0) return null;
+        const discoveredSections = [...new Set(tabDefinitions.map(optionEditorSectionOf))];
+        const preferredSections = optionEditorSectionOrder(chartType, tab);
+        const sections = [
+          ...preferredSections.filter((section) => discoveredSections.includes(section)),
+          ...discoveredSections.filter((section) => !preferredSections.includes(section)),
+        ];
         return (
-          <div key={zone}>
-            <div className="flex items-center gap-2 px-4 pb-1 pt-3">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">{ZONE_LABEL[zone]}</span>
-              <span className="h-px flex-1 bg-border" />
-            </div>
-            {sections.map((section) => {
-              const sectionKey = `${zone}/${section}`;
-              const open = !collapsed.has(sectionKey);
-              const sectionDefinitions = zoneDefinitions.filter((definition) => definition.section === section);
+          <div
+            key={tab}
+            id={`option-tabpanel-${tab}`}
+            role={normalizedQuery ? 'region' : 'tabpanel'}
+            aria-labelledby={`option-tab-${tab}`}
+          >
+            {normalizedQuery && (
+              <div className="flex items-center gap-2 px-4 pb-1 pt-3">
+                <span className="text-[11px] font-medium tracking-wide text-text-tertiary">
+                  {OPTION_EDITOR_TAB_LABELS[tab]}
+                </span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            )}
+            {sections.map((section, sectionIndex) => {
+              const sectionKey = `${chartType}/${tab}/${section}`;
+              const defaultOpen = sectionIndex === 0;
+              const open = normalizedQuery ? true : (sectionOverrides[sectionKey] ?? defaultOpen);
+              const sectionDefinitions = tabDefinitions.filter(
+                (definition) => optionEditorSectionOf(definition) === section,
+              );
               return (
                 <section key={sectionKey} className="border-b border-border px-4 py-2.5">
-                  <button type="button" onClick={() => toggleSection(sectionKey)} className="flex w-full items-center gap-1.5 text-left">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    disabled={Boolean(normalizedQuery)}
+                    onClick={() => toggleSection(sectionKey, open)}
+                    className="flex w-full items-center gap-1.5 text-left disabled:cursor-default"
+                  >
                     {open ? <ChevronDown className="size-3.5 text-text-secondary" /> : <ChevronRight className="size-3.5 text-text-secondary" />}
                     <span className="text-[13px] font-semibold text-text-primary">{section}</span>
                   </button>
@@ -219,6 +305,17 @@ export function OptionPanel({
           </div>
         );
       })}
+      {availableTabs
+        .filter((tab) => !renderedTabs.includes(tab))
+        .map((tab) => (
+          <div
+            key={`hidden-${tab}`}
+            id={`option-tabpanel-${tab}`}
+            role="tabpanel"
+            aria-labelledby={`option-tab-${tab}`}
+            hidden
+          />
+        ))}
     </div>
   );
 }

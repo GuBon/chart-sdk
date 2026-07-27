@@ -22,6 +22,7 @@
 export type MajorType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
 export type Zone = 'common' | 'axis' | 'type';
 export type Tier = 'T1' | 'T2' | 'T3';
+export type OptionEditorTab = 'basic' | 'series' | 'axis' | 'area' | 'style' | 'interaction' | 'data';
 
 /** 활성 대분류 런타임 목록 (MajorType 의 단일 진실원 — 패널 그리드·기본값 생성·전환이 공유) */
 export const MAJOR_TYPES: MajorType[] = ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'];
@@ -737,3 +738,99 @@ export function switchMajor(prev: Options, from: MajorType, to: MajorType): { ne
 
   return { next, removedKeys };
 }
+/**
+ * `zone`은 차트 유형 전환 시 옵션을 유지·초기화하는 저장 계약이다.
+ * 편집 화면의 정보 구조는 이 별도 메타데이터를 사용해 저장 계약과 UI 순서를 분리한다.
+ */
+export const OPTION_EDITOR_TAB_LABELS: Record<OptionEditorTab, string> = {
+  basic: '기본',
+  series: '계열',
+  axis: '축',
+  area: '영역',
+  style: '스타일',
+  interaction: '상호작용',
+  data: '데이터',
+};
+
+const CARTESIAN_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'axis', 'style', 'interaction', 'data'];
+const MAP_EDITOR_TABS: OptionEditorTab[] = ['basic', 'area', 'series', 'style', 'interaction', 'data'];
+const PIE_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'style', 'interaction', 'data'];
+const TOOLTIP_APPEARANCE_KEYS = new Set([
+  'tooltip.backgroundColor',
+  'tooltip.textColor',
+  'tooltip.borderColor',
+  'tooltip.borderWidth',
+  'tooltip.padding',
+]);
+const MAP_AREA_KEYS = new Set(['map.viewport', 'map.roam']);
+
+/** 차트 대분류에 맞는 편집 탭을 사용자 작업 순서대로 반환한다. */
+export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
+  if (chartType === 'map' || chartType === 'geoscatter') return [...MAP_EDITOR_TABS];
+  if (chartType === 'pie') return [...PIE_EDITOR_TABS];
+  return [...CARTESIAN_EDITOR_TABS];
+}
+
+/** 레지스트리 옵션 하나가 편집 화면에서 속할 작업 탭. */
+export function optionEditorTabOf(def: OptionDef): OptionEditorTab {
+  if (MAP_AREA_KEYS.has(def.key)) return 'area';
+  if (def.zone === 'axis') return 'axis';
+  if (def.zone === 'type') return 'series';
+
+  switch (def.section) {
+    case '기본':
+      return 'basic';
+    case '색상':
+    case '범례':
+    case '계열':
+      return 'series';
+    case '크기':
+    case '글꼴':
+      return 'style';
+    case '툴팁':
+    case '강조':
+      return 'interaction';
+    case '데이터 갱신':
+      return 'data';
+    default:
+      throw new Error(`편집 탭이 지정되지 않은 옵션 섹션입니다: ${def.section} (${def.key})`);
+  }
+}
+
+/** 저장 레지스트리의 섹션명을 편집 화면의 사용자 용어로 변환한다. */
+export function optionEditorSectionOf(def: OptionDef): string {
+  if (MAP_AREA_KEYS.has(def.key)) return '표시 영역';
+  if (def.key === 'geoscatter.symbolSize') return '점';
+  if (TOOLTIP_APPEARANCE_KEYS.has(def.key)) return '툴팁 모양';
+  if (def.section === '계열') return '라벨 · 정렬';
+  return def.section;
+}
+
+const TYPE_SECTION_ORDER: Partial<Record<MajorType, string[]>> = {
+  bar: ['막대', '혼합'],
+  line: ['선', '혼합'],
+  pie: ['원형'],
+  scatter: ['분포'],
+  geoscatter: ['점'],
+};
+
+/** 한 탭 안의 아코디언 섹션을 차트 편집 권장 순서대로 반환한다. */
+export function optionEditorSectionOrder(chartType: MajorType, tab: OptionEditorTab): string[] {
+  switch (tab) {
+    case 'basic':
+      return ['기본'];
+    case 'area':
+      return ['표시 영역'];
+    case 'series':
+      return [...(TYPE_SECTION_ORDER[chartType] ?? []), '색상', '라벨 · 정렬', '범례'];
+    case 'axis':
+      return ['여백', 'X축', 'Y축'];
+    case 'style':
+      return ['크기', '글꼴'];
+    case 'interaction':
+      return ['툴팁', '툴팁 모양', '강조'];
+    case 'data':
+      return ['데이터 갱신'];
+  }
+}
+

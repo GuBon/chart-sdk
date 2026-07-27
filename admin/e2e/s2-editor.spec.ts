@@ -12,6 +12,21 @@ async function selectNewJoin(page: Page, name: string | RegExp) {
   await page.locator('aside').first().getByRole('button', { name }).click();
 }
 
+async function openOptionTab(page: Page, name: string) {
+  const tab = page
+    .getByRole('tablist', { name: '시각화 옵션 분류' })
+    .getByRole('tab', { name, exact: true });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+}
+
+async function openOptionSection(page: Page, name: string) {
+  const panel = page.getByRole('tabpanel');
+  const button = panel.getByRole('button', { name, exact: true });
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
+  await expect(button).toHaveAttribute('aria-expanded', 'true');
+}
+
 // S2-a 레이아웃 골격 + S2-b 스키마 탐색기 동작 검증.
 test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   test('신규 진입 시 편집 헤더와 노코드 구성 내부의 정의모드 탭이 보인다', async ({ page }) => {
@@ -323,6 +338,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
+    await openOptionTab(page, '스타일');
+    await openOptionSection(page, '글꼴');
     const fontSection = page.locator('section').filter({ has: page.getByText('글꼴', { exact: true }) });
     const policy = fontSection.getByTestId('typography-policy');
     await expect(policy).toContainText('자동: 논리 차트 크기를 바꾸면 다시 계산합니다.');
@@ -841,16 +858,18 @@ test.describe('S2 이탈 모달·옵션 검색', () => {
   test('옵션 검색으로 옵션 항목이 필터되고 지우면 복원된다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.getByText('의류')).toBeVisible();
-    // '제목' 검색 → 차트 제목은 남고 색 모드는 사라짐
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    // '제목' 검색 → 차트 제목은 남고 색상 테마는 사라짐
     await page.locator('#option-search').fill('제목');
     await expect(page.getByText('차트 제목', { exact: true })).toBeVisible();
-    await expect(page.getByText('색 모드', { exact: true })).toBeHidden();
+    await expect(page.getByText('테마', { exact: true })).toBeHidden();
     // 지우면 복원
     await page.locator('#option-search').fill('');
-    await expect(page.getByText('색 모드', { exact: true })).toBeVisible();
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '색상');
+    await expect(page.getByText('테마', { exact: true })).toBeVisible();
   });
 });
 
@@ -858,13 +877,14 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
   test('누적 variant를 고르면 100% 정규화 토글이 나타나고 미리보기가 유지된다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click();
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     // 기본 variant → 100% 정규화 숨김(showIf: variant==='stacked')
     await expect(page.getByText('100% 정규화')).toBeHidden();
     // 누적 선택 → 토글 노출 → 켜도 미리보기 유지
     await page.getByRole('button', { name: '누적', exact: true }).click();
+    await openOptionTab(page, '계열');
     await expect(page.getByText('100% 정규화')).toBeVisible();
     await page.getByRole('switch', { name: '100% 정규화' }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
@@ -873,12 +893,14 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
   test('시리즈 종류에서 한 시리즈를 선으로 바꾸면 혼합 차트가 렌더된다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
-    await page.getByRole('button', { name: '+ 시리즈 추가' }).click(); // 시리즈 sum_id
+    await page.getByRole('button', { name: '+ 값 추가' }).click(); // 시리즈 sum_id
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     // 실행 후 '시리즈 종류' 컨트롤 노출 → sum_id 시리즈를 선으로
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '혼합');
     await expect(page.getByText('시리즈 종류')).toBeVisible();
-    await page.getByTestId('series-type-sum_id').getByRole('button', { name: '선', exact: true }).click();
+    await page.locator('[data-testid^="series-type-"]').first().getByRole('button', { name: '선', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 });
