@@ -328,43 +328,49 @@ public class ChartOptionConverter {
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("boundaryGap", true);
-        decorateAxis(xAxis, xCfg, true, axisFontSize);
+        decorateAxis(xAxis, xCfg, true, true, true, axisFontSize);
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "log".equals(string(yCfg.get("scale"), "value")) ? "log" : "value");
-        decorateAxis(yAxis, yCfg, false, axisFontSize);
+        decorateAxis(yAxis, yCfg, false, false, false, axisFontSize);
 
-        applyGrid(o, opt);
+        applyGrid(o, opt, false);
         o.put("xAxis", xAxis);
         o.put("yAxis", yAxis);
 
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("type", "boxplot");
-        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "분포") : "분포");
+        s.put("name", seriesName);
         s.put("data", data);
-        Object color = ColorResolver.paletteColor(opt, 0);
+        Object color = ColorResolver.pickColor(opt, seriesName, 0);
         if (color != null) {
             Map<String, Object> itemStyle = new LinkedHashMap<>();
             itemStyle.put("color", color);
             itemStyle.put("borderColor", color);
             s.put("itemStyle", itemStyle);
         }
+        applySeriesEmphasis(s, opt, "boxplot");
         o.put("series", List.of(s));
     }
 
     /** 히트맵: X=카테고리(행), Y=값 시리즈 컬럼명, 값=집계값 → data [xIdx, yIdx, value] + visualMap. */
-    private void buildHeatmap(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns, List<List<Object>> rows) {
+    private void buildHeatmap(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns,
+                              List<List<Object>> rows, ItemColorResolver itemColors) {
         List<Object> cats = new ArrayList<>();
         for (List<Object> r : rows) cats.add(r.isEmpty() ? null : r.get(0));
         List<Object> yNames = new ArrayList<>();
         for (int c = 1; c < columns.size(); c++) yNames.add(string(columns.get(c).get("name"), "series" + c));
 
         List<Object> data = new ArrayList<>();
+        ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
         for (int xi = 0; xi < rows.size(); xi++) {
             List<Object> r = rows.get(xi);
             for (int c = 1; c < columns.size(); c++) {
                 double v = (r.size() > c && r.get(c) instanceof Number n) ? n.doubleValue() : 0;
-                data.add(List.of(xi, c - 1, v));
+                List<Object> dimensions = java.util.Arrays.asList(cats.get(xi), yNames.get(c - 1));
+                int occurrence = itemOccurrences.next("heatmap", "", dimensions);
+                Object itemColor = itemColors.color("heatmap", "", dimensions, occurrence);
+                data.add(withItemColor(List.of(xi, c - 1, v), itemColor, "color", false));
                 if (v < min) min = v;
                 if (v > max) max = v;
             }
@@ -380,18 +386,16 @@ public class ChartOptionConverter {
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("splitArea", Map.of("show", true));
-        decorateAxis(xAxis, xCfg, true, typography.axis());
+        decorateAxis(xAxis, xCfg, true, true, true, typography.axis());
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "category");
         yAxis.put("data", yNames);
         yAxis.put("splitArea", Map.of("show", true));
-        String yTitle = string(yCfg.get("title"), "");
-        if (!yTitle.isEmpty()) yAxis.put("name", yTitle);
-        applyAxisTypography(yAxis, typography.axis());
+        decorateAxis(yAxis, yCfg, false, false, false, typography.axis());
 
         Map<String, Object> grid = new LinkedHashMap<>(presetGrid(string(map(opt.get("grid")).get("preset"), "normal")));
         grid.put("containLabel", map(opt.get("grid")).getOrDefault("containLabel", true));
-        applyMargins(grid, opt, false); // 제목만 가산(heatmap 은 범례 제거) — 규칙 2
+        applyMargins(grid, opt, false, false); // 제목만 가산(heatmap 은 범례 제거) — 규칙 2
         // 하단 visualMap 공간 확보. visualMap 은 하단 제목이 있으면 동적 제목 높이만큼 올라가 그 위에 쌓인다.
         grid.put("bottom", ((Number) grid.get("bottom")).intValue() + metrics.visualMapHeight());
         o.remove("legend"); // heatmap 은 visualMap 이 범례 대체 (공통 zone 잔존 legend 제거)
@@ -615,11 +619,11 @@ public class ChartOptionConverter {
     }
 
     // ── 그리드·축 ────────────────────────────────────────
-    private void applyGrid(Map<String, Object> o, Map<String, Object> opt) {
+    private void applyGrid(Map<String, Object> o, Map<String, Object> opt, boolean horizontal) {
         Map<String, Object> grid = map(opt.get("grid"));
         Map<String, Object> g = new LinkedHashMap<>(presetGrid(string(grid.get("preset"), "normal")));
         g.put("containLabel", grid.getOrDefault("containLabel", true));
-        applyMargins(g, opt, true); // 제목·범례 스택만큼 top/bottom 가산(규칙 2)
+        applyMargins(g, opt, true, horizontal); // 제목·범례·축 이름만큼 여백 가산
         o.put("grid", g);
     }
 
@@ -634,10 +638,13 @@ public class ChartOptionConverter {
 
     /** grid 의 top/bottom 에 글꼴에서 계산한 제목·범례 예약 높이를 같은 모서리별로 가산한다.
      *  includeLegend=false 는 범례를 제거하는 유형(heatmap 등)에서 범례 가산을 건너뛸 때. */
-    private void applyMargins(Map<String, Object> g, Map<String, Object> opt, boolean includeLegend) {
+    private void applyMargins(Map<String, Object> g, Map<String, Object> opt, boolean includeLegend, boolean horizontal) {
+        int left = ((Number) g.get("left")).intValue();
+        int right = ((Number) g.get("right")).intValue();
         int top = ((Number) g.get("top")).intValue();
         int bottom = ((Number) g.get("bottom")).intValue();
-        LayoutMetrics metrics = layoutMetrics(typography(opt));
+        Typography typography = typography(opt);
+        LayoutMetrics metrics = layoutMetrics(typography);
         boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
         if (titleTop) top += metrics.titleHeight();
         if (titleAtBottom(opt)) bottom += metrics.titleHeight();
@@ -648,6 +655,34 @@ public class ChartOptionConverter {
             if (shown && "top".equals(pos)) top += metrics.legendHeight();
             if (shown && "bottom".equals(pos)) bottom += metrics.legendHeight();
         }
+        Map<String, Object> xCfg = map(opt.get("xAxis"));
+        Map<String, Object> yCfg = map(opt.get("yAxis"));
+        Map<String, Object> physicalXCfg = horizontal ? yCfg : xCfg;
+        Map<String, Object> physicalYCfg = horizontal ? xCfg : yCfg;
+        String physicalXPosition = axisPosition(physicalXCfg, !horizontal, true);
+        String physicalYPosition = axisPosition(physicalYCfg, horizontal, false);
+        int physicalXReserve = axisReserve(physicalXCfg, typography.axis());
+        int physicalYReserve = axisReserve(physicalYCfg, typography.axis());
+        if ("top".equals(physicalXPosition)) top += physicalXReserve;
+        else bottom += physicalXReserve;
+        if ("right".equals(physicalYPosition)) right += physicalYReserve;
+        else left += physicalYReserve;
+        int physicalXEndpointReserve = axisEndpointReserve(
+                physicalXCfg, !horizontal, true, typography.axis());
+        int physicalYEndpointReserve = axisEndpointReserve(
+                physicalYCfg, horizontal, false, typography.axis());
+        if ("start".equals(physicalXCfg.get("titleLocation"))) left += physicalXEndpointReserve;
+        if ("end".equals(physicalXCfg.get("titleLocation"))) right += physicalXEndpointReserve;
+        if ("start".equals(physicalYCfg.get("titleLocation"))) bottom += physicalYEndpointReserve;
+        if ("end".equals(physicalYCfg.get("titleLocation"))) top += physicalYEndpointReserve;
+
+        // 보조 Y축은 주축의 반대편에 배치되므로 양쪽 여백을 각각 확보한다.
+        if (!horizontal && Boolean.TRUE.equals(yCfg.get("secondAxis"))) {
+            if ("right".equals(physicalYPosition)) left += physicalYReserve;
+            else right += physicalYReserve;
+        }
+        g.put("left", left);
+        g.put("right", right);
         g.put("top", top);
         g.put("bottom", bottom);
     }
@@ -668,15 +703,16 @@ public class ChartOptionConverter {
             // 분포: X·Y 모두 수치축, data 없음. (데이터는 [x,y] 쌍)
             Map<String, Object> x = new LinkedHashMap<>();
             x.put("type", "log".equals(string(xCfg.get("scale"), "value")) ? "log" : "value");
-            decorateAxis(x, xCfg, true, axisFontSize);
-            decorateAxis(valueAxis, yCfg, false, axisFontSize);
+            decorateAxis(x, xCfg, true, true, true, axisFontSize);
+            decorateAxis(valueAxis, yCfg, false, false, false, axisFontSize);
             o.put("xAxis", x);
             o.put("yAxis", valueAxis);
             return;
         }
 
-        decorateAxis(categoryAxis, xCfg, true, axisFontSize);
-        decorateAxis(valueAxis, yCfg, false, axisFontSize);
+        // 가로 막대에서는 범주축이 실제 Y축이므로 라벨을 기울이지 않는다.
+        decorateAxis(categoryAxis, xCfg, !horizontal, true, !horizontal, axisFontSize);
+        decorateAxis(valueAxis, yCfg, false, false, horizontal, axisFontSize);
 
         if (horizontal) {
             o.put("xAxis", valueAxis);
@@ -687,25 +723,40 @@ public class ChartOptionConverter {
         // 이중축(@yAxis.second): 두 번째 값축 추가 (시리즈는 2번째부터 yAxisIndex=1)
         if (Boolean.TRUE.equals(yCfg.get("secondAxis"))) {
             Map<String, Object> second = new LinkedHashMap<>(valueAxis);
+            second.put("position", "right".equals(axisPosition(yCfg, false, false)) ? "left" : "right");
             o.put("yAxis", List.of(valueAxis, second));
         } else {
             o.put("yAxis", valueAxis);
         }
     }
 
-    /** 축 공통 장식: name, rotate(카테고리), splitLine, min/max(수동), 단위 포맷터. */
-    private void decorateAxis(Map<String, Object> axis, Map<String, Object> cfg, boolean isX, int fontSize) {
+    /** 축 공통 장식: 제목·물리적 위치, rotate(카테고리), splitLine, min/max(수동), 단위 포맷터. */
+    private void decorateAxis(Map<String, Object> axis, Map<String, Object> cfg,
+                              boolean rulesAsX, boolean logicalIsX, boolean physicalIsX, int fontSize) {
         String title = string(cfg.get("title"), "");
-        if (!title.isEmpty()) axis.put("name", title);
+        if (!title.isEmpty()) {
+            axis.put("name", title);
+            String location = titleLocation(cfg.get("titleLocation"));
+            axis.put("nameLocation", location);
+            axis.put("nameGap", "middle".equals(location)
+                    ? Math.max(0, number(cfg.get("titleGap"), AXIS_NAME_GAP))
+                    : AXIS_ENDPOINT_NAME_GAP);
+            axis.put("nameRotate", axisTitleRotation(cfg, logicalIsX, physicalIsX));
+        }
+        axis.put("position", axisPosition(cfg, logicalIsX, physicalIsX));
         if (cfg.containsKey("splitLine")) axis.put("splitLine", Map.of("show", Boolean.TRUE.equals(cfg.get("splitLine"))));
-        if (isX && cfg.get("rotate") instanceof Number rotate && rotate.intValue() != 0) {
+        if (rulesAsX && cfg.get("rotate") instanceof Number rotate && rotate.intValue() != 0) {
             axis.put("axisLabel", new LinkedHashMap<>(Map.of("rotate", rotate)));
         }
-        if (!isX && "manual".equals(string(cfg.get("rangeMode"), "auto"))) {
+        if (!rulesAsX && "manual".equals(string(cfg.get("rangeMode"), "auto"))) {
             if (cfg.get("min") != null) axis.put("min", cfg.get("min"));
             if (cfg.get("max") != null) axis.put("max", cfg.get("max"));
         }
-        if (!isX) {
+        if (rulesAsX) {
+            if (cfg.get("min") != null) axis.put("min", cfg.get("min"));
+            if (cfg.get("max") != null) axis.put("max", cfg.get("max"));
+        }
+        if (!rulesAsX) {
             String unit = string(cfg.get("unit"), "");
             if (!unit.isEmpty()) {
                 @SuppressWarnings("unchecked")
@@ -713,7 +764,119 @@ public class ChartOptionConverter {
                 label.put("formatter", "{value}" + unit);
             }
         }
+        if ("category".equals(axis.get("type"))) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> label = (Map<String, Object>) axis.computeIfAbsent("axisLabel", k -> new LinkedHashMap<>());
+            applyCategoryLabelDensity(label, cfg, logicalIsX);
+        } else {
+            applyNumericAxisTicks(axis, cfg, logicalIsX);
+        }
         applyAxisTypography(axis, fontSize);
+    }
+
+    private void applyCategoryLabelDensity(Map<String, Object> label, Map<String, Object> cfg, boolean logicalIsX) {
+        String mode = string(cfg.get("labelIntervalMode"), logicalIsX ? "all" : "auto");
+        switch (mode) {
+            case "auto" -> label.put("interval", "auto");
+            case "step" -> label.put("interval", Math.max(0, number(cfg.get("labelEvery"), 2) - 1));
+            default -> {
+                mode = "all";
+                label.put("interval", 0);
+            }
+        }
+        if (cfg.containsKey("showMinLabel")) label.put("showMinLabel", Boolean.TRUE.equals(cfg.get("showMinLabel")));
+        if (cfg.containsKey("showMaxLabel")) label.put("showMaxLabel", Boolean.TRUE.equals(cfg.get("showMaxLabel")));
+        label.put("hideOverlap", logicalIsX
+                ? "auto".equals(mode)
+                : !"all".equals(mode) && Boolean.TRUE.equals(cfg.get("hideOverlap")));
+    }
+
+    private void applyNumericAxisTicks(Map<String, Object> axis, Map<String, Object> cfg, boolean logicalIsX) {
+        if ("log".equals(axis.get("type"))) {
+            axis.put("logBase", Math.max(2, number(cfg.get("logBase"), 10)));
+            return;
+        }
+
+        axis.put("scale", !Boolean.TRUE.equals(cfg.getOrDefault("includeZero", true)));
+        if ("fixed".equals(string(cfg.get("tickMode"), "auto"))) {
+            Number interval = positiveNumber(cfg.get("interval"));
+            if (interval != null) axis.put("interval", interval);
+            return;
+        }
+
+        axis.put("splitNumber", clampInt(number(cfg.get("splitNumber"), 5), 2, 20));
+        if (logicalIsX) {
+            Number minInterval = positiveNumber(cfg.get("minInterval"));
+            Number maxInterval = positiveNumber(cfg.get("maxInterval"));
+            if (minInterval != null) axis.put("minInterval", minInterval);
+            if (maxInterval != null) axis.put("maxInterval", maxInterval);
+        }
+    }
+
+    private Number positiveNumber(Object value) {
+        if (!(value instanceof Number number) || !Double.isFinite(number.doubleValue()) || number.doubleValue() <= 0) return null;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            return Long.valueOf(number.longValue());
+        }
+        return Double.valueOf(number.doubleValue());
+    }
+
+    private String titleLocation(Object value) {
+        String location = string(value, "middle");
+        return switch (location) {
+            case "start", "end" -> location;
+            default -> "middle";
+        };
+    }
+
+    /**
+     * 저장 옵션은 논리적 X/Y축 기준이다. 가로 막대처럼 축이 교환되면 ECharts의 물리적 방향으로 변환한다.
+     */
+    private String axisPosition(Map<String, Object> cfg, boolean logicalIsX, boolean physicalIsX) {
+        String configured = string(cfg.get("position"), logicalIsX ? "bottom" : "left");
+        String logicalPosition = logicalIsX
+                ? ("top".equals(configured) ? "top" : "bottom")
+                : ("right".equals(configured) ? "right" : "left");
+        if (logicalIsX == physicalIsX) return logicalPosition;
+        if (logicalIsX) return "top".equals(logicalPosition) ? "right" : "left";
+        return "right".equals(logicalPosition) ? "top" : "bottom";
+    }
+
+    private int axisTitleRotation(Map<String, Object> cfg, boolean logicalIsX, boolean physicalIsX) {
+        int logicalDefault = logicalIsX ? 0 : -90;
+        int physicalDefault = physicalIsX ? 0 : -90;
+        return physicalDefault + number(cfg.get("titleRotate"), logicalDefault) - logicalDefault;
+    }
+
+    private int axisReserve(Map<String, Object> cfg, int fontSize) {
+        if (string(cfg.get("title"), "").isEmpty()) return 0;
+        String location = titleLocation(cfg.get("titleLocation"));
+        if (!"middle".equals(location)) return fontSize + 12;
+        int gap = Math.max(0, number(cfg.get("titleGap"), AXIS_NAME_GAP));
+        return fontSize + 12 + Math.max(0, gap - AXIS_NAME_GAP);
+    }
+
+    private int axisEndpointReserve(Map<String, Object> cfg, boolean logicalIsX,
+                                    boolean physicalIsX, int fontSize) {
+        String title = string(cfg.get("title"), "");
+        if (title.isEmpty()) return 0;
+        String location = titleLocation(cfg.get("titleLocation"));
+        if ("middle".equals(location)) return 0;
+        double rotation = Math.toRadians(axisTitleRotation(cfg, logicalIsX, physicalIsX));
+        double textWidth = estimatedTextWidth(title, fontSize);
+        double projectedLength = physicalIsX
+                ? Math.abs(Math.cos(rotation)) * textWidth + Math.abs(Math.sin(rotation)) * fontSize
+                : Math.abs(Math.sin(rotation)) * textWidth + Math.abs(Math.cos(rotation)) * fontSize;
+        return AXIS_ENDPOINT_NAME_GAP + (int) Math.ceil(projectedLength);
+    }
+
+    private double estimatedTextWidth(String text, int fontSize) {
+        double units = text.codePoints()
+                .mapToDouble(codePoint -> Character.isWhitespace(codePoint)
+                        ? 0.35
+                        : codePoint <= 0x7f ? 0.58 : 1.0)
+                .sum();
+        return Math.ceil(units * fontSize);
     }
 
     private void applyAxisTypography(Map<String, Object> axis, int fontSize) {
@@ -831,8 +994,10 @@ public class ChartOptionConverter {
     }
 
     private void applyBar(Map<String, Object> s, Map<String, Object> barCfg) {
-        putIfNotNull(s, "barWidth", barCfg.get("width"));
-        putIfNotNull(s, "barGap", barCfg.get("gap"));
+        if (barCfg.get("width") instanceof Number width) s.put("barWidth", width + "%");
+        else putIfNotNull(s, "barWidth", barCfg.get("width"));
+        if (barCfg.get("gap") instanceof Number gap) s.put("barGap", gap + "%");
+        else putIfNotNull(s, "barGap", barCfg.get("gap"));
         if (barCfg.get("borderRadius") != null) s.put("itemStyle", new LinkedHashMap<>(Map.of("borderRadius", barCfg.get("borderRadius"))));
         if (Boolean.TRUE.equals(barCfg.get("showBackground"))) s.put("showBackground", true);
     }

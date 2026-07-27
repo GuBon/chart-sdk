@@ -140,5 +140,26 @@
       "series.0.label.fontSize": 17,
       "tooltip.textStyle.fontSize": 17
     }
+  },
+  {
+    "name": "category-axis-shows-all-labels-and-keeps-titles-inside",
+    "chartType": "bar",
+    "options": {
+      "legend": { "show": false },
+      "xAxis": { "title": "지역", "rotate": 30 },
+      "yAxis": { "title": "인구수" }
+    },
+    "expected": {
+      "grid.left": 48,
+      "grid.bottom": 48,
+      "xAxis.name": "지역",
+      "xAxis.nameLocation": "middle",
+      "xAxis.nameGap": 56,
+      "xAxis.axisLabel.interval": 0,
+      "xAxis.axisLabel.rotate": 30,
+      "yAxis.name": "인구수",
+      "yAxis.nameLocation": "middle",
+      "yAxis.nameGap": 56
+    }
   }
 ]

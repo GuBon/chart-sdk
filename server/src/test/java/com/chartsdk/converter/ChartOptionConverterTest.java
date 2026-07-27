@@ -171,6 +171,123 @@ class ChartOptionConverterTest {
     }
 
     @Test
+    void axisTitlePlacementAndAxisPositionAreConvertedForEcharts() {
+        Map<String, Object> option = converter.convert(rows2(), "bar", Map.of(
+                "xAxis", Map.of(
+                        "title", "기간", "titleLocation", "start", "titleGap", 34,
+                        "titleRotate", 15, "position", "top", "offset", 7
+                ),
+                "yAxis", Map.of(
+                        "title", "매출", "titleLocation", "end", "titleGap", 72,
+                        "titleRotate", 90, "position", "right", "offset", 11,
+                        "secondAxis", true
+                )
+        ));
+
+        Map<?, ?> xAxis = (Map<?, ?>) option.get("xAxis");
+        assertThat(xAxis.get("name")).isEqualTo("기간");
+        assertThat(xAxis.get("nameLocation")).isEqualTo("start");
+        assertThat(xAxis.get("nameGap")).isEqualTo(8);
+        assertThat(xAxis.get("nameRotate")).isEqualTo(15);
+        assertThat(xAxis.get("position")).isEqualTo("top");
+        assertThat(xAxis.containsKey("offset")).isFalse();
+
+        List<?> yAxes = (List<?>) option.get("yAxis");
+        Map<?, ?> primary = (Map<?, ?>) yAxes.get(0);
+        Map<?, ?> secondary = (Map<?, ?>) yAxes.get(1);
+        assertThat(primary.get("name")).isEqualTo("매출");
+        assertThat(primary.get("nameLocation")).isEqualTo("end");
+        assertThat(primary.get("nameGap")).isEqualTo(8);
+        assertThat(primary.get("nameRotate")).isEqualTo(-90);
+        assertThat(primary.get("position")).isEqualTo("right");
+        assertThat(primary.containsKey("offset")).isFalse();
+        assertThat(secondary.get("position")).isEqualTo("left");
+        assertThat(((Map<?, ?>) ((List<?>) option.get("series")).get(1)).get("yAxisIndex")).isEqualTo(1);
+    }
+
+    @Test
+    void horizontalBarMapsLogicalAxisPositionsToPhysicalAxes() {
+        Map<String, Object> option = converter.convert(rows2(), "bar", Map.of(
+                "variant", "horizontal",
+                "xAxis", Map.of("title", "범주", "position", "top"),
+                "yAxis", Map.of("title", "값", "position", "right")
+        ));
+
+        Map<?, ?> xAxis = (Map<?, ?>) option.get("xAxis");
+        Map<?, ?> yAxis = (Map<?, ?>) option.get("yAxis");
+        assertThat(xAxis.get("position")).isEqualTo("top");
+        assertThat(yAxis.get("position")).isEqualTo("right");
+        assertThat(xAxis.get("nameRotate")).isEqualTo(0);
+        assertThat(yAxis.get("nameRotate")).isEqualTo(-90);
+    }
+
+    @Test
+    void categoryXDefaultsToAllLabelsAndNumericYDefaultsToAutomaticTicks() {
+        Map<String, Object> option = converter.convert(rows2(), "bar", Map.of());
+        Map<?, ?> xAxis = (Map<?, ?>) option.get("xAxis");
+        Map<?, ?> yAxis = (Map<?, ?>) option.get("yAxis");
+        Map<?, ?> xLabel = (Map<?, ?>) xAxis.get("axisLabel");
+
+        assertThat(xLabel.get("interval")).isEqualTo(0);
+        assertThat(xLabel.get("hideOverlap")).isEqualTo(false);
+        assertThat(yAxis.get("interval")).isNull();
+        assertThat(yAxis.get("splitNumber")).isEqualTo(5);
+        assertThat(yAxis.get("scale")).isEqualTo(false);
+    }
+
+    @Test
+    void onlyAutomaticCategoryLabelsHideOverlapsAndFixedStepsStayExact() {
+        Map<String, Object> option = converter.convert(rows2(), "bar", Map.of(
+                "xAxis", Map.of(
+                        "labelIntervalMode", "step", "labelEvery", 3,
+                        "showMinLabel", true, "showMaxLabel", false, "hideOverlap", true
+                ),
+                "yAxis", Map.of("tickMode", "fixed", "interval", 20, "includeZero", false)
+        ));
+        Map<?, ?> xLabel = (Map<?, ?>) ((Map<?, ?>) option.get("xAxis")).get("axisLabel");
+        Map<?, ?> yAxis = (Map<?, ?>) option.get("yAxis");
+
+        assertThat(xLabel.get("interval")).isEqualTo(2);
+        assertThat(xLabel.get("showMinLabel")).isEqualTo(true);
+        assertThat(xLabel.get("showMaxLabel")).isEqualTo(false);
+        assertThat(xLabel.get("hideOverlap")).isEqualTo(false);
+        assertThat(yAxis.get("interval")).isEqualTo(20L);
+        assertThat(yAxis.get("splitNumber")).isNull();
+        assertThat(yAxis.get("scale")).isEqualTo(true);
+
+        Map<String, Object> automatic = converter.convert(rows2(), "bar", Map.of(
+                "xAxis", Map.of("labelIntervalMode", "auto", "hideOverlap", false)
+        ));
+        Map<?, ?> automaticLabel = (Map<?, ?>) ((Map<?, ?>) automatic.get("xAxis")).get("axisLabel");
+        assertThat(automaticLabel.get("interval")).isEqualTo("auto");
+        assertThat(automaticLabel.get("hideOverlap")).isEqualTo(true);
+    }
+
+    @Test
+    void removesLegacyYAxisIntervalBoundsAndKeepsNumericXAxisBounds() {
+        Map<String, Object> withoutLegacyBounds = converter.convert(rows2(), "bar", Map.of(
+                "yAxis", Map.of("minInterval", 10, "maxInterval", 20)
+        ));
+        Map<?, ?> yWithoutBounds = (Map<?, ?>) withoutLegacyBounds.get("yAxis");
+        assertThat(yWithoutBounds.get("minInterval")).isNull();
+        assertThat(yWithoutBounds.get("maxInterval")).isNull();
+
+        Map<String, Object> scatter = converter.convert(rows2(), "scatter", Map.of(
+                "xAxis", Map.of("minInterval", 1, "maxInterval", 5)
+        ));
+        Map<?, ?> scatterX = (Map<?, ?>) scatter.get("xAxis");
+        assertThat(scatterX.get("minInterval")).isEqualTo(1L);
+        assertThat(scatterX.get("maxInterval")).isEqualTo(5L);
+    }
+
+    @Test
+    void heatmapCategoryYDefaultsToAutomaticLabelInterval() {
+        Map<String, Object> option = converter.convert(rows2(), "heatmap", Map.of());
+        Map<?, ?> yLabel = (Map<?, ?>) ((Map<?, ?>) option.get("yAxis")).get("axisLabel");
+        assertThat(yLabel.get("interval")).isEqualTo("auto");
+    }
+
+    @Test
     void boxplotComputesFiveNumberSummaryPerCategory() {
         // A = 1..9 (홀수 9개), B = 10,20,30,40 (짝수 4개 → 선형보간). yAxis.secondAxis 는 무시(이중축 오염 방지).
         Map<String, Object> option = converter.convert(boxplotRows(), "boxplot", Map.of(
@@ -217,7 +334,7 @@ class ChartOptionConverterTest {
         assertThat(vm.get("max")).isEqualTo(30.0);
         assertThat(vm.get("calculable")).isEqualTo(true);
         assertThat(option.get("legend")).isNull();                 // visualMap 이 범례 대체
-        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isNull();
     }
 
     @Test
@@ -243,8 +360,69 @@ class ChartOptionConverterTest {
         assertThat(vm.get("max")).isEqualTo(20.0);
         assertThat(option.get("xAxis")).isNull();                  // 지도는 축 없음
         assertThat(option.get("legend")).isNull();
-        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isNull();
         assertThat(option.get("__chartsdkMapViewport")).isEqualTo(Map.of("mode", "data"));
+    }
+
+    @Test
+    void mapAndHeatmapUseFullSequentialPaletteAndCanReverseIt() {
+        List<String> teal = List.of(
+                "#D1EEEA", "#A8DBD9", "#85C4C9", "#68ABB8",
+                "#4F90A6", "#3B738F", "#2A5674"
+        );
+        for (String chartType : List.of("map", "heatmap")) {
+            Map<String, Object> forward = converter.convert(rows2(), chartType, Map.of(
+                    "palette", teal,
+                    "colorTheme", Map.of("version", 2),
+                    "paletteReversed", false
+            ));
+            assertThat(valueAt(forward, "visualMap.inRange.color"))
+                    .as("%s forward", chartType)
+                    .isEqualTo(teal);
+
+            Map<String, Object> reversed = converter.convert(rows2(), chartType, Map.of(
+                    "palette", teal,
+                    "colorTheme", Map.of("version", 2),
+                    "paletteReversed", true
+            ));
+            assertThat(valueAt(reversed, "visualMap.inRange.color"))
+                    .as("%s reversed", chartType)
+                    .isEqualTo(List.of(
+                            "#2A5674", "#3B738F", "#4F90A6", "#68ABB8",
+                            "#85C4C9", "#A8DBD9", "#D1EEEA"
+                    ));
+        }
+    }
+
+    @Test
+    void legacyMapKeepsTwoColorVisualMapContract() {
+        Map<String, Object> option = converter.convert(rows(), "map", Map.of(
+                "palettePreset", "safe",
+                "palette", List.of("#88CCEE", "#CC6677")
+        ));
+
+        assertThat(valueAt(option, "visualMap.inRange.color"))
+                .isEqualTo(List.of("#f7f7f7", "#88CCEE"));
+    }
+
+    @Test
+    void mapCustomizesTooltipTemplateAndEmphasisColor() {
+        Map<String, Object> option = converter.convert(rows(), "map", Map.of(
+                "map", Map.of(
+                        "tooltip", Map.of("enabled", true, "template", "{series}\n{name}: {value}"),
+                        "emphasis", Map.of("enabled", true, "color", "#12AB34")
+                )
+        ));
+
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("show")).isNull();
+        assertThat(option.get("__chartsdkTooltip")).isEqualTo(Map.of(
+                "chartType", "map", "template", "{series}\n{name}: {value}"
+        ));
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(series.get("name")).isEqualTo("amount");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) series.get("emphasis")).get("itemStyle")).get("areaColor"))
+                .isEqualTo("#12AB34");
+        assertThat(series.get("select")).isNull();
     }
 
     @Test
@@ -322,7 +500,7 @@ class ChartOptionConverterTest {
         assertThat(p0.get("value")).isEqualTo(List.of(127.0, 37.5, 10.0));
         assertThat(p0.get("symbolSize")).isEqualTo(6);   // 최소값 → 6px
         assertThat(p1.get("symbolSize")).isEqualTo(28);  // 최대값 → 6+22px
-        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isNull();
         assertThat(option.get("legend")).isNull();
     }
 
@@ -341,6 +519,112 @@ class ChartOptionConverterTest {
         Map<?, ?> s0 = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
         assertThat(s0.get("symbolSize")).isEqualTo(14);
         assertThat(((List<?>) s0.get("data")).get(0)).isEqualTo(List.of(127.0, 37.5));
+    }
+
+    @Test
+    void geoScatterCanDisableTooltipAndAllHoverEmphasis() {
+        QueryRows rows = new QueryRows(
+                List.of(Map.of("name", "lng", "type", "number"), Map.of("name", "lat", "type", "number")),
+                List.of(List.of(127.0, 37.5)),
+                1, false, 0);
+        Map<String, Object> option = converter.convert(rows, "geoscatter", Map.of(
+                "map", Map.of(
+                        "tooltip", Map.of("enabled", false),
+                        "emphasis", Map.of("enabled", false)
+                )
+        ));
+
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("show")).isEqualTo(false);
+        assertThat(option.get("__chartsdkTooltip")).isNull();
+        assertThat(((Map<?, ?>) ((Map<?, ?>) option.get("geo")).get("emphasis")).get("disabled"))
+                .isEqualTo(true);
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(((Map<?, ?>) series.get("emphasis")).get("disabled")).isEqualTo(true);
+    }
+
+    @Test
+    void everyChartTypeKeepsNativeTooltipDefaultsAndItsNativeEmphasisDefaults() {
+        for (String chartType : List.of("bar", "line", "pie", "scatter", "boxplot", "heatmap", "map", "geoscatter")) {
+            Map<String, Object> option = converter.convert(rows(), chartType, Map.of());
+            Map<?, ?> tooltip = (Map<?, ?>) option.get("tooltip");
+            Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+
+            assertThat(tooltip.get("show")).as(chartType + " tooltip.show").isNull();
+            assertThat(tooltip.get("trigger")).as(chartType + " tooltip.trigger").isNull();
+            assertThat(tooltip.get("confine")).as(chartType + " tooltip.confine").isNull();
+            assertThat(option.get("__chartsdkTooltip")).as(chartType + " custom tooltip metadata").isNull();
+
+            assertThat(series.get("emphasis")).as(chartType + " series emphasis").isNull();
+            if ("geoscatter".equals(chartType)) {
+                assertThat(((Map<?, ?>) option.get("geo")).get("emphasis")).isNull();
+            }
+        }
+    }
+
+    @Test
+    void everyChartTypeCanDisableTooltipAndEmphasisThroughTheCommonContract() {
+        Map<String, Object> interactions = Map.of(
+                "tooltip", Map.of("enabled", false),
+                "emphasis", Map.of("enabled", false)
+        );
+
+        for (String chartType : List.of("bar", "line", "pie", "scatter", "boxplot", "heatmap", "map", "geoscatter")) {
+            Map<String, Object> option = converter.convert(rows(), chartType, interactions);
+            Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+
+            assertThat(((Map<?, ?>) option.get("tooltip")).get("show")).as(chartType).isEqualTo(false);
+            assertThat(option.get("__chartsdkTooltip")).as(chartType).isNull();
+            assertThat(series.get("emphasis")).as(chartType).isEqualTo(Map.of("disabled", true));
+            if ("geoscatter".equals(chartType)) {
+                assertThat(((Map<?, ?>) option.get("geo")).get("emphasis"))
+                        .isEqualTo(Map.of("disabled", true));
+            }
+        }
+    }
+
+    @Test
+    void commonTooltipAndEmphasisOverridesAreMappedToEChartsPaths() {
+        Map<String, Object> option = converter.convert(rows(), "line", Map.of(
+                "tooltip", Map.of(
+                        "trigger", "axis",
+                        "axisPointer", "shadow",
+                        "confine", "inside",
+                        "backgroundColor", "#102030",
+                        "textColor", "#F0F0F0",
+                        "borderColor", "#405060",
+                        "borderWidth", 3,
+                        "padding", 16,
+                        "contentMode", "custom",
+                        "template", "{series}: {value}"
+                ),
+                "emphasis", Map.of(
+                        "focus", "series",
+                        "scale", false,
+                        "lineWidth", 7,
+                        "colorMode", "custom",
+                        "color", "#12AB34"
+                )
+        ));
+
+        assertThat(option.get("tooltip")).isEqualTo(Map.of(
+                "trigger", "axis",
+                "axisPointer", Map.of("type", "shadow"),
+                "confine", true,
+                "backgroundColor", "#102030",
+                "borderColor", "#405060",
+                "borderWidth", 3,
+                "padding", 16,
+                "textStyle", Map.of("fontSize", 12, "color", "#F0F0F0")
+        ));
+        assertThat(option.get("__chartsdkTooltip")).isEqualTo(Map.of(
+                "chartType", "line",
+                "template", "{series}: {value}"
+        ));
+        Map<?, ?> emphasis = (Map<?, ?>) ((Map<?, ?>) ((List<?>) option.get("series")).get(0)).get("emphasis");
+        assertThat(emphasis.get("focus")).isEqualTo("series");
+        assertThat(emphasis.get("scale")).isEqualTo(false);
+        assertThat(emphasis.get("lineStyle")).isEqualTo(Map.of("width", 7, "color", "#12AB34"));
+        assertThat(emphasis.get("itemStyle")).isEqualTo(Map.of("color", "#12AB34"));
     }
 
     @Test
@@ -402,5 +686,165 @@ class ChartOptionConverterTest {
                 false,
                 0
         );
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void cartoColorsDoNotCycleAndPersistBySeriesName() {
+        List<Map<String, Object>> columns = new java.util.ArrayList<>();
+        columns.add(Map.of("name", "region", "type", "text"));
+        List<Object> row = new java.util.ArrayList<>();
+        row.add("서울");
+        for (int i = 0; i < 14; i++) {
+            columns.add(Map.of("name", "s" + i, "type", "number"));
+            row.add(i);
+        }
+        QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
+
+        Map<String, Object> first = converter.convert(many, "bar", Map.of("palette", List.of(
+                "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
+                "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888"
+        )));
+        Map<String, Object> auto = (Map<String, Object>) first.get("__chartsdkAutoColorMap");
+        assertThat(auto.values()).hasSize(14).doesNotHaveDuplicates();
+        assertThat(auto.get("s0")).isEqualTo("#88CCEE");
+        assertThat(auto.get("s11")).isEqualTo("#888888");
+        assertThat(auto.get("s12")).isNotEqualTo(auto.get("s0"));
+
+        Map<String, Object> second = converter.convert(many, "line", Map.of(
+                "autoColorMap", auto,
+                "colorMap", Map.of("s4", "#010203")
+        ));
+        List<Map<String, Object>> series = (List<Map<String, Object>>) second.get("series");
+        assertThat(series.get(4).get("color")).isEqualTo("#010203");
+        assertThat(series.get(5).get("color")).isEqualTo(auto.get("s5"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void emitsRuntimeFormatMetadataAndPercentBarSizing() {
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(
+                "tooltip", Map.of("valueFormat", "comma"),
+                "yAxis", Map.of("format", "decimal1", "unit", "명"),
+                "bar", Map.of("width", 55, "gap", 20)
+        ));
+
+        assertThat((Map<String, Object>) option.get("__chartsdkValueFormat"))
+                .containsEntry("tooltip", "comma").containsEntry("yAxis", "decimal1").containsEntry("unit", "명");
+        List<Map<String, Object>> series = (List<Map<String, Object>>) option.get("series");
+        assertThat(series.get(0)).containsEntry("barWidth", "55%").containsEntry("barGap", "20%");
+    }
+
+    @Test
+    void appliesColorToOnlyOneCartesianDataItem() {
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "cartesian",
+                        "seriesName", "amount",
+                        "dimensions", List.of("B"),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        List<?> data = (List<?>) series.get("data");
+        assertThat(data.get(0)).isEqualTo(10);
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color")).isEqualTo("#FFB000");
+    }
+
+    @Test
+    void linePointOverrideDoesNotChangeWholeLineColor() {
+        Map<String, Object> option = converter.convert(rows(), "line", Map.of(
+                "colorMap", Map.of("amount", "#112233"),
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "cartesian",
+                        "seriesName", "amount",
+                        "dimensions", List.of("A"),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(((Map<?, ?>) series.get("lineStyle")).get("color")).isEqualTo("#112233");
+        Map<?, ?> point = (Map<?, ?>) ((List<?>) series.get("data")).get(0);
+        assertThat(((Map<?, ?>) point.get("itemStyle")).get("color")).isEqualTo("#FFB000");
+    }
+
+    @Test
+    void mapItemOverrideUsesAreaColorAndKeepsVisualMap() {
+        Map<String, Object> option = converter.convert(rows(), "map", Map.of(
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "map",
+                        "seriesName", "__map__",
+                        "dimensions", List.of("B"),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        List<?> data = (List<?>) ((Map<?, ?>) ((List<?>) option.get("series")).get(0)).get("data");
+        assertThat(((Map<?, ?>) data.get(0)).get("itemStyle")).isNull();
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("areaColor")).isEqualTo("#FFB000");
+        assertThat(option.get("visualMap")).isNotNull();
+    }
+
+    @Test
+    void boxplotUsesSeriesColorMapAndItemOverride() {
+        Map<String, Object> option = converter.convert(boxplotRows(), "boxplot", Map.of(
+                "colorMap", Map.of("amount", "#112233"),
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "boxplot",
+                        "seriesName", "__boxplot__",
+                        "dimensions", List.of("B"),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(((Map<?, ?>) series.get("itemStyle")).get("color")).isEqualTo("#112233");
+        List<?> data = (List<?>) series.get("data");
+        Map<?, ?> itemStyle = (Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle");
+        assertThat(itemStyle.get("color")).isEqualTo("#FFB000");
+        assertThat(itemStyle.get("borderColor")).isEqualTo("#FFB000");
+    }
+
+    @Test
+    void scatterPointIdentityUsesBothCoordinates() {
+        Map<String, Object> option = converter.convert(rows(), "scatter", Map.of(
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "scatter",
+                        "seriesName", "amount",
+                        "dimensions", List.of("B", 20),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        List<?> data = (List<?>) series.get("data");
+        assertThat(data.get(0)).isEqualTo(List.of("A", 10));
+        Map<?, ?> point = (Map<?, ?>) data.get(1);
+        assertThat(point.get("value")).isEqualTo(List.of("B", 20));
+        assertThat(((Map<?, ?>) point.get("itemStyle")).get("color")).isEqualTo("#FFB000");
+    }
+
+    @Test
+    void acceptsShorthandHexOverrideColor() {
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "cartesian",
+                        "seriesName", "amount",
+                        "dimensions", List.of("B"),
+                        "occurrence", 0,
+                        "color", "#fb0"
+                ))
+        ));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        List<?> data = (List<?>) series.get("data");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color")).isEqualTo("#FFBB00");
     }
 }
