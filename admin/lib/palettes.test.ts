@@ -27,7 +27,7 @@ describe('CARTO 정성형 팔레트 계약', () => {
 });
 
 describe('차트 대분류별 CARTO 팔레트 정책', () => {
-  it('지도·히트맵만 순차형이고 나머지는 범주형이다', () => {
+  it('영역 지도·행렬 히트맵만 순차형이고 나머지는 범주형이다', () => {
     const expected: Record<MajorType, string> = {
       bar: 'qualitative',
       line: 'qualitative',

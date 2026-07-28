@@ -385,21 +385,21 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       const pointColumn = cfg.geoPoint?.spatialColumn;
       if (!pointColumn) return '공간 Point 컬럼을 선택하세요.';
       if (!isSpatialPointType(columnType(pointColumn, cfg, tables))) {
-        return '지도 포인트 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.';
+        return '포인트 지도 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.';
       }
       if (cfg.geoPoint?.sizeColumn && !isNumericType(columnType(cfg.geoPoint.sizeColumn, cfg, tables))) {
-        return '지도 포인트의 크기값 컬럼은 숫자여야 합니다.';
+        return '포인트 지도의 크기값 컬럼은 숫자여야 합니다.';
       }
       if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
         return '공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
       }
-      if (cfg.sample) return '지도 포인트 공간 컬럼 모드에서는 표본 추출을 사용할 수 없습니다.';
+      if (cfg.sample) return '포인트 지도 공간 컬럼 모드에서는 표본 추출을 사용할 수 없습니다.';
       return null;
     }
-    if (cfg.yAxis.length > 2) return '지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';
-    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '지도 포인트는 집계 없이 원본 좌표만 사용합니다.';
-    if (!isNumericType(xType)) return '지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.';
-    if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.';
+    if (cfg.yAxis.length > 2) return '포인트 지도는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';
+    if (cfg.yAxis.some((y) => y.agg !== 'none')) return '포인트 지도는 집계 없이 원본 좌표만 사용합니다.';
+    if (!isNumericType(xType)) return '포인트 지도는 숫자 경도(X) 컬럼이 필요합니다.';
+    if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '포인트 지도의 위도·크기값 컬럼은 숫자여야 합니다.';
   }
   if (spatialGeoArea) {
     const areaColumn = cfg.geoArea?.spatialColumn;
@@ -418,8 +418,8 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     if (cfg.sample) return '공간 Polygon 지도에서는 표본 추출을 사용할 수 없습니다.';
     return null;
   }
-  if (chartType === 'scatter' && !isNumericType(xType)) return '분포 차트는 숫자 X축 컬럼이 필요합니다.';
-  if (chartType === 'scatter' && cfg.yAxis.some((y) => y.agg !== 'none')) return '분포 차트는 집계 없이 원본값만 사용할 수 있습니다.';
+  if (chartType === 'scatter' && !isNumericType(xType)) return '산점도는 숫자 X축 컬럼이 필요합니다.';
+  if (chartType === 'scatter' && cfg.yAxis.some((y) => y.agg !== 'none')) return '산점도는 집계 없이 원본값만 사용할 수 있습니다.';
   if (rawSeriesCount > 0 && rawSeriesCount !== cfg.yAxis.length) {
     return '원본값은 집계값과 섞을 수 없습니다. 모든 Y축을 원본값으로 선택하세요.';
   }

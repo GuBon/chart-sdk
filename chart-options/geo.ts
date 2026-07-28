@@ -65,7 +65,7 @@ export function mapBoundsToBoundingCoords(bounds: MapBounds): [[number, number],
 
 /**
  * 서버가 전달한 표시 영역 메타데이터를 실제 ECharts boundingCoords로 변환한다.
- * 내장 지도와 동적 Polygon은 등록된 GeoJSON에서, 지도 포인트는 series 데이터에서 경계를 계산한다.
+ * 내장 지도와 동적 Polygon은 등록된 GeoJSON에서, 포인트 지도는 series 데이터에서 경계를 계산한다.
  */
 export function applyMapViewport(
   option: Record<string, unknown>,

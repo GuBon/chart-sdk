@@ -296,11 +296,11 @@ describe('builderValidationIssue', () => {
   });
   it('분포는 숫자 X축을 요구한다', () => {
     const cfg = bar({ xAxis: 'category', yAxis: [{ column: 'amount', agg: 'none' }] });
-    expect(builderValidationIssue(cfg, 'scatter', TABLES)).toBe('분포 차트는 숫자 X축 컬럼이 필요합니다.');
+    expect(builderValidationIssue(cfg, 'scatter', TABLES)).toBe('산점도는 숫자 X축 컬럼이 필요합니다.');
   });
   it('분포는 집계 사용을 거부한다', () => {
     const cfg = bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'sum' }] });
-    expect(builderValidationIssue(cfg, 'scatter', TABLES)).toBe('분포 차트는 집계 없이 원본값만 사용할 수 있습니다.');
+    expect(builderValidationIssue(cfg, 'scatter', TABLES)).toBe('산점도는 집계 없이 원본값만 사용할 수 있습니다.');
   });
   it('원본값과 집계값 혼용을 거부한다', () => {
     const cfg = bar({ yAxis: [{ column: 'amount', agg: 'none' }, { column: 'id', agg: 'sum' }] });
@@ -439,13 +439,13 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES)).toBeNull();
     // 텍스트 X(category) → 거부
     expect(builderValidationIssue(bar({ xAxis: 'category', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES))
-      .toBe('지도 포인트는 숫자 경도(X) 컬럼이 필요합니다.');
+      .toBe('포인트 지도는 숫자 경도(X) 컬럼이 필요합니다.');
     // 3컬럼 → 거부
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }, { column: 'amount', agg: 'none' }, { column: 'customer_id', agg: 'none' }] }), 'geoscatter', TABLES))
-      .toBe('지도 포인트는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.');
+      .toBe('포인트 지도는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.');
     // 비숫자 위도 → 거부
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'category', agg: 'none' }] }), 'geoscatter', TABLES))
-      .toBe('지도 포인트의 위도·크기값 컬럼은 숫자여야 합니다.');
+      .toBe('포인트 지도의 위도·크기값 컬럼은 숫자여야 합니다.');
   });
 
   it('geoscatter 공간 Point 모드는 X/Y 대신 Point와 선택 크기 컬럼을 검증한다', () => {
@@ -460,9 +460,9 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     expect(normalized).toMatchObject({ xAxis: null, yAxis: [], orderBy: null, sample: null, geoPoint: spatial.geoPoint });
 
     expect(builderValidationIssue({ ...spatial, geoPoint: { mode: 'spatial', spatialColumn: 'service_area' } }, 'geoscatter', TABLES))
-      .toBe('지도 포인트 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.');
+      .toBe('포인트 지도 공간 컬럼은 SRID가 지정된 geometry/geography Point 타입이어야 합니다.');
     expect(builderValidationIssue({ ...spatial, geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: 'category' } }, 'geoscatter', TABLES))
-      .toBe('지도 포인트의 크기값 컬럼은 숫자여야 합니다.');
+      .toBe('포인트 지도의 크기값 컬럼은 숫자여야 합니다.');
 
     const crossSource = {
       ...spatial,

@@ -41,7 +41,7 @@ describe('chart color selection', () => {
     expect(itemTargetAt(option, 'bar', 0, 0)).toMatchObject({ dimensions: ['서울'] });
   });
 
-  it('히트맵 셀을 실제 축 라벨로 식별한다', () => {
+  it('행렬 히트맵 셀을 실제 축 라벨로 식별한다', () => {
     const option = {
       xAxis: { type: 'category', data: ['1월', '2월'] },
       yAxis: { type: 'category', data: ['매출', '비용'] },
