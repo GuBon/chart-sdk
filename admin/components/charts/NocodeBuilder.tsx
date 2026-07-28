@@ -96,6 +96,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const canRun = !executionIssue;
   const firstCol = (isGeoScatter ? numericOptions[0] : colOptions[0])?.value ?? '';
   const firstValueCol = numericOptions[0]?.value ?? colOptions[0]?.value ?? '';
+  const firstValueType = colOptions.find((column) => column.value === firstValueCol)?.type;
 
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
@@ -121,7 +122,9 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       ...config.yAxis,
       {
         column: firstValueCol,
-        agg: 'none',
+        // 활성 표본은 집계 모드에서만 유효하다. 테이블 변경 뒤 값 축을 다시 추가할 때
+        // 원본값을 잠깐 거치며 보존된 표본 설정이 지워지지 않도록 집계값으로 시작한다.
+        agg: config.sample ? (isNumericType(firstValueType) ? 'sum' : 'count') : 'none',
       },
     ],
   });
@@ -216,6 +219,15 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       <div className="border-b border-border">
         <div className="flex h-12 items-center gap-3 px-4">
           <span className="shrink-0 whitespace-nowrap text-sm font-medium text-text-primary">노코드 구성</span>
+          <div className="flex-1" />
+          {executionIssue ? (
+            <span className="min-w-0 truncate text-xs text-danger" title={executionIssue}>{executionIssue}</span>
+          ) : tableQueryMode ? (
+            <span className="min-w-0 truncate text-xs text-text-tertiary">축 없이 조건·정렬 결과만 실행합니다.</span>
+          ) : warning ? (
+            <span className="min-w-0 truncate text-xs text-amber-600" title={warning}>{warning}</span>
+          ) : null}
+          {/* 접기는 데이터 패널과 같이 헤더 행의 오른쪽 끝에 둔다. */}
           <button
             type="button"
             onClick={onCollapse}
@@ -226,14 +238,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
             <ChevronsLeft className="size-3.5" />
             <span className="hidden xl:inline">접기</span>
           </button>
-          <div className="flex-1" />
-          {executionIssue ? (
-            <span className="min-w-0 truncate text-xs text-danger" title={executionIssue}>{executionIssue}</span>
-          ) : tableQueryMode ? (
-            <span className="min-w-0 truncate text-xs text-text-tertiary">축 없이 조건·정렬 결과만 실행합니다.</span>
-          ) : warning ? (
-            <span className="min-w-0 truncate text-xs text-amber-600" title={warning}>{warning}</span>
-          ) : null}
         </div>
         <div className="flex h-10 items-stretch gap-1 px-2 xl:px-4">
           <div role="tablist" aria-label="차트 정의 방식" className="flex min-w-0 items-stretch gap-1">
