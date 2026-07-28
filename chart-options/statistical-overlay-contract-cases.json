@@ -1,0 +1,253 @@
+[
+  {
+    "name": "boxplot-iqr-whiskers-and-outlier-scatter",
+    "chartType": "boxplot",
+    "columns": [
+      { "name": "category", "type": "text" },
+      { "name": "amount", "type": "numeric" }
+    ],
+    "rows": [
+      ["A", 1],
+      ["A", 2],
+      ["A", 3],
+      ["A", 4],
+      ["A", 100],
+      ["B", -100],
+      ["B", 10],
+      ["B", 11],
+      ["B", 12],
+      ["B", 13]
+    ],
+    "options": {
+      "palette": ["#112233"],
+      "analysis": {
+        "boxplotOutliers": {
+          "show": true,
+          "color": "#ab12cd"
+        }
+      }
+    },
+    "expected": {
+      "series.0.type": "boxplot",
+      "series.0.data.0": [1.0, 2.0, 3.0, 4.0, 4.0],
+      "series.0.data.1": [10.0, 10.0, 11.0, 12.0, 13.0],
+      "series.1.id": "__chartsdk_boxplot_outliers",
+      "series.1.type": "scatter",
+      "series.1.name": "amount",
+      "series.1.data": [["A", 100.0], ["B", -100.0]],
+      "series.1.itemStyle.color": "#AB12CD"
+    },
+    "absent": []
+  },
+  {
+    "name": "boxplot-outliers-can-be-hidden-without-changing-whiskers",
+    "chartType": "boxplot",
+    "columns": [
+      { "name": "category", "type": "text" },
+      { "name": "amount", "type": "numeric" }
+    ],
+    "rows": [
+      ["A", 1],
+      ["A", 2],
+      ["A", 3],
+      ["A", 4],
+      ["A", 100]
+    ],
+    "options": {
+      "analysis": {
+        "boxplotOutliers": {
+          "show": false,
+          "color": "#D81B60"
+        }
+      }
+    },
+    "expected": {
+      "series.0.data.0": [1.0, 2.0, 3.0, 4.0, 4.0]
+    },
+    "absent": [
+      "series.1"
+    ]
+  },
+  {
+    "name": "moving-average-sorts-time-selects-series-and-can-leave-legend",
+    "chartType": "line",
+    "columns": [
+      { "name": "observed_at", "type": "timestamp without time zone" },
+      { "name": "sales", "type": "numeric" },
+      { "name": "cost", "type": "numeric" }
+    ],
+    "rows": [
+      ["2026-03-01", 30, 300],
+      ["2026-01-01", 10, 100],
+      ["2026-04-01", 40, 400],
+      ["2026-02-01", 20, 200]
+    ],
+    "options": {
+      "palette": ["#111111", "#222222"],
+      "legend": {
+        "show": true,
+        "position": "bottom"
+      },
+      "analysis": {
+        "movingAverage": {
+          "enabled": true,
+          "seriesIndex": 1,
+          "period": 3,
+          "showInLegend": false
+        },
+        "annotations": {
+          "lines": [
+            {
+              "id": "cost-line",
+              "name": "비용 기준",
+              "seriesIndex": 1,
+              "color": "#E53935",
+              "showLabel": true,
+              "value": 250,
+              "lineType": "dashed",
+              "lineWidth": 2
+            }
+          ],
+          "ranges": [],
+          "targets": []
+        }
+      }
+    },
+    "expected": {
+      "xAxis.data": ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"],
+      "series.0.data": [10, 20, 30, 40],
+      "series.1.data": [100, 200, 300, 400],
+      "series.1.markLine.data.0.yAxis": 250.0,
+      "series.2.id": "__chartsdk_moving_average_1",
+      "series.2.type": "line",
+      "series.2.name": "cost · 3기간 이동평균",
+      "series.2.data": [null, null, 200.0, 300.0],
+      "series.2.lineStyle.type": "dashed",
+      "series.2.lineStyle.color": "#222222",
+      "legend.data": ["sales", "cost"]
+    },
+    "absent": [
+      "series.2.markLine"
+    ]
+  },
+  {
+    "name": "sort-order-applies-when-moving-average-is-off",
+    "chartType": "bar",
+    "columns": [
+      { "name": "category", "type": "text" },
+      { "name": "amount", "type": "numeric" }
+    ],
+    "rows": [
+      ["A", 10],
+      ["B", 30],
+      ["C", 20]
+    ],
+    "options": {
+      "sortOrder": "desc"
+    },
+    "expected": {
+      "xAxis.data": ["B", "C", "A"],
+      "series.0.data": [30, 20, 10]
+    },
+    "absent": []
+  },
+  {
+    "name": "moving-average-overrides-saved-sort-order-and-keeps-hidden-legend-hidden",
+    "chartType": "line",
+    "columns": [
+      { "name": "observed_at", "type": "date" },
+      { "name": "sales", "type": "numeric" }
+    ],
+    "rows": [
+      ["2026-03-01", 30],
+      ["2026-01-01", 10],
+      ["2026-04-01", 40],
+      ["2026-02-01", 20]
+    ],
+    "options": {
+      "sortOrder": "desc",
+      "legend": {
+        "show": false
+      },
+      "analysis": {
+        "movingAverage": {
+          "enabled": true,
+          "seriesIndex": 0,
+          "period": 2,
+          "showInLegend": false
+        }
+      }
+    },
+    "expected": {
+      "xAxis.data": ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"],
+      "series.0.data": [10, 20, 30, 40],
+      "series.1.id": "__chartsdk_moving_average_0",
+      "series.1.data": [null, 15.0, 25.0, 35.0],
+      "legend.show": false
+    },
+    "absent": [
+      "legend.data"
+    ]
+  },
+  {
+    "name": "moving-average-sorts-time-only-values-like-java-local-time",
+    "chartType": "line",
+    "columns": [
+      { "name": "observed_time", "type": "time without time zone" },
+      { "name": "sales", "type": "numeric" }
+    ],
+    "rows": [
+      ["12:00:00.900", 20],
+      ["08:15:00", 10],
+      ["12:00:00.100", 15],
+      ["18:30:00", 40]
+    ],
+    "options": {
+      "analysis": {
+        "movingAverage": {
+          "enabled": true,
+          "seriesIndex": 0,
+          "period": 2,
+          "showInLegend": true
+        }
+      }
+    },
+    "expected": {
+      "xAxis.data": ["08:15:00", "12:00:00.100", "12:00:00.900", "18:30:00"],
+      "series.0.data": [10, 15, 20, 40],
+      "series.1.id": "__chartsdk_moving_average_0",
+      "series.1.data": [null, 12.5, 17.5, 30.0]
+    },
+    "absent": []
+  },
+  {
+    "name": "moving-average-requires-temporal-x-column",
+    "chartType": "line",
+    "columns": [
+      { "name": "category", "type": "text" },
+      { "name": "sales", "type": "numeric" }
+    ],
+    "rows": [
+      ["B", 20],
+      ["A", 10],
+      ["C", 30]
+    ],
+    "options": {
+      "analysis": {
+        "movingAverage": {
+          "enabled": true,
+          "seriesIndex": 0,
+          "period": 2,
+          "showInLegend": true
+        }
+      }
+    },
+    "expected": {
+      "xAxis.data": ["B", "A", "C"],
+      "series.0.data": [20, 10, 30]
+    },
+    "absent": [
+      "series.1"
+    ]
+  }
+]

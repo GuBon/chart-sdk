@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import contractCases from '@chartsdk/chart-options/layout-contract-cases.json';
 import samplingCases from '@chartsdk/chart-options/sampling-contract-cases.json';
+import annotationCases from '@chartsdk/chart-options/analysis-annotation-contract-cases.json';
+import statisticalOverlayCases from '@chartsdk/chart-options/statistical-overlay-contract-cases.json';
 import type { BuilderConfig, ChartType, QueryResult } from './api/types';
-import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql } from '../mocks/mockTransform';
+import {
+  applyMovingAverageLegend,
+  assembleOption,
+  buildAggregateRows,
+  buildGeneratedSql,
+  buildRawRows,
+  buildRowsSql,
+} from '../mocks/mockTransform';
 import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 import { MAJOR_TYPES, optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
 import { cartoPalette } from '@chartsdk/chart-options/palettes';
@@ -13,6 +22,11 @@ type LayoutContractCase = {
   options: Record<string, unknown>;
   expected: Record<string, unknown>;
   absent?: string[];
+};
+
+type StatisticalOverlayContractCase = LayoutContractCase & {
+  columns: QueryResult['columns'];
+  rows: QueryResult['rows'];
 };
 
 const result: QueryResult = {
@@ -51,6 +65,22 @@ describe('mock 축 없는 조회', () => {
     expect(result.rows[0][2]).toBe(84);
     expect(result.rows.at(-1)?.[2]).toBe(35);
     expect(buildRowsSql(config)).toContain('WHERE "population" >= ? ORDER BY "population" DESC');
+  });
+
+  it('원본값 차트는 실제 X/Y 컬럼 타입에 맞는 값을 유지한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [], xAxis: 'category', xAxisBucket: null,
+      yAxis: [{ column: 'amount', agg: 'none' }],
+      where: [], orderBy: null, sample: null,
+    };
+
+    const rawChart = buildAggregateRows(config, 'bar');
+    expect(rawChart.columns).toEqual([
+      { name: 'category', type: 'text' },
+      { name: 'amount', type: 'numeric' },
+    ]);
+    expect(rawChart.rows[0]).toEqual(['의류', 7]);
   });
 });
 
@@ -151,7 +181,7 @@ describe('mock 변환기 레이아웃 계약', () => {
     expect(scatter).toMatchObject({ minInterval: 1, maxInterval: 5 });
   });
 
-  it('히트맵의 범주형 Y축은 기본 자동 라벨 간격을 사용한다', () => {
+  it('행렬 히트맵의 범주형 Y축은 기본 자동 라벨 간격을 사용한다', () => {
     const option = assembleOption(result, 'heatmap', {});
     expect((option.yAxis as Record<string, any>).axisLabel.interval).toBe('auto');
   });
@@ -172,7 +202,7 @@ describe('mock 변환기 레이아웃 계약', () => {
     expect(series.select).toBeUndefined();
   });
 
-  it('지도 포인트의 툴팁과 강조 효과를 함께 끌 수 있다', () => {
+  it('포인트 지도의 툴팁과 강조 효과를 함께 끌 수 있다', () => {
     const option = assembleOption(result, 'geoscatter', {
       map: { tooltip: { enabled: false }, emphasis: { enabled: false } },
     });
@@ -278,6 +308,45 @@ describe('mock 변환기 레이아웃 계약', () => {
     if (chartType === 'geoscatter') {
       expect(valueAt((option.geo as Record<string, any>).emphasis, 'itemStyle.areaColor')).toBe('#12AB34');
     }
+  });
+});
+
+describe('mock 분석 표시 계약', () => {
+  it.each(annotationCases as LayoutContractCase[])('$name', ({ chartType, options, expected, absent = [] }) => {
+    const option = assembleOption(result, chartType, options);
+    for (const [path, value] of Object.entries(expected)) expect(valueAt(option, path), path).toEqual(value);
+    for (const path of absent) expect(valueAt(option, path), path).toBeUndefined();
+  });
+});
+
+describe('mock 통계 오버레이 계약', () => {
+  it.each(statisticalOverlayCases as StatisticalOverlayContractCase[])(
+    '$name',
+    ({ chartType, columns, rows, options, expected, absent = [] }) => {
+      const option = assembleOption({
+        columns,
+        rows,
+        rowCount: rows.length,
+        truncated: false,
+        elapsedMs: 0,
+      }, chartType, options);
+      for (const [path, value] of Object.entries(expected)) expect(valueAt(option, path), path).toEqual(value);
+      for (const path of absent) expect(valueAt(option, path), path).toBeUndefined();
+    },
+  );
+
+  it('이동평균 범례 제외는 없는 legend 컴포넌트를 만들지 않는다', () => {
+    const option: Record<string, unknown> = {
+      series: [{ name: 'sales', type: 'line', data: [10, 20] }],
+    };
+
+    applyMovingAverageLegend(
+      option,
+      option.series as Array<Record<string, unknown>>,
+      false,
+    );
+
+    expect(option).not.toHaveProperty('legend');
   });
 });
 

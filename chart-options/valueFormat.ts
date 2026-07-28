@@ -9,6 +9,7 @@ type TooltipMetadata = {
 };
 
 type TooltipParams = {
+  seriesId?: unknown;
   seriesName?: unknown;
   name?: unknown;
   value?: unknown;
@@ -61,6 +62,16 @@ function renderTooltip(
   option: Record<string, any>,
 ): string {
   const dimensions = Array.isArray(params.value) ? params.value : [];
+  if (
+    chartType === 'boxplot'
+    && typeof params.seriesId === 'string'
+    && params.seriesId.startsWith('__chartsdk_boxplot_outliers')
+  ) {
+    const outlierValue = dimensions[1] ?? dimensions.at(-1);
+    return `${escapeHtml(String(params.name ?? dimensions[0] ?? ''))}<br/>이상치: ${
+      escapeHtml(valueFormatter(outlierValue))
+    }`;
+  }
   const boxValues = dimensions.slice(-5);
   const rawValue = chartType === 'geoscatter'
     ? dimensions[2]

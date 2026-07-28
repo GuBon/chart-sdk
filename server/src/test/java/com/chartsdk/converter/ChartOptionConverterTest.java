@@ -23,6 +23,16 @@ class ChartOptionConverterTest {
             List<String> absent
     ) {}
 
+    private record StatisticalOverlayContractCase(
+            String name,
+            String chartType,
+            List<Map<String, Object>> columns,
+            List<List<Object>> rows,
+            Map<String, Object> options,
+            Map<String, Object> expected,
+            List<String> absent
+    ) {}
+
     @Test
     void sharedLayoutContractFixtureMatchesServerConverter() throws Exception {
         try (InputStream in = getClass().getResourceAsStream("/layout-contract-cases.json")) {
@@ -42,10 +52,82 @@ class ChartOptionConverterTest {
         }
     }
 
+    @Test
+    void sharedAnalysisAnnotationContractFixtureMatchesServerConverter() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/analysis-annotation-contract-cases.json")) {
+            assertThat(in).as("shared analysis annotation contract fixture").isNotNull();
+            List<LayoutContractCase> cases = new ObjectMapper().readValue(in, new TypeReference<>() {});
+            for (LayoutContractCase c : cases) {
+                Map<String, Object> option = converter.convert(rows2(), c.chartType(), c.options());
+                for (Map.Entry<String, Object> expected : c.expected().entrySet()) {
+                    assertThat(valueAt(option, expected.getKey()))
+                            .as("%s: %s", c.name(), expected.getKey())
+                            .isEqualTo(expected.getValue());
+                }
+                for (String path : c.absent() == null ? List.<String>of() : c.absent()) {
+                    assertThat(valueAt(option, path)).as("%s: %s absent", c.name(), path).isNull();
+                }
+            }
+        }
+    }
+
+    @Test
+    void sharedStatisticalOverlayContractFixtureMatchesServerConverter() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/statistical-overlay-contract-cases.json")) {
+            assertThat(in).as("shared statistical overlay contract fixture").isNotNull();
+            List<StatisticalOverlayContractCase> cases = new ObjectMapper().readValue(in, new TypeReference<>() {});
+            for (StatisticalOverlayContractCase c : cases) {
+                QueryRows rows = new QueryRows(c.columns(), c.rows(), c.rows().size(), false, 0);
+                Map<String, Object> option = converter.convert(rows, c.chartType(), c.options());
+                for (Map.Entry<String, Object> expected : c.expected().entrySet()) {
+                    assertThat(valueAt(option, expected.getKey()))
+                            .as("%s: %s", c.name(), expected.getKey())
+                            .isEqualTo(expected.getValue());
+                }
+                for (String path : c.absent() == null ? List.<String>of() : c.absent()) {
+                    assertThat(valueAt(option, path)).as("%s: %s absent", c.name(), path).isNull();
+                }
+            }
+        }
+    }
+
+    @Test
+    void movingAverageLegendExclusionDoesNotCreateMissingLegend() {
+        QueryRows rows = new QueryRows(
+                List.of(
+                        Map.of("name", "observed_at", "type", "date"),
+                        Map.of("name", "sales", "type", "numeric")
+                ),
+                List.of(
+                        List.of("2026-01-01", 10),
+                        List.of("2026-02-01", 20)
+                ),
+                2,
+                false,
+                0
+        );
+        Map<String, Object> option = converter.convert(rows, "line", Map.of(
+                "analysis", Map.of(
+                        "movingAverage", Map.of(
+                                "enabled", true,
+                                "seriesIndex", 0,
+                                "period", 2,
+                                "showInLegend", false
+                        )
+                )
+        ));
+
+        assertThat(option).doesNotContainKey("legend");
+    }
+
     private Object valueAt(Object root, String path) {
         Object value = root;
         for (String key : path.split("\\.")) {
-            if (value instanceof List<?> list) value = list.get(Integer.parseInt(key));
+            if (value instanceof List<?> list) {
+                int index = Integer.parseInt(key);
+                if (index < 0 || index >= list.size()) return null;
+                value = list.get(index);
+            }
             else if (value instanceof Map<?, ?> map) value = map.get(key);
             else return null;
         }

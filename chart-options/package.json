@@ -9,6 +9,10 @@
   "exports": {
     ".": "./optionRegistry.ts",
     "./display": "./display.ts",
+    "./analysisAnnotations": "./analysisAnnotations.ts",
+    "./analysis-annotation-contract-cases.json": "./analysis-annotation-contract-cases.json",
+    "./statisticalOverlays": "./statisticalOverlays.ts",
+    "./statistical-overlay-contract-cases.json": "./statistical-overlay-contract-cases.json",
     "./colorOverrides": "./colorOverrides.ts",
     "./geo": "./geo.ts",
     "./renderLayout": "./renderLayout.ts",

@@ -9,7 +9,7 @@
  * 설계 축 2개 (서로 직교):
  *   - zone  : 옵션이 차트 종류와 어떻게 엮이는가 → 패널 배치 + 전환 시 유지/초기화 정책
  *       common : 모든 대분류 공통       → 대분류 전환 시 유지
- *       axis   : 직교 차트(막대·선·분포) → 직교끼리 유지, 원형 전환 시 숨김+보존
+ *       axis   : 직교 차트(막대·선·산점도) → 직교끼리 유지, 원형 전환 시 숨김+보존
  *       type   : 대분류 전용            → 대분류 전환 시 초기화(+토스트·실행취소)
  *   - tier  : 구현 시급도 (언제 만드는가) → T1 = MVP 기본 품질, T2 = 자주, T3 = 고급
  *
@@ -27,6 +27,10 @@ import {
   normalizeColorTheme,
   switchPaletteForChartType,
 } from '@chartsdk/chart-options/palettes';
+import {
+  DEFAULT_BOXPLOT_OUTLIERS,
+  DEFAULT_MOVING_AVERAGE,
+} from '@chartsdk/chart-options/statisticalOverlays';
 
 // ── 기본 타입 ─────────────────────────────────────────────────────
 
@@ -43,11 +47,11 @@ export const MAJOR_TYPE_CHOICES: { value: MajorType; label: string; group?: stri
   { value: 'bar', label: '막대' },
   { value: 'line', label: '선' },
   { value: 'pie', label: '원형' },
-  { value: 'scatter', label: '분포' },
+  { value: 'scatter', label: '산점도' },
   { value: 'boxplot', label: '박스 플롯' },
-  { value: 'heatmap', label: '히트맵' },
-  { value: 'map', label: '지도', group: 'GEO' },
-  { value: 'geoscatter', label: '지도 포인트', group: 'GEO' },
+  { value: 'heatmap', label: '행렬 히트맵' },
+  { value: 'map', label: '영역 지도', group: 'GEO' },
+  { value: 'geoscatter', label: '포인트 지도', group: 'GEO' },
 ];
 
 /** 패널 컨트롤 종류 — 공통 컴포넌트(화면설계서 2.4)와 1:1 */
@@ -65,6 +69,9 @@ export type Control =
   | 'colorMap'   // 항목별 컬러 피커 (실행 후 동적)
   | 'columnRef'  // 결과 컬럼 참조 셀렉트 (버블 크기 등, 실행 후 동적)
   | 'seriesTypes' // 시리즈별 막대/선 지정 (혼합 차트, 실행 후 동적)
+  | 'analysisAnnotations' // 기준선·기준 범위·목표점 목록
+  | 'boxplotOutliers' // 박스플롯 IQR 이상치 표시
+  | 'movingAverage' // 시간축 단순 이동평균
   | 'mapViewport' // 지도 표시 영역(데이터·지역·지도 조정·좌표)
   | 'button';    // 액션 (저장 안 됨)
 
@@ -153,7 +160,7 @@ export const VARIANTS: Record<MajorType, VariantDef[]> = {
     { value: 'basic', label: '기본', help: 'X·Y 카테고리 매트릭스를 색 강도로 인코딩(visualMap)' },
   ],
   map: [
-    { value: 'basic', label: '지도', help: '지역명별 값을 대한민국 지도에 색으로 인코딩(visualMap)' },
+    { value: 'basic', label: '영역 지도', help: '지역명별 값을 대한민국 지도에 색으로 인코딩(visualMap)' },
   ],
   geoscatter: [
     { value: 'basic', label: '포인트', help: '경도·위도 좌표를 지도 위 점으로 표시(선택: 값 컬럼으로 점 크기 인코딩)' },
@@ -305,7 +312,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
       map: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
     },
     echarts: 'color',
-    help: '선택한 시리즈·차트 요소에 테마 색상을 적용합니다. 지도·히트맵은 전체 색상 단계를 값 범위에 사용합니다.',
+    help: '선택한 시리즈·차트 요소에 테마 색상을 적용합니다. 영역 지도·행렬 히트맵은 전체 색상 단계를 값 범위에 사용합니다.',
   },
   {
     key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
@@ -432,7 +439,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
       line: '{series}\n{name}: {value}',
       pie: '{name}: {value} ({percent}%)',
       scatter: '{series}\nX: {x}\nY: {y}',
-      boxplot: '{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}',
+      boxplot: '{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}',
       heatmap: 'X: {x}\nY: {y}\n값: {value}',
       map: '지역: {name}\n값: {value}',
       geoscatter: '경도: {lng}\n위도: {lat}',
@@ -529,17 +536,38 @@ export const OPTION_REGISTRY: OptionDef[] = [
     choices: [{ value: 'none', label: '원본' }, { value: 'asc', label: '오름차순' }, { value: 'desc', label: '내림차순' }],
     help: '서버에서 rows 정렬 (ECharts 옵션 아님)',
   },
+  {
+    key: 'analysis.boxplotOutliers', zone: 'common', section: '분석 표시', label: '이상치',
+    control: 'boxplotOutliers', appliesTo: ['boxplot'],
+    default: DEFAULT_BOXPLOT_OUTLIERS, tier: 'T2',
+    echarts: '@analysis.boxplotOutliers',
+    help: '1.5 × IQR 범위 밖의 값을 별도 산점도 계열로 표시합니다.',
+  },
+  {
+    key: 'analysis.movingAverage', zone: 'common', section: '분석 표시', label: '이동평균',
+    control: 'movingAverage', appliesTo: ['line'],
+    default: DEFAULT_MOVING_AVERAGE, tier: 'T2',
+    echarts: '@analysis.movingAverage',
+    help: '날짜·시간 X축을 오름차순 정렬해 선택 계열의 단순 이동평균을 계산합니다.',
+  },
+  {
+    key: 'analysis.annotations', zone: 'common', section: '분석 표시', label: '기준·목표',
+    control: 'analysisAnnotations', appliesTo: ['bar', 'line', 'scatter', 'boxplot'],
+    default: { lines: [], ranges: [], targets: [] }, tier: 'T2',
+    echarts: '@analysis.annotations',
+    help: '값 축 기준선·범위와 특정 X 위치의 목표점을 여러 개 추가합니다.',
+  },
 
   // ── 데이터 갱신 ──
   {
     key: 'refreshMode', zone: 'common', section: '데이터 갱신', label: '갱신 모드',
     control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'ttl',
     storage: 'column', column: 'refresh_mode', echarts: '@none',
-    choices: [{ value: 'live', label: '실시간' }, { value: 'ttl', label: '주기' }, { value: 'manual', label: '수동' }],
+    choices: [{ value: 'live', label: '항상 최신 조회' }, { value: 'ttl', label: '캐시 사용' }, { value: 'manual', label: '수동' }],
     help: 'PRD 7.7 결과 캐싱',
   },
   {
-    key: 'cacheTtlSeconds', zone: 'common', section: '데이터 갱신', label: '주기',
+    key: 'cacheTtlSeconds', zone: 'common', section: '데이터 갱신', label: '캐시 유효 시간',
     control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 3600,
     storage: 'column', column: 'cache_ttl_seconds', echarts: '@none',
     showIf: (o) => o.refreshMode === 'ttl', choices: TTL_CHOICES,
@@ -548,7 +576,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     key: 'refreshNow', zone: 'common', section: '데이터 갱신', label: '지금 갱신',
     control: 'button', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], tier: 'T2',
     storage: 'none', echarts: '@none',
-    help: 'POST /charts/{id}/refresh (2차). "마지막 계산 {시각}" 표시',
+    help: '저장된 차트 캐시를 즉시 다시 계산하고 마지막 계산 시각과 미리보기를 갱신합니다.',
   },
   {
     key: 'showComputedAt', zone: 'common', section: '데이터 갱신', label: '데이터 기준 시각 표시',
@@ -559,7 +587,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ════════════════════════════ ZONE 2 · 좌표/축 ════════════════════════════
-  // 직교 차트(막대·선·분포)만. 원형 전환 시 숨김+보존(복귀 시 복원).
+  // 직교 차트(막대·선·산점도)만. 원형 전환 시 숨김+보존(복귀 시 복원).
 
   // ── 여백 ──
   {
@@ -650,7 +678,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     showIf: (o) => o.chartType === 'scatter',
     echarts: '@xAxis.type',
     choices: [{ value: 'value', label: '선형' }, { value: 'log', label: '로그' }],
-    help: '숫자 X축(분포)에서만 유효. 카테고리 X축에선 무시',
+    help: '숫자 X축(산점도)에서만 유효. 카테고리 X축에선 무시',
   },
   {
     key: 'xAxis.tickMode', zone: 'axis', section: 'X축', label: '눈금 방식',
@@ -906,7 +934,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     echarts: 'series.connectNulls',
   },
   {
-    key: 'line.areaOpacity', zone: 'type', section: '선', label: '영역 투명도',
+    key: 'line.areaOpacity', zone: 'type', section: '선', label: '영역 불투명도',
     control: 'slider', appliesTo: ['line'], default: 0.3, tier: 'T2',
     min: 0, max: 1, step: 0.1,
     showIf: (o) => o.variant === 'area' || o.variant === 'stackedArea',
@@ -947,9 +975,9 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: '작은 조각이 사라지지 않게 최소 각도 보장',
   },
 
-  // ── 분포 ──
+  // ── 산점도 ──
   {
-    key: 'scatter.symbol', zone: 'type', section: '분포', label: '점 모양',
+    key: 'scatter.symbol', zone: 'type', section: '산점도', label: '점 모양',
     control: 'select', appliesTo: ['scatter'], default: 'circle',
     echarts: 'series.symbol',
     choices: [
@@ -958,14 +986,14 @@ export const OPTION_REGISTRY: OptionDef[] = [
     ],
   },
   {
-    key: 'scatter.symbolSize', zone: 'type', section: '분포', label: '점 크기',
+    key: 'scatter.symbolSize', zone: 'type', section: '산점도', label: '점 크기',
     control: 'slider', appliesTo: ['scatter'], default: 10,
     min: 2, max: 40, step: 1, unit: 'px',
     showIf: (o) => o.variant !== 'bubble',
     echarts: 'series.symbolSize',
   },
   {
-    key: 'scatter.bubbleField', zone: 'type', section: '분포', label: '버블 크기 기준 컬럼',
+    key: 'scatter.bubbleField', zone: 'type', section: '산점도', label: '버블 크기 기준 컬럼',
     control: 'columnRef', appliesTo: ['scatter'], default: null,
     showIf: (o) => o.variant === 'bubble',
     echarts: '@scatter.bubble', help: '실행 후 결과 컬럼에서 선택. symbolSize 를 값에 비례 인코딩',
@@ -990,7 +1018,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     min: 2, max: 40, step: 1, unit: 'px', echarts: 'series.symbolSize',
     help: '크기 값 컬럼(두 번째 Y)을 추가하면 값에 비례한 크기로 대체된다',
   },
-  // boxplot·heatmap 은 MVP 기본형이라 대분류 전용 옵션 없음(공통+축 zone 으로 구성).
+  // boxplot·heatmap 은 기본형 1개이며, 박스플롯 이상치는 공통 분석 표시 옵션으로 구성한다.
 ];
 
 // ── 경로 유틸 (중첩 JSONB get/set) ────────────────────────────────
@@ -1044,7 +1072,8 @@ export const OPTION_EDITOR_TAB_LABELS: Record<OptionEditorTab, string> = {
 };
 
 const CARTESIAN_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'axis', 'style', 'interaction', 'data'];
-const MAP_EDITOR_TABS: OptionEditorTab[] = ['basic', 'area', 'series', 'style', 'interaction', 'data'];
+const MAP_EDITOR_TABS: OptionEditorTab[] = ['basic', 'style', 'area', 'series', 'interaction', 'data'];
+const GEO_SCATTER_EDITOR_TABS: OptionEditorTab[] = ['basic', 'style', 'area', 'interaction', 'data'];
 const PIE_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'style', 'interaction', 'data'];
 const TOOLTIP_APPEARANCE_KEYS = new Set([
   'tooltip.backgroundColor',
@@ -1057,7 +1086,8 @@ const MAP_AREA_KEYS = new Set(['map.viewport', 'map.roam']);
 
 /** 차트 대분류에 맞는 편집 탭을 사용자 작업 순서대로 반환한다. */
 export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
-  if (chartType === 'map' || chartType === 'geoscatter') return [...MAP_EDITOR_TABS];
+  if (chartType === 'map') return [...MAP_EDITOR_TABS];
+  if (chartType === 'geoscatter') return [...GEO_SCATTER_EDITOR_TABS];
   if (chartType === 'pie') return [...PIE_EDITOR_TABS];
   return [...CARTESIAN_EDITOR_TABS];
 }
@@ -1066,14 +1096,16 @@ export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
 export function optionEditorTabOf(def: OptionDef): OptionEditorTab {
   if (MAP_AREA_KEYS.has(def.key)) return 'area';
   if (def.zone === 'axis') return 'axis';
-  if (def.zone === 'type') return 'series';
+  if (def.zone === 'type') return def.key === 'seriesTypes' ? 'series' : 'style';
 
   switch (def.section) {
     case '기본':
       return 'basic';
     case '색상':
+      return 'style';
     case '범례':
     case '계열':
+    case '분석 표시':
       return 'series';
     case '크기':
     case '글꼴':
@@ -1097,11 +1129,16 @@ export function optionEditorSectionOf(def: OptionDef): string {
   return def.section;
 }
 
-const TYPE_SECTION_ORDER: Partial<Record<MajorType, string[]>> = {
-  bar: ['막대', '혼합'],
-  line: ['선', '혼합'],
+const SERIES_SECTION_ORDER: Partial<Record<MajorType, string[]>> = {
+  bar: ['혼합'],
+  line: ['혼합'],
+};
+
+const STYLE_SECTION_ORDER: Partial<Record<MajorType, string[]>> = {
+  bar: ['막대'],
+  line: ['선'],
   pie: ['원형'],
-  scatter: ['분포'],
+  scatter: ['산점도'],
   geoscatter: ['점'],
 };
 
@@ -1113,11 +1150,11 @@ export function optionEditorSectionOrder(chartType: MajorType, tab: OptionEditor
     case 'area':
       return ['표시 영역'];
     case 'series':
-      return [...(TYPE_SECTION_ORDER[chartType] ?? []), '색상', '라벨 · 정렬', '범례'];
+      return [...(SERIES_SECTION_ORDER[chartType] ?? []), '분석 표시', '라벨 · 정렬', '범례'];
     case 'axis':
       return ['여백', 'X축', 'Y축'];
     case 'style':
-      return ['크기', '글꼴'];
+      return ['색상', ...(STYLE_SECTION_ORDER[chartType] ?? []), '크기', '글꼴'];
     case 'interaction':
       return ['툴팁', '툴팁 모양', '강조'];
     case 'data':

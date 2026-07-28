@@ -18,6 +18,11 @@ import {
   itemColorTargetKey,
   type ColorSelection,
 } from '@chartsdk/chart-options/colorOverrides';
+import { AnalysisAnnotationsControl } from './AnalysisAnnotationsControl';
+import {
+  BoxplotOutliersControl,
+  MovingAverageControl,
+} from './StatisticalOverlaysControl';
 
 
 export function TypographyPolicy({ typography }: { typography: ChartTypography }) {
@@ -35,9 +40,10 @@ export function OptionControl({
   value,
   chartType,
   columns,
+  rows,
   colorTargets,
   hasResult,
-  disabled,
+  disabled: disabledProp,
   paletteColors,
   paletteReversed,
   continuousPalette,
@@ -46,6 +52,8 @@ export function OptionControl({
   itemColorOverrides,
   colorSelection,
   colorPicking,
+  action,
+  lockNote,
   onChange,
   onChangeType,
   onSelectColorTarget,
@@ -57,6 +65,7 @@ export function OptionControl({
   value: unknown;
   chartType: MajorType;
   columns: { name: string; type: string }[];
+  rows: unknown[][];
   colorTargets: ColorSelection[];
   hasResult: boolean;
   disabled: boolean;
@@ -68,6 +77,15 @@ export function OptionControl({
   itemColorOverrides: unknown;
   colorSelection: ColorSelection | null;
   colorPicking: boolean;
+  action?: {
+    pending: boolean;
+    status: string | null;
+    error: string | null;
+    disabledReason: string | null;
+    onClick: () => void;
+  };
+  /** 다른 옵션이 이 값을 무효로 만들 때의 안내. 값은 보존하고 입력만 잠근다. */
+  lockNote?: string | null;
   onChange: (value: unknown) => void;
   onChangeType: (type: MajorType) => void;
   onSelectColorTarget: (target: ColorSelection) => void;
@@ -77,6 +95,8 @@ export function OptionControl({
 }) {
   const fieldName = fieldNameFor(def.key);
   const fieldId = `option-${fieldName}`;
+  // 잠긴 옵션은 저장값을 유지한 채 입력만 막는다 — 잠금이 풀리면 이전 값이 그대로 다시 쓰인다.
+  const disabled = disabledProp || lockNote != null;
 
   if (def.control === 'iconGrid') {
     const choices = def.choices ?? [];
@@ -154,6 +174,41 @@ export function OptionControl({
           ))}
         </div>
       </Labeled>
+    );
+  }
+
+  if (def.control === 'analysisAnnotations') {
+    return (
+      <AnalysisAnnotationsControl
+        value={value}
+        chartType={chartType}
+        columns={columns}
+        rows={rows}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+
+  if (def.control === 'boxplotOutliers') {
+    return (
+      <BoxplotOutliersControl
+        value={value}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+
+  if (def.control === 'movingAverage') {
+    return (
+      <MovingAverageControl
+        value={value}
+        columns={columns}
+        rows={rows}
+        disabled={disabled}
+        onChange={onChange}
+      />
     );
   }
 
@@ -262,7 +317,22 @@ export function OptionControl({
       break;
     }
     case 'button':
-      control = <Button variant="secondary" size="sm" className="h-7" disabled={disabled}>{def.label}</Button>;
+      control = (
+        <div className="flex w-full flex-col items-start gap-1.5" data-testid={`option-action-${def.key}`}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7"
+            disabled={disabled || action?.pending}
+            onClick={action?.onClick}
+          >
+            {action?.pending ? '갱신 중…' : def.label}
+          </Button>
+          {action?.error && <p role="alert" className="text-[11px] leading-4 text-danger">{action.error}</p>}
+          {action?.disabledReason && <p className="text-[11px] leading-4 text-text-tertiary">{action.disabledReason}</p>}
+          {action?.status && <p role="status" className="text-[11px] leading-4 text-text-tertiary">{action.status}</p>}
+        </div>
+      );
       break;
   }
 
@@ -270,6 +340,14 @@ export function OptionControl({
   if (def.control === 'colorMap' && hasResult) return control;
   if (def.control === 'palette' || def.control === 'colorMap') {
     return <Labeled label={def.label} stack>{control}</Labeled>;
+  }
+  if (lockNote) {
+    return (
+      <div className="flex flex-col gap-1" data-testid={`option-locked-${def.key}`}>
+        <Labeled label={def.label}>{control}</Labeled>
+        <p className="text-[11px] leading-4 text-text-tertiary">{lockNote}</p>
+      </div>
+    );
   }
   return <Labeled label={def.label}>{control}</Labeled>;
 }

@@ -1,0 +1,212 @@
+[
+  {
+    "name": "vertical-guides-use-selected-series",
+    "chartType": "bar",
+    "options": {
+      "analysis": {
+        "annotations": {
+          "lines": [
+            {
+              "id": "line-1",
+              "name": "평균",
+              "seriesIndex": 1,
+              "value": 25.0,
+              "color": "#112233",
+              "showLabel": true,
+              "lineType": "dotted",
+              "lineWidth": 3.0
+            }
+          ],
+          "ranges": [
+            {
+              "id": "range-1",
+              "name": "적정",
+              "seriesIndex": 1,
+              "min": 10.0,
+              "max": 30.0,
+              "color": "#445566",
+              "showLabel": true,
+              "opacity": 0.2
+            }
+          ],
+          "targets": [
+            {
+              "id": "target-1",
+              "name": "목표",
+              "seriesIndex": 1,
+              "xValue": "B",
+              "value": 33.0,
+              "color": "#778899",
+              "showLabel": true,
+              "symbol": "diamond",
+              "symbolSize": 36.0
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "series.1.markLine.silent": true,
+      "series.1.markLine.symbol.0": "none",
+      "series.1.markLine.data.0.yAxis": 25.0,
+      "series.1.markLine.data.0.lineStyle.color": "#112233",
+      "series.1.markLine.data.0.lineStyle.type": "dotted",
+      "series.1.markLine.data.0.lineStyle.width": 3.0,
+      "series.1.markLine.data.0.label.formatter": "평균: 25",
+      "series.1.markArea.data.0.0.yAxis": 10.0,
+      "series.1.markArea.data.0.1.yAxis": 30.0,
+      "series.1.markArea.data.0.0.itemStyle.opacity": 0.2,
+      "series.1.markArea.data.0.0.label.formatter": "적정: 10–30",
+      "series.1.markPoint.data.0.coord.0": "B",
+      "series.1.markPoint.data.0.coord.1": 33.0,
+      "series.1.markPoint.data.0.symbol": "diamond",
+      "series.1.markPoint.data.0.symbolSize": 36.0,
+      "series.1.markPoint.data.0.label.formatter": "목표: 33"
+    },
+    "absent": [
+      "series.0.markLine",
+      "series.0.markArea",
+      "series.0.markPoint"
+    ]
+  },
+  {
+    "name": "horizontal-guides-follow-value-axis",
+    "chartType": "bar",
+    "options": {
+      "variant": "horizontal",
+      "analysis": {
+        "annotations": {
+          "lines": [
+            {
+              "id": "line-2",
+              "name": "",
+              "seriesIndex": 0,
+              "value": 18.0,
+              "color": "invalid",
+              "showLabel": false,
+              "lineType": "invalid",
+              "lineWidth": 99.0
+            }
+          ],
+          "ranges": [
+            {
+              "id": "range-2",
+              "name": "반전 입력",
+              "seriesIndex": 0,
+              "min": 30.0,
+              "max": 10.0,
+              "color": "#FFB000",
+              "showLabel": true,
+              "opacity": 2.0
+            }
+          ],
+          "targets": [
+            {
+              "id": "target-2",
+              "name": "목표",
+              "seriesIndex": 0,
+              "xValue": "B",
+              "value": 22.0,
+              "color": "#D81B60",
+              "showLabel": true,
+              "symbol": "pin",
+              "symbolSize": 42.0
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "series.0.markLine.data.0.xAxis": 18.0,
+      "series.0.markLine.data.0.lineStyle.color": "#E53935",
+      "series.0.markLine.data.0.lineStyle.type": "dashed",
+      "series.0.markLine.data.0.lineStyle.width": 8.0,
+      "series.0.markLine.data.0.label.show": false,
+      "series.0.markArea.data.0.0.xAxis": 10.0,
+      "series.0.markArea.data.0.1.xAxis": 30.0,
+      "series.0.markArea.data.0.0.itemStyle.opacity": 0.6,
+      "series.0.markPoint.data.0.coord.0": 22.0,
+      "series.0.markPoint.data.0.coord.1": "B"
+    },
+    "absent": [
+      "series.0.markLine.data.0.yAxis",
+      "series.0.markArea.data.0.0.yAxis"
+    ]
+  },
+  {
+    "name": "scatter-target-normalizes-numeric-x-and-series-index",
+    "chartType": "scatter",
+    "options": {
+      "analysis": {
+        "annotations": {
+          "lines": [],
+          "ranges": [],
+          "targets": [
+            {
+              "id": "target-3",
+              "name": "분포 목표",
+              "seriesIndex": 99,
+              "xValue": "5.5",
+              "value": "12.5",
+              "color": "#D81B60",
+              "showLabel": true,
+              "symbol": "circle",
+              "symbolSize": 24.0
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "series.1.markPoint.data.0.coord.0": 5.5,
+      "series.1.markPoint.data.0.coord.1": 12.5,
+      "series.1.markPoint.data.0.symbol": "circle",
+      "series.1.markPoint.data.0.label.formatter": "분포 목표: 12.5"
+    },
+    "absent": [
+      "series.0.markPoint"
+    ]
+  },
+  {
+    "name": "boxplot-supports-reference-line-and-target",
+    "chartType": "boxplot",
+    "options": {
+      "analysis": {
+        "annotations": {
+          "lines": [
+            {
+              "id": "line-4",
+              "name": "중앙 기준",
+              "seriesIndex": 0,
+              "value": 15.0,
+              "color": "#112233",
+              "showLabel": true,
+              "lineType": "solid",
+              "lineWidth": 1.0
+            }
+          ],
+          "ranges": [],
+          "targets": [
+            {
+              "id": "target-4",
+              "name": "검토",
+              "seriesIndex": 0,
+              "xValue": "A",
+              "value": 20.0,
+              "color": "#D81B60",
+              "showLabel": true,
+              "symbol": "pin",
+              "symbolSize": 42.0
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "series.0.markLine.data.0.yAxis": 15.0,
+      "series.0.markPoint.data.0.coord.0": "A",
+      "series.0.markPoint.data.0.coord.1": 20.0
+    },
+    "absent": []
+  }
+]

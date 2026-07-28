@@ -10,7 +10,16 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,6 +35,8 @@ public class ChartOptionConverter {
     private static final String EMBEDDED_MAPS_KEY = "__chartsdkMaps";
     private static final String MAP_VIEWPORT_KEY = "__chartsdkMapViewport";
     private static final String TOOLTIP_METADATA_KEY = "__chartsdkTooltip";
+    private static final String BOXPLOT_OUTLIER_SERIES_ID = "__chartsdk_boxplot_outliers";
+    private static final String MOVING_AVERAGE_SERIES_ID = "__chartsdk_moving_average";
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
     private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
@@ -35,6 +46,7 @@ public class ChartOptionConverter {
     );
     private static final int AXIS_NAME_GAP = 56;
     private static final int AXIS_ENDPOINT_NAME_GAP = 8;
+    private static final int MAX_ANALYSIS_ANNOTATIONS_PER_KIND = 12;
     // ECharts 는 title/legend/grid/visualMap 을 자동 배치하지 않는다. 예약 높이는 사용자 글꼴 크기에서 계산하며 mock과 수식이 같아야 한다.
     private record Typography(int title, int legend, int axis, int dataLabel, int tooltip) {}
     private record LayoutMetrics(int titleHeight, int legendHeight, int visualMapHeight) {}
@@ -81,7 +93,12 @@ public class ChartOptionConverter {
         String variant = string(opt.get("variant"), "basic");
 
         List<Map<String, Object>> columns = rows.columns();
-        List<List<Object>> dataRows = applySort(rows.rows(), string(opt.get("sortOrder"), "none"));
+        boolean movingAverageEligible = "line".equals(chartType)
+                && movingAverageEnabled(opt)
+                && isTemporalColumn(columns.isEmpty() ? Map.of() : columns.get(0));
+        List<List<Object>> dataRows = movingAverageEligible
+                ? sortRowsByTime(rows.rows())
+                : applySort(rows.rows(), string(opt.get("sortOrder"), "none"));
         List<Object> categories = new ArrayList<>();
         for (List<Object> r : dataRows) categories.add(r.isEmpty() ? null : r.get(0));
 
@@ -125,7 +142,11 @@ public class ChartOptionConverter {
         boolean scatter = "scatter".equals(chartType);
         applyGrid(o, opt, horizontal);
         applyAxes(o, opt, scatter, horizontal, categories);
-        o.put("series", buildCartesianSeries(opt, chartType, variant, columns, dataRows, horizontal, scatter, itemColors));
+        List<Map<String, Object>> series = buildCartesianSeries(
+                opt, chartType, variant, columns, dataRows, horizontal, scatter, itemColors);
+        applyAnalysisAnnotations(series, opt, horizontal, scatter);
+        if (movingAverageEligible) applyMovingAverage(o, series, opt, columns, dataRows);
+        o.put("series", series);
         return o;
     }
 
@@ -227,7 +248,7 @@ public class ChartOptionConverter {
             case "bar", "line" -> "{series}\n{name}: {value}";
             case "pie" -> "{name}: {value} ({percent}%)";
             case "scatter" -> "{series}\nX: {x}\nY: {y}";
-            case "boxplot" -> "{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}";
+            case "boxplot" -> "{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}";
             case "heatmap" -> "X: {x}\nY: {y}\n값: {value}";
             case "map" -> "지역: {name}\n값: {value}";
             case "geoscatter" -> "경도: {lng}\n위도: {lat}";
@@ -303,7 +324,7 @@ public class ChartOptionConverter {
     }
 
     // ── 신규: 상자수염·히트맵·지도 ────────────────────────
-    /** 상자수염: 카테고리(0열)별로 값(1열)을 모아 5수 요약([min,Q1,median,Q3,max])을 계산. 전용 축(직교 폴스루의 이중축 오염 회피). */
+    /** 상자수염: 카테고리(0열)별로 값(1열)을 모아 IQR 수염·사분위수와 별도 이상치를 계산. 전용 축(직교 폴스루의 이중축 오염 회피). */
     private void buildBoxplot(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns,
                               List<List<Object>> rows, ItemColorResolver itemColors) {
         LinkedHashMap<String, List<Double>> groups = new LinkedHashMap<>();
@@ -314,11 +335,14 @@ public class ChartOptionConverter {
             }
         }
         List<Object> cats = new ArrayList<>(groups.keySet());
-        String seriesName = columns.size() > 1 ? string(columns.get(1).get("name"), "분포") : "분포";
+        String seriesName = columns.size() > 1 ? string(columns.get(1).get("name"), "산점도") : "산점도";
         List<Object> data = new ArrayList<>();
+        List<Object> outlierData = new ArrayList<>();
         for (Map.Entry<String, List<Double>> entry : groups.entrySet()) {
+            BoxplotSummary summary = boxplotSummary(entry.getValue());
             Object itemColor = itemColors.color("boxplot", seriesName, List.of(entry.getKey()), 0);
-            data.add(withItemColor(fiveNumberSummary(entry.getValue()), itemColor, "color", true));
+            data.add(withItemColor(summary.box(), itemColor, "color", true));
+            for (Double outlier : summary.outliers()) outlierData.add(List.of(entry.getKey(), outlier));
         }
 
         Map<String, Object> xCfg = map(opt.get("xAxis"));
@@ -349,7 +373,28 @@ public class ChartOptionConverter {
             s.put("itemStyle", itemStyle);
         }
         applySeriesEmphasis(s, opt, "boxplot");
-        o.put("series", List.of(s));
+        List<Map<String, Object>> series = new ArrayList<>();
+        series.add(s);
+        applyAnalysisAnnotations(List.of(s), opt, false, false);
+
+        Map<String, Object> outlierConfig = map(map(opt.get("analysis")).get("boxplotOutliers"));
+        boolean showOutliers = !Boolean.FALSE.equals(outlierConfig.get("show"));
+        if (showOutliers && !outlierData.isEmpty()) {
+            String outlierColor = markerColor(outlierConfig.get("color"), "#D81B60");
+            Map<String, Object> outliers = new LinkedHashMap<>();
+            outliers.put("id", BOXPLOT_OUTLIER_SERIES_ID);
+            outliers.put("type", "scatter");
+            outliers.put("name", seriesName);
+            outliers.put("data", outlierData);
+            outliers.put("symbol", "circle");
+            outliers.put("symbolSize", 9);
+            outliers.put("color", outlierColor);
+            outliers.put("itemStyle", Map.of("color", outlierColor));
+            outliers.put("z", 4);
+            applySeriesEmphasis(outliers, opt, "scatter");
+            series.add(outliers);
+        }
+        o.put("series", series);
     }
 
     /** 히트맵: X=카테고리(행), Y=값 시리즈 컬럼명, 값=집계값 → data [xIdx, yIdx, value] + visualMap. */
@@ -611,11 +656,26 @@ public class ChartOptionConverter {
         return sorted.get(lo) + (h - lo) * (sorted.get(hi) - sorted.get(lo));
     }
 
-    /** 5수 요약 [min, Q1, median, Q3, max]. */
-    private static List<Double> fiveNumberSummary(List<Double> values) {
+    private record BoxplotSummary(List<Double> box, List<Double> outliers) {}
+
+    /** 1.5 × IQR 수염과 범위 밖 이상치를 계산한다. */
+    private static BoxplotSummary boxplotSummary(List<Double> values) {
         List<Double> s = new ArrayList<>(values);
         s.sort(Double::compare);
-        return List.of(s.get(0), quantile(s, 0.25), quantile(s, 0.5), quantile(s, 0.75), s.get(s.size() - 1));
+        if (s.isEmpty()) return new BoxplotSummary(List.of(0d, 0d, 0d, 0d, 0d), List.of());
+        double q1 = quantile(s, 0.25);
+        double median = quantile(s, 0.5);
+        double q3 = quantile(s, 0.75);
+        double iqr = q3 - q1;
+        double lowerFence = q1 - 1.5 * iqr;
+        double upperFence = q3 + 1.5 * iqr;
+        List<Double> inliers = s.stream().filter(value -> value >= lowerFence && value <= upperFence).toList();
+        List<Double> outliers = s.stream().filter(value -> value < lowerFence || value > upperFence).toList();
+        return new BoxplotSummary(
+                List.of(inliers.isEmpty() ? q1 : inliers.get(0), q1, median, q3,
+                        inliers.isEmpty() ? q3 : inliers.get(inliers.size() - 1)),
+                outliers
+        );
     }
 
     // ── 그리드·축 ────────────────────────────────────────
@@ -959,6 +1019,331 @@ public class ChartOptionConverter {
             series.add(s);
         }
         return series;
+    }
+
+    private boolean movingAverageEnabled(Map<String, Object> opt) {
+        return Boolean.TRUE.equals(map(map(opt.get("analysis")).get("movingAverage")).get("enabled"));
+    }
+
+    private boolean isTemporalColumn(Map<String, Object> column) {
+        String type = string(column.get("type"), "").toLowerCase();
+        return type.contains("date") || type.contains("time");
+    }
+
+    private List<List<Object>> sortRowsByTime(List<List<Object>> rows) {
+        List<List<Object>> sorted = new ArrayList<>(rows);
+        sorted.sort((left, right) -> {
+            Long leftTime = temporalSortKey(left.isEmpty() ? null : left.get(0));
+            Long rightTime = temporalSortKey(right.isEmpty() ? null : right.get(0));
+            if (leftTime == null && rightTime == null) return 0;
+            if (leftTime == null) return 1;
+            if (rightTime == null) return -1;
+            return Long.compare(leftTime, rightTime);
+        });
+        return sorted;
+    }
+
+    private Long temporalSortKey(Object value) {
+        if (value instanceof Date date) return date.getTime();
+        if (value instanceof Instant instant) return instant.toEpochMilli();
+        if (value instanceof OffsetDateTime dateTime) return dateTime.toInstant().toEpochMilli();
+        if (value instanceof ZonedDateTime dateTime) return dateTime.toInstant().toEpochMilli();
+        if (value instanceof LocalDateTime dateTime) return dateTime.toInstant(ZoneOffset.UTC).toEpochMilli();
+        if (value instanceof LocalDate date) return date.atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli();
+        if (value instanceof LocalTime time) return time.toNanoOfDay() / 1_000_000;
+        if (value instanceof Number number && Double.isFinite(number.doubleValue())) return number.longValue();
+        if (!(value instanceof String text) || text.isBlank()) return null;
+
+        String normalized = text.trim();
+        try {
+            return Instant.parse(normalized).toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            // 다음 ISO 날짜/시간 표현을 시도한다.
+        }
+        try {
+            return OffsetDateTime.parse(normalized).toInstant().toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            // 다음 표현을 시도한다.
+        }
+        try {
+            return LocalDateTime.parse(normalized.replace(' ', 'T')).toInstant(ZoneOffset.UTC).toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            // 다음 표현을 시도한다.
+        }
+        try {
+            return LocalDate.parse(normalized).atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli();
+        } catch (DateTimeParseException ignored) {
+            // 마지막으로 시간 단독 값을 시도한다.
+        }
+        try {
+            return LocalTime.parse(normalized).toNanoOfDay() / 1_000_000;
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
+    }
+
+    private void applyMovingAverage(Map<String, Object> option,
+                                    List<Map<String, Object>> series,
+                                    Map<String, Object> opt,
+                                    List<Map<String, Object>> columns,
+                                    List<List<Object>> rows) {
+        if (series.isEmpty() || columns.size() < 2) return;
+        Map<String, Object> config = map(map(opt.get("analysis")).get("movingAverage"));
+        int seriesIndex = clampInt(number(config.get("seriesIndex"), 0), 0, columns.size() - 2);
+        int period = clampInt(number(config.get("period"), 3), 2, 100);
+        int valueIndex = seriesIndex + 1;
+
+        List<Object> averages = new ArrayList<>();
+        boolean hasAverage = false;
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            if (rowIndex < period - 1) {
+                averages.add(null);
+                continue;
+            }
+            double sum = 0;
+            boolean completeWindow = true;
+            for (int offset = rowIndex - period + 1; offset <= rowIndex; offset++) {
+                List<Object> row = rows.get(offset);
+                Double observation = row.size() > valueIndex ? finiteDouble(row.get(valueIndex)) : null;
+                if (observation == null) {
+                    completeWindow = false;
+                    break;
+                }
+                sum += observation;
+            }
+            if (!completeWindow) {
+                averages.add(null);
+                continue;
+            }
+            averages.add(sum / period);
+            hasAverage = true;
+        }
+        if (!hasAverage) return;
+
+        Map<String, Object> sourceSeries = series.get(seriesIndex);
+        Object sourceColor = map(sourceSeries.get("lineStyle")).get("color");
+        if (sourceColor == null) sourceColor = sourceSeries.get("color");
+        if (sourceColor == null) sourceColor = map(sourceSeries.get("itemStyle")).get("color");
+
+        Map<String, Object> averageSeries = new LinkedHashMap<>();
+        averageSeries.put("id", MOVING_AVERAGE_SERIES_ID + "_" + seriesIndex);
+        averageSeries.put("type", "line");
+        averageSeries.put("name", string(columns.get(valueIndex).get("name"), "") + " · " + period + "기간 이동평균");
+        averageSeries.put("data", averages);
+        averageSeries.put("showSymbol", false);
+        averageSeries.put("symbol", "none");
+        averageSeries.put("smooth", false);
+        averageSeries.put("connectNulls", false);
+        Map<String, Object> lineStyle = new LinkedHashMap<>();
+        lineStyle.put("width", 2);
+        lineStyle.put("type", "dashed");
+        if (sourceColor != null) {
+            lineStyle.put("color", sourceColor);
+            averageSeries.put("color", sourceColor);
+            averageSeries.put("itemStyle", Map.of("color", sourceColor));
+        }
+        averageSeries.put("lineStyle", lineStyle);
+        if (sourceSeries.get("yAxisIndex") != null) averageSeries.put("yAxisIndex", sourceSeries.get("yAxisIndex"));
+        averageSeries.put("z", 4);
+        applySeriesEmphasis(averageSeries, opt, "line");
+
+        List<String> originalSeriesNames = new ArrayList<>();
+        for (Map<String, Object> item : series) {
+            String name = string(item.get("name"), "");
+            if (!name.isEmpty() && !originalSeriesNames.contains(name)) originalSeriesNames.add(name);
+        }
+        series.add(averageSeries);
+
+        // 이동평균은 applyLegend 가 이미 만든 범례의 data 만 조정한다. 범례 자체를 새로 만들면
+        // "legend 생략 = 기본 표시" 계약을 우회해 없던 범례가 생긴다.
+        if (Boolean.FALSE.equals(config.get("showInLegend")) && option.containsKey("legend")) {
+            Map<String, Object> legend = new LinkedHashMap<>(map(option.get("legend")));
+            if (!Boolean.FALSE.equals(legend.get("show"))) {
+                legend.put("data", originalSeriesNames);
+                option.put("legend", legend);
+            }
+        }
+    }
+
+    /**
+     * 값 축 기준선·범위와 목표점을 선택 계열의 marker로 조립한다.
+     * marker를 계열에 한 번만 붙이므로 다중 계열에서도 같은 선이 중복 렌더되지 않고,
+     * 선택 계열의 yAxisIndex를 그대로 따라 조합 차트·이중 축에서도 축 의미가 유지된다.
+     */
+    private void applyAnalysisAnnotations(List<Map<String, Object>> series, Map<String, Object> opt,
+                                          boolean horizontal, boolean numericX) {
+        if (series.isEmpty()) return;
+        Map<String, Object> annotations = map(map(opt.get("analysis")).get("annotations"));
+        String valueAxisKey = horizontal ? "xAxis" : "yAxis";
+
+        for (Map<String, Object> raw : mapItems(annotations.get("lines"))) {
+            Double value = finiteDouble(raw.get("value"));
+            if (value == null) continue;
+            Map<String, Object> target = markerSeries(series, raw.get("seriesIndex"));
+            Map<String, Object> markLine = mutableMap(target.get("markLine"));
+            markLine.putIfAbsent("silent", true);
+            markLine.putIfAbsent("symbol", List.of("none", "none"));
+            List<Object> data = mutableList(markLine.get("data"));
+            String name = annotationName(raw.get("name"));
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", name);
+            item.put(valueAxisKey, value);
+            item.put("lineStyle", Map.of(
+                    "color", markerColor(raw.get("color"), "#E53935"),
+                    "type", markerLineType(raw.get("lineType")),
+                    "width", clampDouble(raw.get("lineWidth"), 1, 8, 2)
+            ));
+            item.put("label", Map.of(
+                    "show", !Boolean.FALSE.equals(raw.get("showLabel")),
+                    "formatter", annotationValueLabel(name, value),
+                    "position", "insideEndTop"
+            ));
+            data.add(item);
+            markLine.put("data", data);
+            target.put("markLine", markLine);
+        }
+
+        for (Map<String, Object> raw : mapItems(annotations.get("ranges"))) {
+            Double first = finiteDouble(raw.get("min"));
+            Double second = finiteDouble(raw.get("max"));
+            if (first == null || second == null) continue;
+            double min = Math.min(first, second);
+            double max = Math.max(first, second);
+            Map<String, Object> target = markerSeries(series, raw.get("seriesIndex"));
+            Map<String, Object> markArea = mutableMap(target.get("markArea"));
+            markArea.putIfAbsent("silent", true);
+            List<Object> data = mutableList(markArea.get("data"));
+            String name = annotationName(raw.get("name"));
+
+            Map<String, Object> start = new LinkedHashMap<>();
+            start.put("name", name);
+            start.put(valueAxisKey, min);
+            start.put("itemStyle", Map.of(
+                    "color", markerColor(raw.get("color"), "#FFB000"),
+                    "opacity", clampDouble(raw.get("opacity"), 0.05, 0.6, 0.16)
+            ));
+            start.put("label", Map.of(
+                    "show", !Boolean.FALSE.equals(raw.get("showLabel")),
+                    "formatter", annotationRangeLabel(name, min, max),
+                    "position", "insideTop"
+            ));
+            data.add(List.of(start, Map.of(valueAxisKey, max)));
+            markArea.put("data", data);
+            target.put("markArea", markArea);
+        }
+
+        for (Map<String, Object> raw : mapItems(annotations.get("targets"))) {
+            Double targetValue = finiteDouble(raw.get("value"));
+            Object xValue = numericX ? finiteDouble(raw.get("xValue")) : categoryValue(raw.get("xValue"));
+            if (targetValue == null || xValue == null) continue;
+            Map<String, Object> target = markerSeries(series, raw.get("seriesIndex"));
+            Map<String, Object> markPoint = mutableMap(target.get("markPoint"));
+            markPoint.putIfAbsent("silent", true);
+            List<Object> data = mutableList(markPoint.get("data"));
+            String name = annotationName(raw.get("name"));
+            String color = markerColor(raw.get("color"), "#D81B60");
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", name);
+            item.put("value", targetValue);
+            item.put("coord", horizontal
+                    ? List.of(targetValue, xValue)
+                    : List.of(xValue, targetValue));
+            item.put("symbol", markerSymbol(raw.get("symbol")));
+            item.put("symbolSize", clampDouble(raw.get("symbolSize"), 12, 80, 42));
+            item.put("itemStyle", Map.of("color", color));
+            item.put("label", Map.of(
+                    "show", !Boolean.FALSE.equals(raw.get("showLabel")),
+                    "formatter", annotationValueLabel(name, targetValue),
+                    "position", "top",
+                    "color", color
+            ));
+            data.add(item);
+            markPoint.put("data", data);
+            target.put("markPoint", markPoint);
+        }
+    }
+
+    private Map<String, Object> markerSeries(List<Map<String, Object>> series, Object value) {
+        int requested = value instanceof Number n && Double.isFinite(n.doubleValue())
+                ? (int) Math.floor(n.doubleValue())
+                : 0;
+        return series.get(Math.max(0, Math.min(series.size() - 1, requested)));
+    }
+
+    private List<Map<String, Object>> mapItems(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?>)) continue;
+            items.add(map(item));
+            if (items.size() >= MAX_ANALYSIS_ANNOTATIONS_PER_KIND) break;
+        }
+        return items;
+    }
+
+    private Map<String, Object> mutableMap(Object value) {
+        return new LinkedHashMap<>(map(value));
+    }
+
+    private List<Object> mutableList(Object value) {
+        return value instanceof List<?> list ? new ArrayList<>(list) : new ArrayList<>();
+    }
+
+    private Double finiteDouble(Object value) {
+        if (value instanceof Number n && Double.isFinite(n.doubleValue())) return n.doubleValue();
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                double parsed = Double.parseDouble(text);
+                return Double.isFinite(parsed) ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Object categoryValue(Object value) {
+        if (value instanceof Number n && Double.isFinite(n.doubleValue())) return n;
+        if (value instanceof String text && !text.isBlank()) return text;
+        return null;
+    }
+
+    private String annotationName(Object value) {
+        String name = value instanceof String text ? text.trim() : "";
+        return name.length() > 80 ? name.substring(0, 80) : name;
+    }
+
+    private String annotationValueLabel(String name, double value) {
+        return name.isEmpty() ? displayNumber(value) : name + ": " + displayNumber(value);
+    }
+
+    private String annotationRangeLabel(String name, double min, double max) {
+        String range = displayNumber(min) + "–" + displayNumber(max);
+        return name.isEmpty() ? range : name + ": " + range;
+    }
+
+    private String displayNumber(double value) {
+        return value == Math.rint(value) ? String.valueOf((long) value) : String.valueOf(value);
+    }
+
+    private String markerColor(Object value, String fallback) {
+        if (value instanceof String text && text.matches("#[0-9A-Fa-f]{6}")) return text.toUpperCase();
+        return fallback;
+    }
+
+    private String markerLineType(Object value) {
+        return "solid".equals(value) || "dotted".equals(value) ? String.valueOf(value) : "dashed";
+    }
+
+    private String markerSymbol(Object value) {
+        return "diamond".equals(value) || "circle".equals(value) ? String.valueOf(value) : "pin";
+    }
+
+    private double clampDouble(Object value, double min, double max, double fallback) {
+        Double numeric = finiteDouble(value);
+        return numeric == null ? fallback : Math.max(min, Math.min(max, numeric));
     }
 
     private void applyVariantDelta(Map<String, Object> s, String variant, Map<String, Object> lineCfg) {

@@ -24,6 +24,18 @@ import {
   type ItemColorDimension,
   type ItemColorKind,
 } from '@chartsdk/chart-options/colorOverrides';
+import {
+  MAX_ANALYSIS_ANNOTATIONS_PER_KIND,
+  analysisAnnotationsOf,
+} from '@chartsdk/chart-options/analysisAnnotations';
+import {
+  BOXPLOT_OUTLIER_SERIES_ID,
+  MOVING_AVERAGE_SERIES_ID,
+  boxplotOutliersOf,
+  isTemporalColumnType,
+  movingAverageOf,
+  movingAverageOverridesSort,
+} from '@chartsdk/chart-options/statisticalOverlays';
 import { migrateLegacyInteractionOptions, type MajorType } from '@chartsdk/chart-options';
 import { columnsForBuilder } from '@/lib/builder';
 import { schemaTables } from './seed';
@@ -446,14 +458,17 @@ const SAMPLE_REGIONS = [
 export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): QueryResult {
   if (cfg.seriesBy && (chartType === 'bar' || chartType === 'line')) {
     const years = ['2012', '2013', '2014', '2015'];
-    const regions = ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도'];
+    const xType = builderColumnType(cfg, cfg.xAxis);
+    const categories = isTemporalColumnType(xType)
+      ? SAMPLE_MONTHS
+      : ['서울특별시', '부산광역시', '대구광역시', '인천광역시', '경기도'];
     const columns: Cols = [
-      { name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' },
+      { name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: xType },
       ...years.map((year) => ({ name: year, type: 'numeric' })),
     ];
-    const rows: Rows = regions.map((region, regionIndex) => [
-      region,
-      ...years.map((_year, yearIndex) => 2_500_000 + regionIndex * 1_150_000 + yearIndex * 85_000),
+    const rows: Rows = categories.map((category, categoryIndex) => [
+      category,
+      ...years.map((_year, yearIndex) => 2_500_000 + categoryIndex * 1_150_000 + yearIndex * 85_000),
     ]);
     return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 24 };
   }
@@ -466,6 +481,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       const center = 100 + ci * 45;
       const spread = 8 + ci * 3;
       for (let k = 0; k < 9; k++) rows.push([cat, Math.round(center + (k - 4) * spread + (k % 3) * 6)]);
+      rows.push([cat, center + spread * 12]);
     });
     return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
   }
@@ -510,15 +526,24 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
     return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
   }
   if (cfg.yAxis.some((y) => y.agg === 'none')) {
-    const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: 'numeric' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
+    const sourceColumns = columnsForBuilder(cfg, schemaTables);
+    const typeOf = (reference: string | null | undefined) =>
+      sourceColumns.find((column) => column.value === reference)?.type ?? 'numeric';
+    const xType = typeOf(cfg.xAxis);
+    const yTypes = cfg.yAxis.map((y) => typeOf(y.column));
+    const columns: Cols = [
+      { name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: xType },
+      ...cfg.yAxis.map((y, index) => ({ name: aliasOf(y), type: yTypes[index] })),
+    ];
     const rows: Rows = Array.from({ length: 12 }, (_, i) => [
-      10 + i * 7,
-      ...cfg.yAxis.map((_, j) => Math.round(40 + i * 9 + j * 15 + (i % 3) * 8)),
+      sampleValue(xType, i),
+      ...yTypes.map((type) => sampleValue(type, i)),
     ]);
     return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 18 };
   }
-  const labels = cfg.xAxisBucket ? SAMPLE_MONTHS : SAMPLE_CATS;
-  const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: 'text' }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
+  const xType = builderColumnType(cfg, cfg.xAxis);
+  const labels = cfg.xAxisBucket || isTemporalColumnType(xType) ? SAMPLE_MONTHS : SAMPLE_CATS;
+  const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: xType }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
   const sampling = samplingForConfig(cfg, labels);
   // sampling v6: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
   const rows: Rows = labels.map((label, i) => [
@@ -533,6 +558,11 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
     elapsedMs: (sampling?.approximate ? 12 : 40) + rows.length, // 표본은 전체 스캔을 건너뛰어 더 빠름
     ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
   };
+}
+
+function builderColumnType(cfg: BuilderConfig, reference: string | null | undefined): string {
+  if (!reference) return 'text';
+  return columnsForBuilder(cfg, schemaTables).find((column) => column.value === reference)?.type ?? 'text';
 }
 
 function sampleValue(type: string, i: number): unknown {
@@ -790,8 +820,14 @@ function numericAxisOptions(
 /** (rows, chartType, options) → ECharts option (방식 A 모사, MVP 옵션 범위) */
 export function assembleOption(result: QueryResult, chartType: ChartType, options: Record<string, any>): Record<string, unknown> {
   const o = migrateLegacyInteractionOptions(options ?? {}, chartType as MajorType);
+  const movingAverage = movingAverageOf(o.analysis?.movingAverage);
+  const movingAverageEligible = movingAverageOverridesSort(chartType, o, result.columns);
+  // 이동평균은 sortOrder 대신 시간 오름차순을 강제한다(서버 변환기와 동일).
+  const displayRows = movingAverageEligible
+    ? sortRowsByTime(result.rows)
+    : applySort(result.rows, o.sortOrder);
   const itemColors = itemColorLookup(o.itemColorOverrides);
-  const cats = result.rows.map((r) => r[0]);
+  const cats = displayRows.map((r) => r[0]);
   const seriesCols = result.columns.slice(1);
   const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex, o.paletteReversed);
   const colorNames = chartType === 'pie' ? cats.map((category) => String(category)) : seriesCols.map((column) => column.name);
@@ -836,10 +872,10 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const labelLayout = o.dataLabel === true ? { hideOverlap: true } : undefined;
   const horizontal = variant === 'horizontal';
 
-  // ── 상자수염 — 카테고리별 5수 요약(min·Q1·median·Q3·max), 선형보간(R-7) ──
+  // ── 상자수염 — 카테고리별 IQR 수염·사분위수와 별도 이상치, 선형보간(R-7) ──
   if (chartType === 'boxplot') {
     const groups = new Map<string, number[]>();
-    for (const r of result.rows) {
+    for (const r of displayRows) {
       const cat = String(r[0] ?? '');
       const v = Number(r[1]);
       if (!Number.isFinite(v)) continue;
@@ -863,13 +899,14 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       ...numericAxisOptions(o.yAxis, o.yAxis?.scale === 'log' ? 'log' : 'value', false),
     };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
-    const seriesName = seriesCols[0]?.name ?? '분포';
+    const seriesName = seriesCols[0]?.name ?? '산점도';
     const seriesColor = o.colorMap?.[seriesName] ?? autoColorMap[seriesName] ?? paletteColor(palette, 0);
+    const summaries = cats.map((c) => boxplotSummary(groups.get(c)!));
     const series: Record<string, any> = {
       type: 'boxplot',
       name: seriesName,
-      data: cats.map((c) => withMockItemColor(
-        fiveNumberSummary(groups.get(c)!),
+      data: cats.map((c, index) => withMockItemColor(
+        summaries[index].box,
         itemColorFor(itemColors, 'boxplot', seriesName, [c], 0),
         'color',
         true,
@@ -877,19 +914,39 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       itemStyle: { color: seriesColor, borderColor: seriesColor },
     };
     applySeriesEmphasis(series, o, 'boxplot');
-    opt.series = [series];
+    applyAnalysisAnnotations([series], o.analysis?.annotations, false, false);
+    const allSeries = [series];
+    const outlierConfig = boxplotOutliersOf(o.analysis?.boxplotOutliers);
+    const outlierData = cats.flatMap((category, index) =>
+      summaries[index].outliers.map((value) => [category, value]));
+    if (outlierConfig.show && outlierData.length > 0) {
+      const outliers: Record<string, any> = {
+        id: BOXPLOT_OUTLIER_SERIES_ID,
+        type: 'scatter',
+        name: seriesName,
+        data: outlierData,
+        symbol: 'circle',
+        symbolSize: 9,
+        color: outlierConfig.color,
+        itemStyle: { color: outlierConfig.color },
+        z: 4,
+      };
+      applySeriesEmphasis(outliers, o, 'scatter');
+      allSeries.push(outliers);
+    }
+    opt.series = allSeries;
     return opt;
   }
 
   // ── 히트맵 — X·Y 카테고리 매트릭스, 값=색(visualMap) ──
   if (chartType === 'heatmap') {
-    const cats = result.rows.map((r) => String(r[0] ?? ''));
+    const cats = displayRows.map((r) => String(r[0] ?? ''));
     const yNames = seriesCols.map((c) => c.name);
     const data: unknown[] = [];
     const occurrences = new Map<string, number>();
     let min = Infinity;
     let max = -Infinity;
-    result.rows.forEach((r, xi) => {
+    displayRows.forEach((r, xi) => {
       seriesCols.forEach((_c, s) => {
         const v = Number(r[1 + s]) || 0;
         const dimensions: ItemColorDimension[] = [cats[xi], yNames[s]];
@@ -940,7 +997,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   if (chartType === 'map') {
     const spatial = result.columns.some((column) => column.name === '__chartsdk_geojson');
     const occurrences = new Map<string, number>();
-    const data = result.rows.map((r) => {
+    const data = displayRows.map((r) => {
       const name = String(r[0] ?? '');
       const dimensions: ItemColorDimension[] = [name];
       const occurrence = nextMockOccurrence(occurrences, 'map', '', dimensions);
@@ -950,7 +1007,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
         'areaColor',
       );
     });
-    const vals = result.rows.map((row) => Number(row[1]) || 0);
+    const vals = displayRows.map((row) => Number(row[1]) || 0);
     let min = vals.length ? Math.min(...vals) : 0;
     let max = vals.length ? Math.max(...vals) : 1;
     if (min === max) max = min + 1;
@@ -965,7 +1022,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     );
     let mapName = o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido';
     if (spatial) {
-      const features = result.rows.flatMap((row) => {
+      const features = displayRows.flatMap((row) => {
         try {
           const geometry = JSON.parse(String(row[2] ?? '')) as Record<string, unknown>;
           if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return [];
@@ -998,7 +1055,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   // ── 지도 포인트 — geo 좌표계 + scatter([lng,lat(,크기값)]) (ECharts 공식 effectScatter-map 예제 구조) ──
   if (chartType === 'geoscatter') {
     const hasSize = seriesCols.length >= 2;
-    const sizes = hasSize ? result.rows.map((r) => Number(r[2]) || 0) : [];
+    const sizes = hasSize ? displayRows.map((r) => Number(r[2]) || 0) : [];
     const sMin = sizes.length ? Math.min(...sizes) : 0;
     const sMax = sizes.length ? Math.max(...sizes) : 1;
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
@@ -1019,7 +1076,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       name: seriesCols[0]?.name ?? '포인트',
       symbolSize: base,
       itemStyle: { color: paletteColor(palette, 0) },
-      data: result.rows.map((r) => {
+      data: displayRows.map((r) => {
         const lng = Number(r[0]) || 0;
         const lat = Number(r[1]) || 0;
         const dimensions: ItemColorDimension[] = [roundMockCoordinate(lng), roundMockCoordinate(lat)];
@@ -1048,7 +1105,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
           const dimensions: ItemColorDimension[] = [colorDimension(name)];
           const occurrence = nextMockOccurrence(occurrences, 'pie', '', dimensions);
           return withMockItemColor(
-            { name, value: result.rows[i][1], itemStyle: { color: o.colorMap?.[String(name)] ?? autoColorMap[String(name)] } },
+            { name, value: displayRows[i][1], itemStyle: { color: o.colorMap?.[String(name)] ?? autoColorMap[String(name)] } },
             itemColorFor(itemColors, 'pie', '', dimensions, occurrence),
             'color',
           );
@@ -1085,7 +1142,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
         name: c.name,
         symbolSize: o.scatter?.symbolSize ?? 10,
         symbol: o.scatter?.symbol ?? 'circle',
-        data: result.rows.map((r) => {
+        data: displayRows.map((r) => {
           const x = Number(r[0]) || 0;
           const y = Number(r[1 + s]) || 0;
           const dimensions: ItemColorDimension[] = [x, y];
@@ -1104,6 +1161,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       applySeriesEmphasis(series, o, 'scatter');
       return series;
     });
+    applyAnalysisAnnotations(opt.series, o.analysis?.annotations, false, true);
     return opt;
   }
 
@@ -1139,7 +1197,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   // 100% 정규화(누적 막대) — 카테고리(행)별 합으로 나눠 각 카테고리 스택이 1이 되게 (서버 변환기와 동일).
   const normalize = chartType === 'bar' && variant === 'stacked' && !!o.bar?.normalize;
   const rowTotals = normalize
-    ? result.rows.map((r) => seriesCols.reduce((sum, _c, si) => sum + (Number(r[1 + si]) || 0), 0))
+    ? displayRows.map((r) => seriesCols.reduce((sum, _c, si) => sum + (Number(r[1 + si]) || 0), 0))
     : null;
   // 혼합(combo): 시리즈별 type 오버라이드 (서버 변환기와 동일).
   const seriesTypeMap: Record<string, any> = o.seriesTypes && typeof o.seriesTypes === 'object' ? o.seriesTypes : {};
@@ -1149,7 +1207,7 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     const base: Record<string, any> = {
       type: seriesType,
       name: c.name,
-      data: result.rows.map((r, ri) => {
+      data: displayRows.map((r, ri) => {
         const v = Number(r[1 + s]) || 0;
         const itemValue = rowTotals && rowTotals[ri] ? v / rowTotals[ri] : v;
         const dimensions: ItemColorDimension[] = [colorDimension(r[0])];
@@ -1185,7 +1243,282 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     applySeriesEmphasis(base, o, seriesType);
     return base;
   });
+  applyAnalysisAnnotations(opt.series, o.analysis?.annotations, horizontal, false);
+  if (movingAverageEligible) {
+    appendMovingAverage(opt, o, displayRows, seriesCols, movingAverage);
+  }
   return opt;
+}
+
+function appendMovingAverage(
+  option: Record<string, any>,
+  options: Record<string, any>,
+  rows: Rows,
+  seriesColumns: Cols,
+  config: ReturnType<typeof movingAverageOf>,
+): void {
+  if (seriesColumns.length === 0 || option.series.length === 0) return;
+  const seriesIndex = Math.min(config.seriesIndex, seriesColumns.length - 1);
+  const sourceSeries = option.series[seriesIndex] as Record<string, any>;
+  const values = simpleMovingAverage(rows, seriesIndex + 1, config.period);
+  if (!values.some((value) => value != null)) return;
+
+  const sourceColor = sourceSeries.lineStyle?.color
+    ?? sourceSeries.color
+    ?? sourceSeries.itemStyle?.color;
+  const averageSeries: Record<string, any> = {
+    id: `${MOVING_AVERAGE_SERIES_ID}_${seriesIndex}`,
+    type: 'line',
+    name: `${seriesColumns[seriesIndex].name} · ${config.period}기간 이동평균`,
+    data: values,
+    showSymbol: false,
+    symbol: 'none',
+    smooth: false,
+    connectNulls: false,
+    lineStyle: {
+      width: 2,
+      type: 'dashed',
+      ...(sourceColor ? { color: sourceColor } : {}),
+    },
+    ...(sourceColor ? { color: sourceColor, itemStyle: { color: sourceColor } } : {}),
+    ...(sourceSeries.yAxisIndex != null ? { yAxisIndex: sourceSeries.yAxisIndex } : {}),
+    z: 4,
+  };
+  applySeriesEmphasis(averageSeries, options, 'line');
+  const originalSeries = [...option.series];
+  option.series.push(averageSeries);
+
+  applyMovingAverageLegend(option, originalSeries, config.showInLegend);
+}
+
+/** 이동평균 범례 제외는 이미 조립된 범례만 수정하며, 없는 legend 컴포넌트를 만들지 않는다. */
+export function applyMovingAverageLegend(
+  option: Record<string, any>,
+  originalSeries: Array<Record<string, any>>,
+  showInLegend: boolean,
+): void {
+  if (showInLegend || !option.legend || option.legend.show === false) return;
+  option.legend = {
+    ...option.legend,
+    data: uniqueSeriesNames(originalSeries),
+  };
+}
+
+function simpleMovingAverage(rows: Rows, valueIndex: number, period: number): Array<number | null> {
+  return rows.map((_row, index) => {
+    if (index < period - 1) return null;
+    let sum = 0;
+    for (let offset = index - period + 1; offset <= index; offset += 1) {
+      const value = finiteObservation(rows[offset]?.[valueIndex]);
+      if (value == null) return null;
+      sum += value;
+    }
+    return sum / period;
+  });
+}
+
+function finiteObservation(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function uniqueSeriesNames(series: Array<Record<string, any>>): string[] {
+  return [...new Set(series.map((item) => String(item.name ?? '')).filter(Boolean))];
+}
+
+/** @sort — 서버 `ChartOptionConverter.applySort` 미러. 두 번째 컬럼 숫자 기준 안정 정렬. */
+function applySort(rows: Rows, sortOrder: unknown): Rows {
+  if (rows.length === 0 || (sortOrder !== 'asc' && sortOrder !== 'desc')) return rows;
+  const sign = sortOrder === 'asc' ? 1 : -1;
+  return [...rows].sort((left, right) => sign * compareSortValue(sortValueOf(left), sortValueOf(right)));
+}
+
+/** 숫자가 아닌 값은 Java `num()` 과 같이 최솟값으로 취급한다. */
+function sortValueOf(row: unknown[]): number {
+  return typeof row[1] === 'number' ? row[1] : Number.NEGATIVE_INFINITY;
+}
+
+/** Java `Double.compare` 와 같이 NaN 을 가장 큰 값으로 둔다. */
+function compareSortValue(left: number, right: number): number {
+  if (Number.isNaN(left)) return Number.isNaN(right) ? 0 : 1;
+  if (Number.isNaN(right)) return -1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function sortRowsByTime(rows: Rows): Rows {
+  return rows
+    .map((row, index) => ({ row, index, time: temporalValue(row[0]) }))
+    .sort((a, b) => {
+      if (a.time == null && b.time == null) return a.index - b.index;
+      if (a.time == null) return 1;
+      if (b.time == null) return -1;
+      return a.time - b.time || a.index - b.index;
+    })
+    .map(({ row }) => row);
+}
+
+function temporalValue(value: unknown): number | null {
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalized = value.trim();
+  const timeOnly = timeOnlyValue(normalized);
+  if (timeOnly != null) return timeOnly;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+/** Java LocalTime.parse와 같은 시간 단독 ISO 표현을 자정 이후 밀리초로 바꾼다. */
+function timeOnlyValue(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?$/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] ?? 0);
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const milliseconds = match[4] ? Math.floor(Number(`0.${match[4]}`) * 1_000) : 0;
+  return ((hour * 60 + minute) * 60 + second) * 1_000 + milliseconds;
+}
+
+function applyAnalysisAnnotations(
+  series: Array<Record<string, any>>,
+  value: unknown,
+  horizontal: boolean,
+  numericX: boolean,
+): void {
+  if (series.length === 0) return;
+  const annotations = analysisAnnotationsOf(value);
+  const valueAxisKey = horizontal ? 'xAxis' : 'yAxis';
+
+  for (const raw of annotations.lines.slice(0, MAX_ANALYSIS_ANNOTATIONS_PER_KIND)) {
+    const lineValue = markerNumber(raw.value);
+    if (lineValue == null) continue;
+    const target = markerSeries(series, raw.seriesIndex);
+    const markLine = target.markLine ?? {
+      silent: true,
+      symbol: ['none', 'none'],
+      data: [],
+    };
+    const name = annotationName(raw.name);
+    markLine.data.push({
+      name,
+      [valueAxisKey]: lineValue,
+      lineStyle: {
+        color: markerColor(raw.color, '#E53935'),
+        type: markerLineType(raw.lineType),
+        width: clampNumber(raw.lineWidth, 1, 8, 2),
+      },
+      label: {
+        show: raw.showLabel !== false,
+        formatter: annotationValueLabel(name, lineValue),
+        position: 'insideEndTop',
+      },
+    });
+    target.markLine = markLine;
+  }
+
+  for (const raw of annotations.ranges.slice(0, MAX_ANALYSIS_ANNOTATIONS_PER_KIND)) {
+    const first = markerNumber(raw.min);
+    const second = markerNumber(raw.max);
+    if (first == null || second == null) continue;
+    const min = Math.min(first, second);
+    const max = Math.max(first, second);
+    const target = markerSeries(series, raw.seriesIndex);
+    const markArea = target.markArea ?? { silent: true, data: [] };
+    const name = annotationName(raw.name);
+    markArea.data.push([
+      {
+        name,
+        [valueAxisKey]: min,
+        itemStyle: {
+          color: markerColor(raw.color, '#FFB000'),
+          opacity: clampNumber(raw.opacity, 0.05, 0.6, 0.16),
+        },
+        label: {
+          show: raw.showLabel !== false,
+          formatter: annotationRangeLabel(name, min, max),
+          position: 'insideTop',
+        },
+      },
+      { [valueAxisKey]: max },
+    ]);
+    target.markArea = markArea;
+  }
+
+  for (const raw of annotations.targets.slice(0, MAX_ANALYSIS_ANNOTATIONS_PER_KIND)) {
+    const targetValue = markerNumber(raw.value);
+    const xValue = numericX ? markerNumber(raw.xValue) : categoryValue(raw.xValue);
+    if (targetValue == null || xValue == null) continue;
+    const target = markerSeries(series, raw.seriesIndex);
+    const markPoint = target.markPoint ?? { silent: true, data: [] };
+    const name = annotationName(raw.name);
+    const color = markerColor(raw.color, '#D81B60');
+    markPoint.data.push({
+      name,
+      value: targetValue,
+      coord: horizontal ? [targetValue, xValue] : [xValue, targetValue],
+      symbol: markerSymbol(raw.symbol),
+      symbolSize: clampNumber(raw.symbolSize, 12, 80, 42),
+      itemStyle: { color },
+      label: {
+        show: raw.showLabel !== false,
+        formatter: annotationValueLabel(name, targetValue),
+        position: 'top',
+        color,
+      },
+    });
+    target.markPoint = markPoint;
+  }
+}
+
+function markerSeries(series: Array<Record<string, any>>, value: unknown): Record<string, any> {
+  const requested = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : 0;
+  return series[Math.max(0, Math.min(series.length - 1, requested))];
+}
+
+function markerNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function categoryValue(value: unknown): string | number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) return value;
+  return null;
+}
+
+function annotationName(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, 80) : '';
+}
+
+function annotationValueLabel(name: string, value: number): string {
+  return name ? `${name}: ${value}` : String(value);
+}
+
+function annotationRangeLabel(name: string, min: number, max: number): string {
+  return name ? `${name}: ${min}–${max}` : `${min}–${max}`;
+}
+
+function markerColor(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^#[0-9A-Fa-f]{6}$/.test(value) ? value.toUpperCase() : fallback;
+}
+
+function markerLineType(value: unknown): 'solid' | 'dashed' | 'dotted' {
+  return value === 'solid' || value === 'dotted' ? value : 'dashed';
+}
+
+function markerSymbol(value: unknown): 'pin' | 'diamond' | 'circle' {
+  return value === 'diamond' || value === 'circle' ? value : 'pin';
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = markerNumber(value);
+  return numeric == null ? fallback : Math.max(min, Math.min(max, numeric));
 }
 
 function itemColorLookup(value: unknown): Map<string, string> {
@@ -1303,7 +1636,7 @@ function tooltipTemplateFor(chartType: ChartType): string {
     line: '{series}\n{name}: {value}',
     pie: '{name}: {value} ({percent}%)',
     scatter: '{series}\nX: {x}\nY: {y}',
-    boxplot: '{name}\n최솟값: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n최댓값: {max}',
+    boxplot: '{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}',
     heatmap: 'X: {x}\nY: {y}\n값: {value}',
     map: '지역: {name}\n값: {value}',
     geoscatter: '경도: {lng}\n위도: {lat}',
@@ -1366,10 +1699,26 @@ function quantileSorted(sorted: number[], p: number): number {
   return sorted[lo] + (h - lo) * (sorted[Math.min(lo + 1, n - 1)] - sorted[lo]);
 }
 
-/** 상자수염 5수 요약 [min, Q1, median, Q3, max]. */
-function fiveNumberSummary(values: number[]): [number, number, number, number, number] {
+type BoxplotSummary = {
+  box: [number, number, number, number, number];
+  outliers: number[];
+};
+
+/** 1.5 × IQR 수염과 범위 밖 이상치를 계산한다. */
+function boxplotSummary(values: number[]): BoxplotSummary {
   const s = [...values].sort((a, b) => a - b);
-  return [s[0] ?? 0, quantileSorted(s, 0.25), quantileSorted(s, 0.5), quantileSorted(s, 0.75), s[s.length - 1] ?? 0];
+  if (s.length === 0) return { box: [0, 0, 0, 0, 0], outliers: [] };
+  const q1 = quantileSorted(s, 0.25);
+  const median = quantileSorted(s, 0.5);
+  const q3 = quantileSorted(s, 0.75);
+  const iqr = q3 - q1;
+  const lowerFence = q1 - 1.5 * iqr;
+  const upperFence = q3 + 1.5 * iqr;
+  const inliers = s.filter((value) => value >= lowerFence && value <= upperFence);
+  return {
+    box: [inliers[0] ?? q1, q1, median, q3, inliers[inliers.length - 1] ?? q3],
+    outliers: s.filter((value) => value < lowerFence || value > upperFence),
+  };
 }
 
 /** heatmap·map 공용 visualMap. v2는 순차형 전체 단계, 구 저장 데이터는 종전 2색 계약을 유지한다. */

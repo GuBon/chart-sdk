@@ -82,4 +82,21 @@ describe('공통 툴팁 hydration', () => {
     expect(heatmap.tooltip.formatter({ value: [1, 0, 123] })).toBe('부산 / 2020: 123');
     expect(boxplot.tooltip.formatter({ value: [0, 10, 20, 30, 40, 50] })).toBe('10, 20, 30, 40, 50');
   });
+
+  it('박스 플롯 이상치 산점도는 5수 요약 대신 이상치 값을 렌더링한다', () => {
+    const boxplot: Record<string, any> = {
+      __chartsdkTooltip: { chartType: 'boxplot', template: '{min}, {q1}, {median}, {q3}, {max}' },
+      __chartsdkValueFormat: { tooltip: 'comma', yAxis: 'raw', unit: '' },
+      tooltip: {},
+      yAxis: {},
+    };
+
+    hydrateValueFormat(boxplot);
+
+    expect(boxplot.tooltip.formatter({
+      seriesId: '__chartsdk_boxplot_outliers',
+      name: 'A',
+      value: ['A', 1000],
+    })).toBe('A<br/>이상치: 1,000');
+  });
 });
