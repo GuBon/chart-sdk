@@ -98,9 +98,9 @@ public class DatasourceService {
             statement.execute("SELECT 1");
             long elapsedMs = Math.max(1, (System.nanoTime() - start) / 1_000_000);
             ok = true;
-            message = "Connection succeeded (" + elapsedMs + "ms)";
+            message = "연결 성공 (" + elapsedMs + "ms)";
         } catch (Exception e) {
-            message = "Connection failed: " + e.getMessage();
+            message = "연결 실패: " + e.getMessage();
         }
         if (input.id() != null) {
             jdbc.update("UPDATE mc_datasource SET last_tested_at=now(), last_test_ok=? WHERE id=?", ok, input.id());
