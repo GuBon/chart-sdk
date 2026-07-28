@@ -15,6 +15,7 @@ import {
   cloneEditorSnapshot,
   createEditorSnapshot,
   editorDefinitionEquals,
+  withResolvedAutoColorMap,
   type EditorDefinitionSnapshot,
   type EditorPreviewSnapshot,
   type SavedEditorSnapshot,
@@ -180,6 +181,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [runError, setRunError] = useState<string | null>(null);
   const [initialPreviewLoading, setInitialPreviewLoading] = useState(chartId != null);
   const [initialPreviewError, setInitialPreviewError] = useState<string | null>(null);
+  const [computedAt, setComputedAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [rawError, setRawError] = useState<string | null>(null);
   const [resultTab, setResultTab] = useState<ResultTab>('result');
   const rawRequestId = useRef(0);
@@ -218,9 +222,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setOption(nextOption);
     const colors = autoColorMapFromOption(nextOption);
     if (colors) {
-      setOptions((current) => JSON.stringify(current.autoColorMap ?? {}) === JSON.stringify(colors)
-        ? current
-        : { ...current, autoColorMap: colors });
+      setOptions((current) => withResolvedAutoColorMap(current, colors));
     }
   };
 
@@ -248,6 +250,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setTableSelectionTarget(null);
     setInitialPreviewLoading(true);
     setInitialPreviewError(null);
+    setComputedAt(null);
+    setRefreshError(null);
+    setRefreshing(false);
     setSavedSnapshot(null);
     setResult(null);
     setResultKind(null);
@@ -309,6 +314,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         }
 
         if (previewResult.status === 'fulfilled') {
+          setComputedAt(previewResult.value.computedAt);
           setOption(restoredPreviewOption);
           if (restoredResult) {
             setResult(restoredResult);
@@ -418,12 +424,16 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setBuilderCollapsed(false);
   };
 
-  const resetRawPreview = () => {
+  const invalidateRawPreview = () => {
     rawRequestId.current += 1;
     setRaw(null);
-    setRawTable(null);
     setRawRunning(false);
     setRawError(null);
+  };
+
+  const resetRawPreview = () => {
+    invalidateRawPreview();
+    setRawTable(null);
   };
 
   const resetResults = () => {
@@ -490,6 +500,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setTableSelectionTarget(null);
     setDirty(true);
     resetResults();
+    invalidateRawPreview();
+    setResultTab('result');
   };
 
   // 실행·저장에 쓰는 primary 데이터소스는 base 테이블에서 파생(사이드바 탐색 소스와 무관).
@@ -641,8 +653,34 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     };
   }, [builder, chartType, tables, dirty, initialPreviewLoading, primaryDatasourceId]);
 
+  const loadBuilderRows = async () => {
+    if (!builder.table || primaryDatasourceId == null || rawRunning) return;
+    const requestId = ++rawRequestId.current;
+    setRawTable(tables.find((table) => tableRefKey(table) === tableRefKey(builder.table!)) ?? null);
+    setRaw(null);
+    setRawRunning(true);
+    setRawError(null);
+    try {
+      const rows = await queryApi.runBuilder({
+        datasourceId: primaryDatasourceId,
+        builderConfig: builder,
+        chartType,
+        options,
+        mode: 'rows',
+      });
+      if (requestId !== rawRequestId.current) return;
+      setRaw(rows);
+    } catch (error) {
+      if (requestId !== rawRequestId.current) return;
+      setRawError(error instanceof ApiError ? error.message : '원본 데이터를 불러오지 못했습니다.');
+    } finally {
+      if (requestId === rawRequestId.current) setRawRunning(false);
+    }
+  };
+
   const changeResultTab = (tab: ResultTab) => {
     setResultTab(tab);
+    if (tab === 'raw' && !raw && !rawRunning) void loadBuilderRows();
   };
 
   useEffect(() => {
@@ -696,8 +734,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         refreshMode: (cols.refreshMode as RefreshMode) ?? 'ttl',
         cacheTtlSeconds: Number(cols.cacheTtlSeconds ?? 3600),
       };
+      let persistedChartId = savedId;
       if (savedId == null) {
         const created = await chartsApi.create(input);
+        persistedChartId = created.id;
         setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
         replaceEditorPath(chartEditPath(created.id, created.mainTable));
       } else {
@@ -726,12 +766,64 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       });
       setDirty(false);
       setToast('저장되었습니다');
+      if (persistedChartId != null) {
+        try {
+          const preview = await chartsApi.preview(persistedChartId);
+          setComputedAt(preview.computedAt);
+        } catch {
+          // 저장은 성공했다. 기준 시각 조회 실패가 저장 성공을 뒤집지는 않는다.
+        }
+      }
       return true;
     } catch (e) {
       setToast(e instanceof ApiError ? e.message : '저장에 실패했습니다.');
       return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const refreshNow = async () => {
+    if (savedId == null || hasUnsavedChanges || refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const refreshed = await chartsApi.refresh(savedId);
+      setComputedAt(refreshed.computedAt);
+
+      try {
+        const preview = await chartsApi.preview(savedId);
+        const refreshedResult = queryResultFromPreview(preview);
+        const refreshedAutoColors = autoColorMapFromOption(preview.option);
+        setComputedAt(preview.computedAt || refreshed.computedAt);
+        applyResolvedOption(preview.option);
+        if (refreshedResult) {
+          setResult(refreshedResult);
+          setResultKind('chart');
+          setResultTab('result');
+        }
+        setInitialPreviewError(null);
+        setSavedSnapshot((current) => current
+          ? createEditorSnapshot({
+              ...current.definition,
+              options: withResolvedAutoColorMap(current.definition.options, refreshedAutoColors),
+            }, {
+              ...current.preview,
+              result: refreshedResult ?? current.preview.result,
+              resultKind: refreshedResult ? 'chart' : current.preview.resultKind,
+              option: preview.option,
+            })
+          : current);
+        setToast('데이터를 갱신했습니다');
+      } catch (error) {
+        setRefreshError(error instanceof ApiError
+          ? `갱신은 완료됐지만 미리보기를 다시 불러오지 못했습니다. ${error.message}`
+          : '갱신은 완료됐지만 미리보기를 다시 불러오지 못했습니다.');
+      }
+    } catch (error) {
+      setRefreshError(error instanceof ApiError ? error.message : '데이터 갱신에 실패했습니다.');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -1049,6 +1141,15 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   }}
                   colorSelection={colorSelection}
                   colorPicking={colorPicking}
+                  computedAt={computedAt}
+                  refreshing={refreshing}
+                  refreshError={refreshError}
+                  refreshDisabledReason={savedId == null
+                    ? '차트를 저장한 뒤 갱신할 수 있습니다.'
+                    : hasUnsavedChanges
+                      ? '변경사항을 저장한 뒤 갱신하세요.'
+                      : null}
+                  onRefreshNow={refreshNow}
                   onColorSelectionChange={setColorSelection}
                   onColorPickingChange={changeColorPicking}
                   onCollapse={() => setOptionEditorCollapsed(true)}

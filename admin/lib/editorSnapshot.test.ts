@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createEditorSnapshot, editorDefinitionEquals } from './editorSnapshot';
+import {
+  createEditorSnapshot,
+  editorDefinitionEquals,
+  withResolvedAutoColorMap,
+} from './editorSnapshot';
 
 const definition = {
   name: '매출',
@@ -38,5 +42,25 @@ describe('editorSnapshot', () => {
     const changedBuilder = structuredClone(definition);
     changedBuilder.builder.xAxis = 'region';
     expect(editorDefinitionEquals(definition, changedBuilder)).toBe(false);
+  });
+
+  it('keeps a refreshed derived auto-color map synchronized with the saved definition', () => {
+    const resolved = { amount: '#112233', profit: '#445566' };
+    const current = {
+      ...structuredClone(definition),
+      options: withResolvedAutoColorMap(definition.options, resolved),
+    };
+    const saved = createEditorSnapshot({
+      ...structuredClone(definition),
+      options: withResolvedAutoColorMap(definition.options, resolved),
+    }, {
+      result: null,
+      resultKind: null,
+      option: { __chartsdkAutoColorMap: resolved },
+      generatedSql: null,
+    });
+
+    expect(editorDefinitionEquals(current, saved.definition)).toBe(true);
+    expect(current.options.autoColorMap).toEqual(resolved);
   });
 });

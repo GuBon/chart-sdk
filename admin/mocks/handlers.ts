@@ -14,6 +14,7 @@ let nextDsId = Math.max(...datasources.map((d) => d.id)) + 1;
 let chartList = charts.map((c) => ({ ...c }));
 let nextChartId = Math.max(...charts.map((c) => c.id)) + 1;
 const savedCharts: Record<number, Record<string, unknown>> = {}; // 생성/수정된 차트 전체 본문
+const computedAtByChart: Record<number, string> = {};
 let tokenList: UserToken[] = seedTokens.map((t) => ({ ...t }));
 let userList: User[] = seedUsers.map((u) => ({ ...u }));
 let nextTokenId = Math.max(...tokenList.map((t) => t.tokenId)) + 1;
@@ -57,6 +58,10 @@ function mainTableResponse(value: unknown, fallbackDatasourceId: number): ChartM
     name: table.name,
     ...(table.handle ? { handle: table.handle } : {}),
   };
+}
+
+function computedAtFor(chartId: number): string {
+  return computedAtByChart[chartId] ?? '2026-07-27T00:00:00.000Z';
 }
 
 export const handlers = [
@@ -115,7 +120,7 @@ export const handlers = [
         rowCount: result.rowCount,
         truncated: result.truncated,
         ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
-        computedAt: new Date().toISOString(),
+        computedAt: computedAtFor(id),
         option: assembleOption(result, chart.chartType, chart.options ?? {}),
       };
     }
@@ -143,7 +148,7 @@ export const handlers = [
       rowCount: result.rowCount,
       truncated: result.truncated,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
-      computedAt: new Date().toISOString(),
+      computedAt: computedAtFor(chartId),
       option: assembleOption(result, chart.chartType, chart.options ?? {}),
     });
   }),
@@ -164,8 +169,31 @@ export const handlers = [
       truncated: result.truncated,
       elapsedMs: result.elapsedMs,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
-      computedAt: new Date().toISOString(),
+      computedAt: computedAtFor(id),
       option: assembleOption(result, chart.chartType, chart.options ?? {}),
+    });
+  }),
+  http.post('/api/v1/charts/:id/refresh', ({ params }) => {
+    const id = Number(params.id);
+    const saved = savedCharts[id] as
+      | { builderConfig?: BuilderConfig; chartType?: ChartType }
+      | undefined;
+    const summary = chartList.find((chart) => chart.id === id);
+    const chart = saved ?? (summary ? chartDetail(summary) : null);
+    if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+    const computedAt = new Date().toISOString();
+    computedAtByChart[id] = computedAt;
+    return HttpResponse.json({
+      chartId: id,
+      computedAt,
+      rowCount: result.rowCount,
+      elapsedMs: result.elapsedMs,
+      ...(result.sampling ? {
+        sampling: result.sampling,
+        approximate: result.sampling.approximate,
+        sampleRate: result.sampleRate,
+      } : {}),
     });
   }),
   http.get('/api/v1/charts/:id', ({ params }) => {
@@ -189,6 +217,7 @@ export const handlers = [
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId);
     const chart = { id, ...body, mainTable, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
+    computedAtByChart[id] = now;
     chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId, mainTable, updatedAt: now }, ...chartList];
     return HttpResponse.json(chart, { status: 201 });
   }),
@@ -203,6 +232,7 @@ export const handlers = [
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable ?? null;
     const chart = { id, ...body, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
+    computedAtByChart[id] = now;
     chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId, mainTable, updatedAt: now } : c));
     return HttpResponse.json(chart);
   }),

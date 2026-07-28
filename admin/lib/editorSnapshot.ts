@@ -41,6 +41,19 @@ export function editorDefinitionEquals(
   return stableSerialize(left) === stableSerialize(right);
 }
 
+/**
+ * 변환기가 계산한 계열 색상은 편집 옵션에도 저장해 새 계열의 색을 안정화한다.
+ * 갱신 경로는 현재 옵션과 저장 스냅샷에 이 함수를 함께 적용해 내부 파생값만으로 dirty가 되지 않게 한다.
+ */
+export function withResolvedAutoColorMap(
+  options: Options,
+  autoColorMap: Record<string, string> | null,
+): Options {
+  if (autoColorMap == null) return options;
+  if (stableSerialize(options.autoColorMap ?? {}) === stableSerialize(autoColorMap)) return options;
+  return { ...options, autoColorMap: structuredClone(autoColorMap) };
+}
+
 function stableSerialize(value: unknown): string {
   return JSON.stringify(sortForComparison(value));
 }

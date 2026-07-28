@@ -7,6 +7,7 @@ import type {
   ChartListParams,
   ChartListResponse,
   ChartPreviewBatchResponse,
+  ChartRefreshResponse,
   ConnectionTestResult,
   Datasource,
   DatasourceInput,
@@ -45,6 +46,7 @@ export const chartsApi = {
     ids.length
       ? request<ChartPreviewBatchResponse>(`/charts/previews${qs({ ids: ids.join(',') })}`)
       : Promise.resolve<ChartPreviewBatchResponse>({ previews: {}, errors: {} }),
+  refresh: (id: number) => request<ChartRefreshResponse>(`/charts/${id}/refresh`, { method: 'POST' }),
   create: (input: ChartInput) => request<Chart>('/charts', { method: 'POST', body: input }),
   update: (id: number, input: ChartInput) => request<Chart>(`/charts/${id}`, { method: 'PUT', body: input }),
   remove: (id: number) => request<void>(`/charts/${id}`, { method: 'DELETE' }),

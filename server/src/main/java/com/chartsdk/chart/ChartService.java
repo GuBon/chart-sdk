@@ -97,6 +97,9 @@ public class ChartService {
     }
 
     public Map<String, Object> refresh(long id) {
+        // 수동 갱신도 조회·수정·삭제와 같은 owner scope를 먼저 통과해야 한다.
+        // 실제 재계산은 임베드 핫패스와 공유하므로 ChartComputeService에는 owner 개념을 섞지 않는다.
+        charts.previewDefinition(ownerId(), id);
         CachedChartRows rows = compute.recompute(id);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("chartId", id);

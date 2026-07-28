@@ -44,7 +44,7 @@ export interface SampleConfig {
   seed?: number; // legacy 미지정은 공용 기본 seed로 승격
 }
 
-/** 지도 포인트 좌표 입력. 미지정/columns는 기존 경도·위도 컬럼 방식이다. */
+/** 포인트 지도 좌표 입력. 미지정/columns는 기존 경도·위도 컬럼 방식이다. */
 export interface GeoPointConfig {
   mode: 'columns' | 'spatial';
   spatialColumn?: string | null; // PostGIS geometry/geography(Point, SRID)
@@ -243,6 +243,17 @@ export interface ChartDataResponse {
   approximate?: boolean;
   sampleRate?: number;
   option: ChartOptions;
+}
+
+/** 저장 차트 캐시를 즉시 다시 계산한 결과 */
+export interface ChartRefreshResponse {
+  chartId: number;
+  computedAt: string;
+  rowCount: number;
+  elapsedMs: number;
+  sampling?: SamplingMetadata | null;
+  approximate?: boolean;
+  sampleRate?: number | null;
 }
 
 export interface ChartPreviewBatchResponse {

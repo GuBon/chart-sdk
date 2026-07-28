@@ -7,8 +7,10 @@ import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,7 +18,11 @@ import java.util.Map;
 import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ChartServiceTest {
@@ -69,5 +75,19 @@ class ChartServiceTest {
 
         assertThat(preview).containsKey("option");
         assertThat(preview).doesNotContainKeys("columns", "rows", "elapsedMs");
+    }
+
+    @Test
+    void refreshChecksOwnerScopeBeforeRecomputing() {
+        when(currentUser.currentUserId()).thenReturn(OptionalLong.of(42L));
+        when(charts.previewDefinition(42L, 12L)).thenThrow(
+                new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found."));
+
+        assertThatThrownBy(() -> service.refresh(12L))
+                .isInstanceOf(ApiException.class)
+                .hasMessage("Chart not found.");
+
+        verify(charts).previewDefinition(42L, 12L);
+        verify(compute, never()).recompute(anyLong());
     }
 }

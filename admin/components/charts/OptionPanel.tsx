@@ -30,6 +30,7 @@ import {
   upsertItemColorOverride,
   type ColorSelection,
 } from '@chartsdk/chart-options/colorOverrides';
+import { movingAverageOverridesSort } from '@chartsdk/chart-options/statisticalOverlays';
 import type { MapViewport, MapViewportMode } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -63,6 +64,11 @@ interface Props {
   onResetMapViewport: () => void;
   colorSelection: ColorSelection | null;
   colorPicking: boolean;
+  computedAt: string | null;
+  refreshing: boolean;
+  refreshError: string | null;
+  refreshDisabledReason: string | null;
+  onRefreshNow: () => void;
   onColorSelectionChange: (selection: ColorSelection | null) => void;
   onColorPickingChange: (picking: boolean) => void;
   onCollapse?: () => void;
@@ -90,6 +96,11 @@ export function OptionPanel({
   onResetMapViewport,
   colorSelection,
   colorPicking,
+  computedAt,
+  refreshing,
+  refreshError,
+  refreshDisabledReason,
+  onRefreshNow,
   onColorSelectionChange,
   onColorPickingChange,
   onCollapse,
@@ -100,6 +111,11 @@ export function OptionPanel({
   const [resetNotice, setResetNotice] = useState<{ message: string; prevType: MajorType; prevOptions: Options } | null>(null);
 
   const disabled = !hasResult;
+  // 이동평균이 켜진 시간축 선 차트는 변환기가 시간 오름차순을 강제하므로 정렬 선택이 결과에 반영되지 않는다.
+  // 저장값은 그대로 두고 컨트롤만 잠가 사용자가 효과 없는 값을 바꾸지 않게 한다.
+  const sortLockNote = movingAverageOverridesSort(chartType, options, columns)
+    ? '이동평균을 사용하는 동안에는 시간 오름차순으로 고정됩니다.'
+    : null;
   const normalizedQuery = query.toLowerCase().trim();
   const allDefinitions = visibleDefs(chartType, options);
   const definitions = allDefinitions.filter(
@@ -369,9 +385,13 @@ export function OptionPanel({
                           value={valueOf(definition)}
                           chartType={chartType}
                           columns={columns}
+                          rows={rows}
                           colorTargets={colorTargets}
                           hasResult={hasResult}
-                          disabled={disabled}
+                          disabled={definition.key === 'refreshNow'
+                            ? refreshDisabledReason != null
+                            : disabled}
+                          lockNote={definition.key === 'sortOrder' ? sortLockNote : null}
                           paletteColors={paletteColors}
                           paletteReversed={options.paletteReversed === true}
                           continuousPalette={options.colorTheme?.version === 2}
@@ -380,6 +400,13 @@ export function OptionPanel({
                           itemColorOverrides={options.itemColorOverrides}
                           colorSelection={effectiveColorSelection}
                           colorPicking={colorPicking}
+                          action={definition.key === 'refreshNow' ? {
+                            pending: refreshing,
+                            status: computedAt ? `마지막 계산 ${formatComputedAt(computedAt)}` : null,
+                            error: refreshError,
+                            disabledReason: refreshDisabledReason,
+                            onClick: onRefreshNow,
+                          } : undefined}
                           onChange={(value) => setValue(definition, value)}
                           onChangeType={changeType}
                           onSelectColorTarget={(selection) => {
@@ -412,4 +439,17 @@ export function OptionPanel({
         ))}
     </div>
   );
+}
+
+function formatComputedAt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
