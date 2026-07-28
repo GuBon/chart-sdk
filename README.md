@@ -1,7 +1,7 @@
 # chartsdk — 사내 임베드 차트 솔루션
 
 웹페이지에 `<div>` 한 줄 + 스크립트로 차트를 렌더하는 사내 전용 임베드 차트 솔루션.
-설계 문서는 [`docs/`](docs/) 참조 (PRD·화면설계서·API 계약서·노코드 SQL 생성규칙·변환기 매핑 스펙·DB 매핑·코드 구조 가이드).
+설계 문서는 [`docs/`](docs/) 참조 (PRD·화면설계서·API 계약서·노코드 SQL 생성규칙·변환기 매핑 스펙·DB 매핑·코드 구조 가이드). 과거 세션을 포함한 문제 근거·개선·효과는 [`UI·UX·백엔드·기획 트러블슈팅 전수 보고서`](docs/UI_UX_백엔드_기획_트러블슈팅_전수보고서.md)에 정리돼 있다.
 
 ## 모노레포 구조
 
@@ -38,7 +38,7 @@ npm run build:sdk           # SDK 번들만 생성(sdk/dist/sdk.js)
 npm run build               # SDK를 admin/public/sdk.js에 포함한 전체 프론트 production build
 
 # server (별도 빌드)
-cd server && gradle bootRun   # 또는 IntelliJ 임포트
+cd server && ./gradlew bootRun   # Windows PowerShell: .\gradlew.bat bootRun
 ```
 
 ## 테스트
@@ -46,6 +46,7 @@ cd server && gradle bootRun   # 또는 IntelliJ 임포트
 ```bash
 npm run test:unit             # 워크스페이스 단위 테스트(admin + sdk)
 npm run test:e2e              # 프론트 E2E (Playwright + MSW, 자체 dev 서버 :3100)
+npm run test:e2e:real         # Admin→Spring→PostGIS→JWT→SDK 실백엔드 E2E
 cd server && ./gradlew test              # 서버 단위(DB 불요)
 cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 ```
@@ -87,7 +88,7 @@ docker compose --profile spatial-test up -d
 | 차트 | 공간 컬럼 | 이름/값 컬럼 |
 |---|---|---|
 | 동적 Polygon 지도 | `boundary` (`geometry(Polygon,3857)`) 또는 `boundary_geography` | `parcel_name` / `assessed_value` |
-| 지도 포인트 | `centroid` (`geometry(Point,3857)`) 또는 `centroid_geography` | 크기값 `area_sqm` |
+| 포인트 지도 | `centroid` (`geometry(Point,3857)`) 또는 `centroid_geography` | 크기값 `area_sqm` |
 
 `district`, `land_use`, `observed_on`은 필터·집계 검증에 사용할 수 있다. 공간 데이터 초기화 SQL은 [`docker/postgis/init`](docker/postgis/init) 아래에 실행 순서대로 있다.
 

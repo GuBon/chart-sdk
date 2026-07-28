@@ -1,7 +1,7 @@
 # 노코드 → SQL 생성 규칙 설계서
 
-**문서 버전:** v2.8 — PostGIS Point 좌표 투영 계약 (2026-07-20)
-**관련 문서:** PRD v2.8 (7.3·7.7), API 계약서 v2.9 (builderConfig 구조화 참조), 화면설계서 v3.3 (S2 노코드 탭)
+**문서 버전:** v2.9 — 시리즈 분할·PostGIS 좌표 계약 현행화 (2026-07-27)
+**관련 문서:** PRD v3.2 (7.3·7.7), API 계약서 v3.4 (builderConfig 구조화 참조), 화면설계서 v3.7 (S2 노코드 탭)
 **대상 DB:** PostgreSQL 고정
 
 ---
@@ -48,7 +48,7 @@
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
 | sample | — | `{ mode:"auto"\|"manual", size?, method?:"auto"\|"system", rate?, seed }`. 표본은 **갯수(size, 1,000~50,000행)** 기반 — auto는 서버가 방식(INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN)·크기를 결정하고 manual은 size를 지정한다. VIEW·조인은 조회 결과에서 RESULT_RANDOM을 사용한다. `rate`(0.1~100%)·`method:"system"`은 물리 관계의 레거시 SYSTEM 핀 전용. **집계 모드 전용**이며 `agg:"none"`과는 동시 사용 불가 (3C·11.4장) |
-| geoPoint | 지도 포인트 공간 모드만 | `{mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. columns는 xAxis/yAxis 좌표, spatial은 SRID 지정 PostGIS Point 컬럼을 사용한다. spatial에서는 xAxis/yAxis/orderBy/sample을 사용하지 않는다. |
+| geoPoint | 포인트 지도 공간 모드만 | `{mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. columns는 xAxis/yAxis 좌표, spatial은 SRID 지정 PostGIS Point 컬럼을 사용한다. spatial에서는 xAxis/yAxis/orderBy/sample을 사용하지 않는다. |
 
 ## 3. 집계(agg) 템플릿
 
@@ -64,7 +64,7 @@
 | max | MAX("col") | 숫자·날짜·문자 |
 | none | "col" | 모든 차트 타입의 원본값 튜플 모드. GROUP BY 없는 원본 행 조회 |
 
-- `none`은 모든 차트 타입에서 사용할 수 있다. 막대/선은 X/Y 원본 튜플, 원형은 name/value 원본 튜플, 분포는 `[x,y]` 원본 점으로 해석한다.
+- `none`은 모든 차트 타입에서 사용할 수 있다. 막대/선은 X/Y 원본 튜플, 원형은 name/value 원본 튜플, 산점도는 `[x,y]` 원본 점으로 해석한다.
 - 한 builderConfig 안에서 `none`과 집계(`sum`/`avg`/`count` 등)는 섞을 수 없다. 모든 yAxis가 `none`이거나 모두 집계여야 한다.
 - `none` 원본값 모드는 `GROUP BY`를 만들지 않고, `sample`과 함께 사용할 수 없다.
 - scatter는 여전히 모든 yAxis가 `none`이어야 하며 X축은 숫자 타입이어야 한다.
@@ -293,9 +293,9 @@ FROM "sales"
 ORDER BY 1 ASC
 ```
 
-막대/선은 각 `year` 행의 `print` 값을 그대로 그린다. 원형은 첫 컬럼을 name, 두 번째 컬럼을 value로 사용한다. 분포는 `[year, print]` 점으로 사용하되 X축이 숫자 타입이어야 한다. `GROUP BY`와 합계/평균 계산은 없다.
+막대/선은 각 `year` 행의 `print` 값을 그대로 그린다. 원형은 첫 컬럼을 name, 두 번째 컬럼을 value로 사용한다. 산점도는 `[year, print]` 점으로 사용하되 X축이 숫자 타입이어야 한다. `GROUP BY`와 합계/평균 계산은 없다.
 
-### 예시 6 — 지도 포인트 전량 좌표
+### 예시 6 — 포인트 지도 전량 좌표
 
 ```sql
 SELECT "longitude", "latitude", "weight" AS "weight"
@@ -303,7 +303,7 @@ FROM "stores"
 WHERE "region_code" = ?
 ```
 
-지도 포인트도 모든 차트와 같은 전체 결과 계약을 사용하므로 최종 `LIMIT`이 없다. 사용자가 지정한 지역·기간 등 `WHERE` 조건에 맞는 좌표를 모두 가져오며, 응답의 `truncated`는 `false`다. 원본 데이터 탭의 `SELECT *` 미리보기는 별도 조회이므로 계속 제한한다.
+포인트 지도도 모든 차트와 같은 전체 결과 계약을 사용하므로 최종 `LIMIT`이 없다. 사용자가 지정한 지역·기간 등 `WHERE` 조건에 맞는 좌표를 모두 가져오며, 응답의 `truncated`는 `false`다. 원본 데이터 탭의 `SELECT *` 미리보기는 별도 조회이므로 계속 제한한다.
 
 ### 예시 7 — PostGIS 공간 Point 컬럼
 
@@ -356,14 +356,23 @@ WHERE "public"."stores"."region_code" = ?
 
 모두 SQL 생성 전에 차단한다. 노코드 사용자는 DB 에러를 보지 않는 것이 목표다(SQL 모드는 반대로 DB 에러를 그대로 노출 — 사용자층이 다르다).
 
-## 10. MVP 범위 밖 (확장 예약)
+## 10. 시리즈 분할과 확장 예약
 
-- 시리즈 분할 (breakout, 카테고리로 시리즈 나누기) — **1순위 확장.** "부서별 월 매출을 선 여러 개로" 같은 요구. builderConfig에 `seriesBy`(두 번째 그룹 차원) 필드를 추가하고, 생성 SQL은 `GROUP BY x, seriesBy` 2차원이 된다. 서버 변환기에 피벗 단계가 추가된다: rows(x, seriesBy, 값) → x별로 seriesBy 값을 컬럼으로 전개 → "첫 컬럼=X, 나머지=시리즈" 컨벤션의 입력 형태로 변환. 즉 변환기를 (rows → [피벗] → series 조립) 단계 구조로 두면 피벗 단계만 끼우면 된다. UI는 노코드 폼에 "시리즈 나누기" 행으로 자리만 표기(비활성).
+시리즈 분할(breakout)은 구현돼 있다. `"부서별 월 매출"`처럼 X 하나를 두 번째 범주로 나눌 때 `builderConfig.seriesBy`를 사용한다.
+
+- 지원 유형은 막대와 선이다. 선택하지 않으면 UI의 계열 기준 행/축을 비워 두고 기존 단일·다중 Y축 계약을 사용한다.
+- 선택하면 Y축 값은 정확히 하나여야 하고 X축과 다른 유효 컬럼이어야 한다.
+- 생성 SQL은 `SELECT x, seriesBy, aggregate … GROUP BY x, seriesBy` 형태다. `seriesOrder`로 계열 값 순서를 제어한다.
+- 서버 변환기는 rows(x, seriesBy, 값)를 X별 열로 피벗한 뒤 “첫 컬럼=X, 나머지 컬럼=시리즈” 형태로 기존 조립기에 전달한다.
+- 표본·JOIN·WHERE에서도 같은 두 번째 그룹 차원을 유지하며, 캐시에는 피벗 전 계산 결과와 builder 정의가 일관되게 저장된다.
+
+아래 항목은 아직 확장 예약이다.
+
 - OR / 조건 그룹 — where를 중첩 그룹 구조로 확장
 - HAVING (집계 결과 필터)
 - 쿼리 파라미터 {{}} 와의 결합 (파라미터 설계 확정 후)
 
-(날짜 버킷팅은 v1.1에서 MVP로 편입 — 3A장 / JOIN 은 v1.4에서 MVP로 편입 — 11장)
+(날짜 버킷팅은 v1.1, JOIN은 v1.4, 시리즈 분할은 v2.9 현재 구현으로 편입)
 
 ## 11. 테이블 조인(JOIN) — MVP 편입 (v1.4)
 

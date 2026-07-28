@@ -63,7 +63,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
 | 검색 입력(이름·설명) | ⏳→📦 | 쿼리 파라미터 `q` → 대상 `mc_chart.name`·`description` (사용자 범위 `owner_id` + ILIKE, pg_trgm GIN) |
-| 종류 필터(막대/선/원형/분포) | ⏳→📦 | 쿼리 파라미터 `type` → `mc_chart.chart_type` (owner 범위 내 필터) |
+| 종류 필터(막대/선/원형/산점도) | ⏳→📦 | 쿼리 파라미터 `type` → `mc_chart.chart_type` (owner 범위 내 필터) |
 | 데이터 계층 필터 | ⏳→📦 | `/data/{datasourceName}[/{schema}[/{relation}]]` 화면 문맥을 API의 `datasourceId`·`schema`·`relation`으로 변환. 데이터소스는 `mc_chart_datasource`, 스키마·관계는 `builder_config.table`과 `joins[].table`을 조회해 기준·조인 참조를 모두 포함 |
 | 정렬(수정일·이름) | ⏳→📦 | 쿼리 파라미터 `sort` → `mc_chart.updated_at`·`name` (기본 updated_at DESC, idx_mc_chart_owner_updated) |
 | 카드 썸네일 | 📦/⏳ | `mc_chart_cache.thumbnail`(후속) / MVP는 차트종류 일러스트(⏳) |
@@ -105,12 +105,12 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | X축 컬럼 | 🧩 | `builder_config.xAxis` (조인 시 `"테이블.컬럼"`) |
 | 묶기(일/주/월) | 🧩 | `builder_config.xAxisBucket` |
 | Y축 컬럼+집계(복수) | 🧩 | `builder_config.yAxis[]` (column, agg, alias). `agg="none"`이면 모든 차트 타입의 원본값 튜플 모드 |
-| 시리즈 나누기(후속) | 🧩 | `builder_config.seriesBy` |
+| 시리즈 나누기 | 🧩 | `builder_config.seriesBy` + `seriesOrder`. 막대·선에서만 노출하며 미선택 시 계열 기준 행을 비운다 |
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
 | 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`과 동시 저장/실행만 금지하며 JOIN과는 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
-| 지도 포인트 좌표 방식 | 🧩 | `builder_config.geoPoint={mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. 공간 타입은 pg_catalog에서 파생하고 좌표값은 실행 시 변환하므로 별도 DB 컬럼·마이그레이션 없음 |
+| 포인트 지도 좌표 방식 | 🧩 | `builder_config.geoPoint={mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. 공간 타입은 pg_catalog에서 파생하고 좌표값은 실행 시 변환하므로 별도 DB 컬럼·마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
 | [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v6(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
 | [원본 데이터] 탭(raw) | ⏳ | 기준 관계 클릭=schema preview, 구성 변경 후 탭 열기=run-builder `mode:rows` 지연 호출. [실행]과 동시 중복 조회하지 않으며 저장 안 함 |
@@ -134,17 +134,20 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 공통 | 툴팁 트리거·값포맷·축지시선 | 🧩 | `options.tooltip.{trigger,valueFormat,axisPointer}` |
 | 공통 | 데이터 라벨·라벨위치·정렬 | 🧩 | `options.dataLabel`·`labelPosition`·`sortOrder` |
 | 공통 | 갱신 모드 | 📦 | `mc_chart.refresh_mode` |
-| 공통 | 주기(TTL) | 📦 | `mc_chart.cache_ttl_seconds` |
+| 공통 | 캐시 유효 시간(TTL) | 📦 | `mc_chart.cache_ttl_seconds` |
 | 공통 | 지금 갱신 | ⚙️ | `POST /charts/{id}/refresh` → 캐시 갱신 |
 | 공통 | 기준시각 표시 | 🧩 | `options.showComputedAt` |
 | 축 | 여백 잘림방지·프리셋 | 🧩 | `options.grid.{containLabel,preset}` |
 | 축 | X축 제목·회전·격자선·범위·스케일 | 🧩 | `options.xAxis.{title,rotate,splitLine,min,max,scale}` |
 | 축 | Y축 제목·단위·포맷·범위·스케일·격자선·2번째축 | 🧩 | `options.yAxis.{title,unit,format,rangeMode,min,max,scale,splitLine,secondAxis}` |
+| 공통 | 기준선·기준 범위·목표값 | 🧩 | `options.analysis.annotations.{lines,ranges,targets}` → `series.markLine/markArea/markPoint` |
+| 공통 | 박스 플롯 이상치 표시·색상 | 🧩 | `options.analysis.boxplotOutliers.{show,color}` → IQR 수염 + 별도 `scatter` series |
+| 공통 | 시간축 단순 이동평균 | 🧩 | `options.analysis.movingAverage.{enabled,seriesIndex,period,showInLegend}` → 선택 계열 색·Y축을 상속한 `line` series |
 | 전용 | 막대 너비·간격·둥근모서리·100%정규화·배경막대 | 🧩 | `options.bar.*` |
-| 전용 | 선 굵기·종류·점·결측연결·영역투명도 | 🧩 | `options.line.*` |
+| 전용 | 선 굵기·종류·점·결측연결·영역 불투명도 | 🧩 | `options.line.*` |
 | 전용 | 원형 도넛두께·라벨위치·시작각·최소각 | 🧩 | `options.pie.*` |
-| 전용 | 분포 점모양·크기·버블컬럼 | 🧩 | `options.scatter.*` |
-| 후속 | 확장예약(markLine·dataZoom·toolbox·visualMap·그라데이션) | 🧩 | 구현 시 `options`에 키 추가(마이그레이션 0) |
+| 전용 | 산점도 점모양·크기·버블컬럼 | 🧩 | `options.scatter.*` |
+| 후속 | 확장예약(dataZoom·toolbox·조건부 visualMap·그라데이션) | 🧩 | 구현 시 `options`에 키 추가(마이그레이션 0) |
 
 > **편집기 전용 로컬 상태:** 데이터 패널 접힘, 노코드 구성·결과 접힘, 시각화 옵션 접힘, 좌·우 폭, 결과·옵션 높이는 브라우저 `localStorage`에만 저장한다. 화면 맞춤/너비 맞춤/100%·zoom과 전체 화면 포커스 상태도 `mc_chart`나 API에 저장하지 않는다. 반면 `options.display`는 자동 글꼴·레이아웃의 설계 기준이므로 차트 정의에 저장한다.
 

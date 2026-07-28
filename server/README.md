@@ -1,7 +1,7 @@
 # chartsdk-server (Spring Boot)
 
 메타 DB 소유 · SQL 실행 엔진 · ECharts option **단일 변환기(Java)** · 토큰 검증.
-Admin/SDK 는 이 서버의 API 만 호출한다. (API 계약서 v1.6)
+Admin/SDK 는 이 서버의 API 만 호출한다. (API 계약서 v3.4)
 
 ## 패키지 계획 (구현 진행에 따라 채움)
 
@@ -22,6 +22,8 @@ com.chartsdk
 
 - builder 저장은 클라이언트 `sqlQuery`를 신뢰하지 않고 서버가 `builderConfig`에서 SQL을 재생성·검증·리터럴화해 저장한다.
 - 노코드 `agg:"none"` 원본값 튜플 모드는 bar/line/pie/scatter 모두에서 동작한다. 이 모드는 GROUP BY와 sample을 사용하지 않는다.
+- 막대·선의 `builderConfig.seriesBy`는 두 번째 그룹 차원으로 SQL을 만들고 `SeriesPivot`에서 다중 시리즈로 전개한다.
+- PostGIS Polygon/Point와 geometry/geography SRID 변환, 저장 cache preview, SWR/single-flight TTL과 수동 refresh가 구현돼 있다.
 - 임베드 토큰 검증은 `EmbedTokenInterceptor`에서 끝내고, `EmbedController`는 검증된 principal만 사용한다.
 - 요청 바디는 핵심 API별 record DTO + Bean Validation으로 받으며, `ApiExceptionHandler`가 공통 에러 envelope을 만든다.
 
@@ -39,6 +41,6 @@ com.chartsdk
 ## 실행
 
 - JDK 17.
-- Gradle 래퍼 jar 는 저장소에 포함하지 않았다 — **IntelliJ 로 임포트**하거나, Gradle 설치 후 `gradle wrapper --gradle-version 8.10.2` 를 1회 실행해 `gradlew` 를 생성한다. 이후 `./gradlew bootRun`.
+- Gradle Wrapper가 저장소에 포함돼 있다. macOS/Linux는 `./gradlew bootRun`, Windows PowerShell은 `.\gradlew.bat bootRun`을 사용한다.
 - DB 연결: 환경변수 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD` (기본값은 `application.yml` 참조).
-- 부팅 검증: `GET /health` → `{ "status": "ok", "chartTypes": ["bar","line","pie","scatter"] }`
+- 부팅 검증: `GET /health` → `{ "status": "ok", "chartTypes": [...] }`. `chartTypes`는 `defaults.json`의 현재 8개 대분류를 반환하므로 배열 순서에 의존하지 않는다.

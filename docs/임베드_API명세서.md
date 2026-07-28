@@ -248,7 +248,7 @@ The SDK renders directly into the host page's DOM (no iframe). The chart body is
 - Long titles stay inside the canvas: the SDK preserves existing title text styles, injects the current chart-host width minus a 32px horizontal inset, applies `overflow:'truncate'`, and recalculates it through `ResizeObserver`.
 - Saved `options.display` is a logical design target used to choose typography and to reproduce the same design canvas in Admin. The SDK never assigns that width or height to the host element; host CSS remains authoritative. Font sizes and font-derived title/legend/grid margins arrive in the server-built ECharts option, while `ResizeObserver` adapts the chart and title width to the actual host container.
 
-### 10.3 Map (지도·지도 포인트) charts — GeoJSON assets
+### 10.3 Map (영역 지도·포인트 지도) charts — GeoJSON assets
 
 Geo charts need a GeoJSON registered with `echarts.registerMap(name, geoJson)` before render. The SDK does this automatically:
 
@@ -263,7 +263,7 @@ The `/maps/**` path is a **public static asset** (no token), served by the backe
 | `kr-sido.json` | 2026-07-20 기준 대한민국 16개 시·도 | 정식 시·도명 — `서울특별시`, `전남광주통합특별시` |
 | `kr-sigungu.json` | 253개 시·군·구(일반구 포함) | `시도명 시군구명` — `인천광역시 제물포구`, `경기도 수원시 장안구` |
 
-Region names must match the GeoJSON `properties.name` exactly. Geo-scatter (지도 포인트) charts use raw `[경도, 위도(, 크기값)]` coordinates instead of region names; per-point `symbolSize` is precomputed server-side (JSON cannot carry callbacks). Geo-scatter builder execution returns every coordinate row matching its JOIN/WHERE conditions without the default 1,000-row result cap, so the saved cache and embed payload preserve the same complete point set.
+Region names must match the GeoJSON `properties.name` exactly. Geo-scatter (포인트 지도) charts use raw `[경도, 위도(, 크기값)]` coordinates instead of region names; per-point `symbolSize` is precomputed server-side (JSON cannot carry callbacks). Geo-scatter builder execution returns every coordinate row matching its JOIN/WHERE conditions without the default 1,000-row result cap, so the saved cache and embed payload preserve the same complete point set.
 
 ### 10.4 Official customization surface
 

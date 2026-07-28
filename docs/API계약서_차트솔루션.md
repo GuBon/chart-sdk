@@ -1,7 +1,7 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v3.2 — 데이터소스 이름 기반 카탈로그·편집 URL 계약 (2026-07-21)
-**관련 문서:** PRD v3.1, 화면설계서 v3.5, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
+**문서 버전:** v3.4 — 수동 캐시 갱신의 소유자 범위 검사 명시 (2026-07-28)
+**관련 문서:** PRD v3.2, 화면설계서 v3.7, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
 
@@ -12,7 +12,7 @@
 - 요청/응답 본문은 JSON, UTF-8.
 - 시간은 ISO 8601 (`2026-06-10T12:00:00Z`).
 - 에러 응답은 모든 엔드포인트에서 동일한 형태를 쓴다. 서버는 DTO + Bean Validation으로 요청 본문을 검증하고, `ApiExceptionHandler`가 검증 실패·JSON 파싱 실패·DB 무결성 오류·예상 밖 오류를 아래 공통 envelope으로 변환한다.
-- 모든 Admin API는 인증 컨텍스트의 `userId`로 자동 스코프한다. 클라이언트는 `ownerId`를 보내지 않는다. 응답에도 기본적으로 `ownerId`를 노출하지 않는다.
+- 모든 Admin API는 인증 컨텍스트의 `userId`로 자동 스코프한다. 클라이언트는 `ownerId`를 보내지 않는다. 응답에도 기본적으로 `ownerId`를 노출하지 않는다. 단, 현재 개발 프로필의 `DevelopmentCurrentUserProvider`는 사용자 컨텍스트를 주입하지 않아 `owner_id`가 `null`인 개발 동작을 허용한다. 이는 배포 전 인증 연동과 함께 제거해야 하는 명시적 차이이며 운영 계약으로 간주하지 않는다.
 - 임베드 API는 토큰의 `userId`를 기준으로 차트를 조회한다. 유효 토큰이어도 다른 사용자의 `chartId`는 404처럼 취급한다.
 
 ### 공통 에러 형식
@@ -58,7 +58,7 @@ Authorization: Bearer {임베드 토큰(JWT)}
 3. 페이로드의 `jti`(= mc_user_token.id)로 PK 단건 조회 → is_active 및 mc_user.is_active 확인 → 401 TOKEN_REVOKED
 4. 토큰의 `userId`를 차트 조회 소유자 범위로 사용한다. 차트별 권한 체크는 없지만, 조회 범위는 해당 사용자 소유 차트로 제한한다.
 5. mc_chart에서 `owner_id + chartId`로 sql_query + datasource_id + refresh_mode 조회 → 없으면 404
-6. **캐시 확인 (PRD 7.7)**: `live`면 항상 실행 / `ttl`이면 mc_chart_cache의 computed_at + ttl 이내일 때 캐시 사용(만료 시 재계산 — 2차부터 stale-while-revalidate) / `manual`이면 항상 캐시 사용
+6. **캐시 확인 (PRD 7.7)**: `live`면 항상 실행 / `ttl`이면 `mc_chart_cache.computed_at + ttl` 이내일 때 캐시를 사용하고 만료 시 stale-while-revalidate(single-flight) / `manual`이면 저장된 캐시 사용
 7. (캐시 미스 시) 해당 데이터소스의 커넥션 풀에서 읽기 전용 실행 (타임아웃·행 제한) 후 캐시 갱신
 8. 결과 + chart_type + options를 ECharts option JSON으로 조립해 반환 (방식 A) — `computedAt` 포함
 
@@ -161,7 +161,7 @@ POST /api/v1/query/run-builder
 
 `builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample`을 함께 지정하면 JOIN과 WHERE를 적용한 행 집합을 모집단 CTE로 만들고, 그 결과에서 `RESULT_RANDOM` 표본을 뽑은 뒤 집계한다. 앱은 이 기능을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
-`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 분포는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
+`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 산점도는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
 
 `mode` (선택, 기본 `"aggregate"`):
 - `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
@@ -309,13 +309,31 @@ PUT  /api/v1/charts/{id}     (수정)
 - `defineMode:"builder"`: 클라이언트가 보낸 `sqlQuery`는 신뢰하지 않는다. 서버가 `builderConfig`로 SQL을 다시 생성·검증·1회 실행한 뒤, 표시용 리터럴 SQL을 `mc_chart.sql_query`에 저장한다.
 - `defineMode:"sql"`: `sqlQuery`는 SELECT/WITH 계열만 허용하고, 저장 전 1회 실행 검증을 통과해야 한다.
 
-### 3.5 결과 캐시 수동 갱신 — S2 [지금 갱신] (2차)
+### 3.5 결과 캐시 수동 갱신 — S2 [지금 갱신]
 
 ```
 POST /api/v1/charts/{id}/refresh
 ```
 
-응답 200: `{ "chartId": 12, "computedAt": "...", "rowCount": 5, "elapsedMs": 42 }` — 즉시 재계산 후 캐시 갱신. manual 모드 차트의 데이터 갱신 수단.
+응답 200:
+
+```json
+{
+  "chartId": 12,
+  "computedAt": "2026-07-27T09:15:00Z",
+  "rowCount": 5,
+  "elapsedMs": 42,
+  "sampling": null,
+  "approximate": false,
+  "sampleRate": null
+}
+```
+
+서버는 캐시 유효 여부와 무관하게 즉시 한 번 재계산하고 `mc_chart_cache`를 교체한다. `sampling`이 있으면 `approximate`·`sampleRate`는 호환용 별칭으로 같은 의미를 보존한다.
+
+**인가:** 재계산을 시작하기 전에 조회 경로와 **같은** 소유자 범위 검사를 통과해야 하며, 범위를 벗어나면 재계산을 시작하지 않고 `404 CHART_NOT_FOUND`를 반환한다(트러블슈팅 M10). 재계산 계층(`ChartComputeService`)은 임베드 서빙·저장 시드와 공유하므로 owner 개념을 갖지 않는다 — 인가는 이 HTTP 진입점의 책임이다. 단, 로그인 도입 전에는 차트가 `owner_id NULL`로 저장되고 범위 조건에 `OR owner_id IS NULL` 탈출구가 남아 있어 실질 격리는 아직 성립하지 않는다.
+
+Admin은 저장된 최신 정의에서만 버튼을 활성화한다. 호출 순서는 `POST /charts/{id}/refresh` 성공 → `GET /charts/{id}/preview` 재조회 → 결과 표·차트 option·`computedAt` 교체다. 새 차트 또는 저장되지 않은 변경이 있으면 호출하지 않고 저장 안내를 표시한다. POST는 성공했지만 preview 재조회가 실패하면 캐시 갱신 성공과 화면 동기화 실패를 구분해 알린다.
 
 ### 3.6 차트 복제 — S1 카드 액션 (2차)
 
