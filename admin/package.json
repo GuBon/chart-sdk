@@ -5,14 +5,15 @@
   "type": "module",
   "description": "차트 솔루션 관리 콘솔 (Next.js) — API 만 호출, DB 직접 접근 없음",
   "scripts": {
-    "prepare:sdk-public": "npm --prefix .. run build:sdk && node scripts/copy-sdk.mjs",
+    "prepare:sdk-public": "npm run build -w @chartsdk/sdk && node scripts/copy-sdk.mjs",
     "dev": "npm run prepare:sdk-public && next dev",
     "build": "npm run prepare:sdk-public && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:real": "playwright test --config=playwright.real.config.ts"
   },
   "dependencies": {
     "@chartsdk/chart-options": "*",

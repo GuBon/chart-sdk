@@ -43,5 +43,29 @@ services:
       timeout: 3s
       retries: 20
 
+  # Admin → Spring → PostgreSQL/PostGIS → SDK 임베드까지 관통하는 브라우저 E2E 전용.
+  # 기존 개발 DB와 포트·데이터 디렉터리를 공유하지 않고 매 실행마다 tmpfs에서 새로 만든다.
+  e2e-db:
+    image: postgis/postgis:17-3.5
+    container_name: chartsdk-real-e2e-db
+    profiles: ["real-e2e"]
+    environment:
+      POSTGRES_DB: chartsdk_e2e
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "chartsdk-e2e"
+    ports:
+      - "56432:5432"
+    volumes:
+      - ./docs/V1__init.sql:/docker-entrypoint-initdb.d/01-meta-schema.sql:ro
+      - ./docker/e2e/init/02-spatial-chart-data.sql:/docker-entrypoint-initdb.d/02-spatial-chart-data.sql:ro
+      - ./chart-options/maps/kr-sigungu.json:/docker-entrypoint-initdb.d/kr-sigungu.json:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chartsdk_e2e"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
 volumes:
   chartsol_pgdata:

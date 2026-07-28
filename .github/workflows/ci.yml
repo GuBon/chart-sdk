@@ -31,3 +31,76 @@ jobs:
       - name: Server unit tests
         working-directory: server
         run: ./gradlew test --no-daemon
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - run: npm ci
+      - run: npm run gen:defaults
+
+      - name: Start PostgreSQL and PostGIS integration databases
+        run: docker compose --profile spatial-test up -d --wait postgres postgis-test
+
+      - name: Server real-database integration tests
+        working-directory: server
+        run: ./gradlew integrationTest --no-daemon
+
+      - name: Database logs
+        if: failure()
+        run: docker compose --profile spatial-test logs --no-color postgres postgis-test
+
+      - name: Stop integration databases
+        if: always()
+        run: docker compose --profile spatial-test down -v
+
+  real-backend-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - run: npm ci
+      - run: npm run gen:defaults
+      - run: npx playwright install --with-deps chromium
+
+      - name: Admin to Spring/PostGIS real-backend E2E
+        run: npm run test:e2e:real
+
+      - name: Upload real E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-backend-e2e-diagnostics
+          path: |
+            admin/test-results/real-e2e/
+            admin/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Remove real E2E database
+        if: always()
+        run: docker compose --profile real-e2e rm -s -f e2e-db
