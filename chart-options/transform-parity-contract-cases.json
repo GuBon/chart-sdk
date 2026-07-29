@@ -1,0 +1,461 @@
+{
+  "datasets": {
+    "category": {
+      "columns": [
+        { "name": "category", "type": "text" },
+        { "name": "s1", "type": "number" },
+        { "name": "s2", "type": "number" }
+      ],
+      "rows": [["A", 10, 30], ["B", 20, 20]]
+    },
+    "scatter": {
+      "columns": [
+        { "name": "x", "type": "number" },
+        { "name": "y", "type": "number" },
+        { "name": "size", "type": "number" }
+      ],
+      "rows": [[1, 10, 3], [2, 20, 9]]
+    },
+    "boxplot": {
+      "columns": [
+        { "name": "category", "type": "text" },
+        { "name": "value", "type": "number" }
+      ],
+      "rows": [["A", 1], ["A", 2], ["A", 3], ["A", 20], ["B", 4], ["B", 5], ["B", 6]]
+    },
+    "geoscatter": {
+      "columns": [
+        { "name": "lng", "type": "number" },
+        { "name": "lat", "type": "number" },
+        { "name": "size", "type": "number" }
+      ],
+      "rows": [[126.978, 37.5665, 10], [129.0756, 35.1796, 30]]
+    }
+  },
+  "cases": [
+    {
+      "name": "bar-horizontal-configured",
+      "chartType": "bar",
+      "dataset": "category",
+      "options": {
+        "variant": "horizontal",
+        "title": "가로 막대",
+        "titleH": "left",
+        "titleV": "bottom",
+        "titleDirection": "vertical",
+        "typography": {
+          "scale": 125,
+          "titleFontFamily": "pretendard",
+          "legendFontFamily": "notoSansKr",
+          "axisFontFamily": "pretendard",
+          "dataLabelFontFamily": "notoSansKr",
+          "tooltipFontFamily": "pretendard",
+          "titleFontSize": 28,
+          "legendFontSize": 14,
+          "axisFontSize": 13,
+          "dataLabelFontSize": 15,
+          "tooltipFontSize": 16
+        },
+        "legend": { "show": true, "position": "left", "scroll": true },
+        "tooltip": {
+          "enabled": true,
+          "trigger": "axis",
+          "axisPointer": "shadow",
+          "valueFormat": "comma",
+          "confine": "inside",
+          "backgroundColor": "#102030",
+          "textColor": "#F0F0F0",
+          "borderColor": "#405060",
+          "borderWidth": 2,
+          "padding": 12,
+          "contentMode": "custom",
+          "template": "{series}: {value}"
+        },
+        "emphasis": { "enabled": false },
+        "dataZoom": { "enabled": true, "axis": "both" },
+        "dataLabel": true,
+        "labelPosition": "inside",
+        "labelRotate": 90,
+        "sortOrder": "desc",
+        "itemColorOverrides": [
+          {
+            "kind": "cartesian",
+            "seriesName": "s1",
+            "dimensions": ["B"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ],
+        "grid": { "containLabel": true, "preset": "wide" },
+        "xAxis": {
+          "title": "카테고리",
+          "titleLocation": "start",
+          "titleGap": 12,
+          "titleRotate": 45,
+          "position": "top",
+          "rotate": 45,
+          "labelIntervalMode": "step",
+          "labelEvery": 2,
+          "showMinLabel": false,
+          "showMaxLabel": true,
+          "splitLine": true
+        },
+        "yAxis": {
+          "title": "값",
+          "titleLocation": "end",
+          "titleGap": 14,
+          "titleRotate": -45,
+          "position": "right",
+          "unit": "원",
+          "format": "comma",
+          "rangeMode": "manual",
+          "min": 1,
+          "max": 100,
+          "scale": "log",
+          "tickMode": "interval",
+          "interval": 10,
+          "includeZero": false,
+          "logBase": 2,
+          "splitLine": false,
+          "secondAxis": true
+        },
+        "bar": {
+          "width": 55,
+          "gap": 10,
+          "borderRadius": 8,
+          "normalize": false,
+          "showBackground": true
+        }
+      }
+    },
+    {
+      "name": "bar-stacked-normalized",
+      "chartType": "bar",
+      "dataset": "category",
+      "options": {
+        "variant": "stacked",
+        "bar": { "normalize": true },
+        "dataLabel": true,
+        "labelPosition": "top"
+      }
+    },
+    {
+      "name": "bar-value-fixed-axis",
+      "chartType": "bar",
+      "dataset": "category",
+      "options": {
+        "yAxis": {
+          "scale": "value",
+          "tickMode": "fixed",
+          "interval": 10,
+          "includeZero": false,
+          "rangeMode": "manual",
+          "min": 5,
+          "max": 45
+        }
+      }
+    },
+    {
+      "name": "line-smooth-configured",
+      "chartType": "line",
+      "dataset": "category",
+      "options": {
+        "variant": "smooth",
+        "dataLabel": true,
+        "labelPosition": "inside",
+        "labelRotate": 90,
+        "dataZoom": { "enabled": true, "axis": "y" },
+        "yAxis": { "secondAxis": true, "splitLine": false },
+        "line": {
+          "width": 5,
+          "lineType": "dashed",
+          "showSymbol": false,
+          "symbolSize": 9,
+          "connectNulls": true,
+          "areaOpacity": 0.45
+        },
+        "seriesTypes": { "s1": "line", "s2": "bar" },
+        "itemColorOverrides": [
+          {
+            "kind": "cartesian",
+            "seriesName": "s1",
+            "dimensions": ["A"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "line-area",
+      "chartType": "line",
+      "dataset": "category",
+      "options": {
+        "variant": "area",
+        "line": { "areaOpacity": 0.2 }
+      }
+    },
+    {
+      "name": "line-stacked-area",
+      "chartType": "line",
+      "dataset": "category",
+      "options": {
+        "variant": "stackedArea",
+        "line": { "areaOpacity": 0.35 }
+      }
+    },
+    {
+      "name": "line-step",
+      "chartType": "line",
+      "dataset": "category",
+      "options": {
+        "variant": "step"
+      }
+    },
+    {
+      "name": "pie-donut-configured",
+      "chartType": "pie",
+      "dataset": "category",
+      "options": {
+        "variant": "donut",
+        "dataLabel": true,
+        "labelRotate": 90,
+        "pie": {
+          "donutWidth": 25,
+          "labelPosition": "inside",
+          "startAngle": 45,
+          "minAngle": 3
+        },
+        "itemColorOverrides": [
+          {
+            "kind": "pie",
+            "seriesName": "__pie__",
+            "dimensions": ["B"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ],
+        "emphasis": {
+          "enabled": true,
+          "focus": "self",
+          "colorMode": "custom",
+          "color": "#FF8800",
+          "scale": false,
+          "scaleSize": 9
+        }
+      }
+    },
+    {
+      "name": "pie-rose",
+      "chartType": "pie",
+      "dataset": "category",
+      "options": {
+        "variant": "rose",
+        "dataLabel": false,
+        "labelRotate": 90,
+        "pie": { "labelPosition": "center", "startAngle": 180, "minAngle": 5 }
+      }
+    },
+    {
+      "name": "scatter-bubble-configured",
+      "chartType": "scatter",
+      "dataset": "scatter",
+      "options": {
+        "variant": "bubble",
+        "dataLabel": true,
+        "labelRotate": 90,
+        "dataZoom": { "enabled": true, "axis": "both" },
+        "xAxis": {
+          "title": "X",
+          "scale": "log",
+          "logBase": 2,
+          "tickMode": "interval",
+          "interval": 1,
+          "includeZero": false,
+          "splitLine": true,
+          "min": 1,
+          "max": 4
+        },
+        "yAxis": {
+          "title": "Y",
+          "scale": "value",
+          "rangeMode": "manual",
+          "min": 5,
+          "max": 25,
+          "tickMode": "count",
+          "splitNumber": 4,
+          "includeZero": false,
+          "splitLine": false
+        },
+        "scatter": {
+          "symbol": "diamond",
+          "symbolSize": 16,
+          "bubbleField": "size"
+        },
+        "itemColorOverrides": [
+          {
+            "kind": "scatter",
+            "seriesName": "y",
+            "dimensions": [2, 20],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "scatter-value-axis-modes",
+      "chartType": "scatter",
+      "dataset": "scatter",
+      "options": {
+        "xAxis": {
+          "scale": "value",
+          "tickMode": "auto",
+          "splitNumber": 7,
+          "minInterval": 0.5,
+          "maxInterval": 5,
+          "includeZero": false,
+          "min": 0,
+          "max": 3
+        },
+        "yAxis": {
+          "scale": "log",
+          "logBase": 2
+        }
+      }
+    },
+    {
+      "name": "boxplot-configured",
+      "chartType": "boxplot",
+      "dataset": "boxplot",
+      "options": {
+        "dataZoom": { "enabled": true, "axis": "x" },
+        "xAxis": {
+          "title": "그룹",
+          "rotate": 45,
+          "labelIntervalMode": "auto",
+          "showMinLabel": false,
+          "showMaxLabel": false
+        },
+        "yAxis": {
+          "title": "분포",
+          "rangeMode": "manual",
+          "min": 0,
+          "max": 25,
+          "tickMode": "count",
+          "splitNumber": 6,
+          "splitLine": false
+        },
+        "analysis": {
+          "boxplotOutliers": { "show": true, "color": "#D81B60" }
+        },
+        "itemColorOverrides": [
+          {
+            "kind": "boxplot",
+            "seriesName": "__boxplot__",
+            "dimensions": ["B"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ],
+        "emphasis": { "enabled": true, "focus": "series", "colorMode": "custom", "color": "#00AA88" }
+      }
+    },
+    {
+      "name": "heatmap-configured",
+      "chartType": "heatmap",
+      "dataset": "category",
+      "options": {
+        "paletteReversed": true,
+        "dataLabel": true,
+        "labelRotate": 90,
+        "dataZoom": { "enabled": true, "axis": "both" },
+        "xAxis": {
+          "title": "열",
+          "rotate": 45,
+          "labelIntervalMode": "step",
+          "labelEvery": 2
+        },
+        "yAxis": {
+          "title": "행",
+          "labelIntervalMode": "step",
+          "labelEvery": 2,
+          "hideOverlap": true
+        },
+        "itemColorOverrides": [
+          {
+            "kind": "heatmap",
+            "seriesName": "__heatmap__",
+            "dimensions": ["B", "s2"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "map-configured",
+      "chartType": "map",
+      "dataset": "category",
+      "options": {
+        "paletteReversed": true,
+        "dataLabel": true,
+        "labelRotate": 90,
+        "map": {
+          "name": "kr-sigungu",
+          "roam": true,
+          "viewport": {
+            "mode": "region",
+            "regionCode": "11",
+            "regionName": "서울특별시",
+            "bounds": null
+          }
+        },
+        "itemColorOverrides": [
+          {
+            "kind": "map",
+            "seriesName": "__map__",
+            "dimensions": ["B"],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ],
+        "emphasis": {
+          "enabled": true,
+          "focus": "self",
+          "colorMode": "custom",
+          "color": "#FFCC00"
+        }
+      }
+    },
+    {
+      "name": "geoscatter-configured",
+      "chartType": "geoscatter",
+      "dataset": "geoscatter",
+      "options": {
+        "map": {
+          "name": "kr-sigungu",
+          "roam": true,
+          "viewport": { "mode": "data", "regionCode": null, "regionName": null, "bounds": null }
+        },
+        "geoscatter": { "symbolSize": 18 },
+        "itemColorOverrides": [
+          {
+            "kind": "geoscatter",
+            "seriesName": "__geoscatter__",
+            "dimensions": [129.0756, 35.1796],
+            "occurrence": 0,
+            "color": "#FFB000"
+          }
+        ],
+        "emphasis": {
+          "enabled": true,
+          "focus": "series",
+          "colorMode": "custom",
+          "color": "#11AAFF",
+          "scale": false
+        }
+      }
+    }
+  ]
+}
