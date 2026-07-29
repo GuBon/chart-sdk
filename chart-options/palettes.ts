@@ -50,34 +50,34 @@ export const DEFAULT_PALETTE_PRESET = DEFAULT_QUALITATIVE_PRESET;
 export const DEFAULT_PALETTE = [...CARTO_QUALITATIVE[DEFAULT_QUALITATIVE_PRESET]];
 
 export const CARTO_QUALITATIVE_CHOICES: { value: QualitativePalettePreset; label: string }[] = [
-  { value: 'safe', label: 'CARTO Safe' },
-  { value: 'bold', label: 'CARTO Bold' },
-  { value: 'vivid', label: 'CARTO Vivid' },
-  { value: 'prism', label: 'CARTO Prism' },
-  { value: 'antique', label: 'CARTO Antique' },
-  { value: 'pastel', label: 'CARTO Pastel' },
+  { value: 'safe', label: 'Safe' },
+  { value: 'bold', label: 'Bold' },
+  { value: 'vivid', label: 'Vivid' },
+  { value: 'prism', label: 'Prism' },
+  { value: 'antique', label: 'Antique' },
+  { value: 'pastel', label: 'Pastel' },
 ];
 
 export const CARTO_SEQUENTIAL_CHOICES: { value: SequentialPalettePreset; label: string }[] = [
-  { value: 'burg', label: 'CARTO Burg' },
-  { value: 'burgyl', label: 'CARTO BurgYL' },
-  { value: 'redor', label: 'CARTO RedOr' },
-  { value: 'oryel', label: 'CARTO OrYel' },
-  { value: 'peach', label: 'CARTO Peach' },
-  { value: 'pinkyl', label: 'CARTO PinkYl' },
-  { value: 'mint', label: 'CARTO Mint' },
-  { value: 'blugrn', label: 'CARTO BluGrn' },
-  { value: 'darkmint', label: 'CARTO DarkMint' },
-  { value: 'emrld', label: 'CARTO Emrld' },
-  { value: 'bluyl', label: 'CARTO BluYl' },
-  { value: 'teal', label: 'CARTO Teal' },
-  { value: 'tealgrn', label: 'CARTO TealGrn' },
-  { value: 'purp', label: 'CARTO Purp' },
-  { value: 'purpor', label: 'CARTO PurpOr' },
-  { value: 'sunset', label: 'CARTO Sunset' },
-  { value: 'magenta', label: 'CARTO Magenta' },
-  { value: 'sunsetdark', label: 'CARTO SunsetDark' },
-  { value: 'brwnyl', label: 'CARTO BrownYl' },
+  { value: 'burg', label: 'Burg' },
+  { value: 'burgyl', label: 'BurgYL' },
+  { value: 'redor', label: 'RedOr' },
+  { value: 'oryel', label: 'OrYel' },
+  { value: 'peach', label: 'Peach' },
+  { value: 'pinkyl', label: 'PinkYl' },
+  { value: 'mint', label: 'Mint' },
+  { value: 'blugrn', label: 'BluGrn' },
+  { value: 'darkmint', label: 'DarkMint' },
+  { value: 'emrld', label: 'Emrld' },
+  { value: 'bluyl', label: 'BluYl' },
+  { value: 'teal', label: 'Teal' },
+  { value: 'tealgrn', label: 'TealGrn' },
+  { value: 'purp', label: 'Purp' },
+  { value: 'purpor', label: 'PurpOr' },
+  { value: 'sunset', label: 'Sunset' },
+  { value: 'magenta', label: 'Magenta' },
+  { value: 'sunsetdark', label: 'SunsetDark' },
+  { value: 'brwnyl', label: 'BrownYl' },
 ];
 
 export interface ColorThemeState {
@@ -99,9 +99,11 @@ export function paletteFamilyForChartType(chartType: unknown): PaletteFamily {
 }
 
 export function paletteChoicesForChartType(chartType: unknown): { value: CartoPalettePreset; label: string }[] {
+  const qualitative = [...CARTO_QUALITATIVE_CHOICES];
+  const sequential = [...CARTO_SEQUENTIAL_CHOICES];
   return paletteFamilyForChartType(chartType) === 'sequential'
-    ? [...CARTO_SEQUENTIAL_CHOICES]
-    : [...CARTO_QUALITATIVE_CHOICES];
+    ? [...sequential, ...qualitative]
+    : [...qualitative, ...sequential];
 }
 
 export function isPalettePresetForFamily(preset: unknown, family: PaletteFamily): preset is CartoPalettePreset {
@@ -126,10 +128,11 @@ export function cartoPalette(preset: unknown): string[] {
 }
 
 export function cartoPaletteForChartType(chartType: unknown, preset: unknown): string[] {
-  const family = paletteFamilyForChartType(chartType);
-  return cartoPalette(isPalettePresetForFamily(preset, family)
+  return cartoPalette(
+    isPalettePresetForFamily(preset, 'qualitative') || isPalettePresetForFamily(preset, 'sequential')
     ? preset
-    : defaultPalettePresetForChartType(chartType));
+    : defaultPalettePresetForChartType(chartType),
+  );
 }
 
 export function normalizeColorTheme(value: unknown, activePreset?: unknown, activeChartType?: unknown): ColorThemeState {
@@ -165,18 +168,25 @@ export function applyPalettePreset(
   preset: unknown,
 ): Record<string, any> {
   const next = structuredClone(options);
-  const family = paletteFamilyForChartType(chartType);
-  const selected = isPalettePresetForFamily(preset, family)
+  const chartFamily = paletteFamilyForChartType(chartType);
+  const selectedFamily: PaletteFamily = isPalettePresetForFamily(preset, 'qualitative')
+    ? 'qualitative'
+    : isPalettePresetForFamily(preset, 'sequential')
+      ? 'sequential'
+      : chartFamily;
+  const selected = isPalettePresetForFamily(preset, selectedFamily)
     ? preset
     : defaultPalettePresetForChartType(chartType);
   const theme = normalizeColorTheme(next.colorTheme, next.palettePreset, chartType);
-  if (family === 'qualitative') theme.qualitativePreset = selected as QualitativePalettePreset;
+  if (selectedFamily === 'qualitative') theme.qualitativePreset = selected as QualitativePalettePreset;
   else theme.sequentialPreset = selected as SequentialPalettePreset;
   next.colorTheme = theme;
   next.palettePreset = selected;
   next.palette = cartoPalette(selected);
   next.paletteActiveIndex = 0;
-  next.paletteReversed = family === 'sequential' ? theme.sequentialReversed : false;
+  next.paletteReversed = chartFamily === 'sequential' && selectedFamily === 'sequential'
+    ? theme.sequentialReversed
+    : false;
   next.autoColorMap = {};
   return next;
 }
@@ -235,10 +245,20 @@ export function resolveSeriesColorMap(
   names: string[],
   palette: readonly string[] = DEFAULT_PALETTE,
   existing: Record<string, string> = {},
+  spreadAcrossGradient = false,
 ): Record<string, string> {
   const usable = palette.filter((color) => /^#[0-9a-f]{6}$/i.test(color));
   const base = usable.length > 0 ? usable.map((color) => color.toUpperCase()) : DEFAULT_PALETTE;
   const resolved: Record<string, string> = { ...existing };
+
+  if (spreadAcrossGradient) {
+    const gradient = sampleGradient(base, names.length);
+    names.forEach((name, index) => {
+      resolved[name] = gradient[index];
+    });
+    return resolved;
+  }
+
   const used = new Set(Object.values(resolved).map((color) => color.toUpperCase()));
 
   names.forEach((name, index) => {
@@ -262,6 +282,27 @@ export function resolveSeriesColorMap(
     used.add(color);
   });
   return resolved;
+}
+
+function sampleGradient(stops: readonly string[], count: number): string[] {
+  if (count <= 0) return [];
+  if (stops.length === 1) return Array.from({ length: count }, () => stops[0]);
+  return Array.from({ length: count }, (_unused, index) => {
+    const position = count === 1 ? 0.5 : index / (count - 1);
+    const scaled = position * (stops.length - 1);
+    const leftIndex = Math.floor(scaled);
+    const rightIndex = Math.min(stops.length - 1, leftIndex + 1);
+    return interpolateHex(stops[leftIndex], stops[rightIndex], scaled - leftIndex);
+  });
+}
+
+function interpolateHex(left: string, right: string, ratio: number): string {
+  const channels = [1, 3, 5].map((offset) => {
+    const start = Number.parseInt(left.slice(offset, offset + 2), 16);
+    const end = Number.parseInt(right.slice(offset, offset + 2), 16);
+    return Math.round(start + (end - start) * ratio).toString(16).padStart(2, '0');
+  });
+  return `#${channels.join('')}`.toUpperCase();
 }
 
 function fnv1a(value: string): number {

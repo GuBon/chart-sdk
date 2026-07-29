@@ -19,6 +19,7 @@
 
 import {
   CARTO_QUALITATIVE_CHOICES,
+  CARTO_SEQUENTIAL_CHOICES,
   DEFAULT_COLOR_THEME,
   DEFAULT_PALETTE,
   DEFAULT_PALETTE_PRESET,
@@ -31,6 +32,7 @@ import {
   DEFAULT_BOXPLOT_OUTLIERS,
   DEFAULT_MOVING_AVERAGE,
 } from '@chartsdk/chart-options/statisticalOverlays';
+import { CHART_SIZE_PRESETS, FONT_FAMILY_CHOICES } from '@chartsdk/chart-options/display';
 
 // ── 기본 타입 ─────────────────────────────────────────────────────
 
@@ -222,6 +224,26 @@ export const OPTION_REGISTRY: OptionDef[] = [
     choices: [{ value: 'top', label: '상' }, { value: 'bottom', label: '하' }],
   },
   {
+    key: 'titleDirection', zone: 'common', section: '기본', label: '제목 텍스트 방향',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'horizontal',
+    tier: 'T2', echarts: '@title.direction',
+    choices: [{ value: 'horizontal', label: '가로' }, { value: 'vertical', label: '세로' }],
+    help: '세로는 글자를 한 줄에 하나씩 아래로 쌓아 씁니다. 제목이 길수록 차트 영역이 줄어듭니다.',
+  },
+  {
+    key: 'typography.titleFontFamily', zone: 'common', section: '기본', label: '제목 글꼴',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'default',
+    echarts: 'title.textStyle.fontFamily',
+    choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
+    help: '기본은 ECharts 시스템 글꼴을 유지합니다. Pretendard와 Noto Sans KR은 ChartSDK가 함께 배포해 미리보기와 임베드에서 동일하게 표시합니다.',
+  },
+  {
+    key: 'typography.titleFontSize', zone: 'common', section: '기본', label: '제목 글자 크기',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: null,
+    min: 10, max: 48, step: 1, unit: 'px', echarts: 'title.textStyle.fontSize',
+    help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
+  },
+  {
     key: 'description', zone: 'common', section: '기본', label: '설명',
     control: 'textarea', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: '',
     storage: 'column', column: 'description', echarts: '@none',
@@ -234,11 +256,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'standard',
     echarts: '@display.size',
     choices: [
-      { value: 'small', label: '작은 카드 · 360×240' },
-      { value: 'standard', label: '표준 · 640×360' },
-      { value: 'large', label: '대형 · 960×540' },
-      { value: 'hd', label: 'HD · 1280×720' },
-      { value: 'fhd', label: 'FHD · 1920×1080' },
+      ...CHART_SIZE_PRESETS.map((item) => ({ value: item.preset, label: item.label })),
       { value: 'custom', label: '사용자 지정' },
     ],
     help: '미리보기의 논리 캔버스와 자동 글꼴 기준. 임베드 호스트의 CSS width·height를 강제로 덮어쓰지 않는다',
@@ -255,41 +273,13 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 글꼴 ──
+  // 요소별 글꼴과 글자 크기는 그 요소를 편집하는 섹션(기본·범례·축 글자·라벨·툴팁 모양)에 있다.
+  // 여기에는 자동 상태인 모든 요소에 걸리는 전체 배율만 남긴다.
   {
-    key: 'typography.mode', zone: 'common', section: '글꼴', label: '글꼴 크기',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'auto',
-    echarts: '@typography.mode', choices: [{ value: 'auto', label: '자동' }, { value: 'custom', label: '직접 지정' }],
-    help: '자동은 설계 크기에 맞는 기본값을 사용하고, 직접 지정은 요소별 px 값을 저장한다',
-  },
-  {
-    key: 'typography.scale', zone: 'common', section: '글꼴', label: '전체 배율',
+    key: 'typography.scale', zone: 'common', section: '글꼴', label: '전체 글자 크기',
     control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 100,
-    showIf: (o) => o.typography?.mode !== 'custom', min: 80, max: 150, step: 5, unit: '%', echarts: '@typography.scale',
-  },
-  {
-    key: 'typography.titleFontSize', zone: 'common', section: '글꼴', label: '제목',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 18,
-    showIf: (o) => o.typography?.mode === 'custom', min: 10, max: 48, step: 1, unit: 'px', echarts: 'title.textStyle.fontSize',
-  },
-  {
-    key: 'typography.legendFontSize', zone: 'common', section: '글꼴', label: '범례',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 12,
-    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'legend.textStyle.fontSize',
-  },
-  {
-    key: 'typography.axisFontSize', zone: 'common', section: '글꼴', label: '축',
-    control: 'slider', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 12,
-    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: '@axis.fontSize',
-  },
-  {
-    key: 'typography.dataLabelFontSize', zone: 'common', section: '글꼴', label: '데이터 라벨',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 12,
-    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'series.label.fontSize',
-  },
-  {
-    key: 'typography.tooltipFontSize', zone: 'common', section: '글꼴', label: '툴팁',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 12,
-    showIf: (o) => o.typography?.mode === 'custom', min: 8, max: 32, step: 1, unit: 'px', echarts: 'tooltip.textStyle.fontSize',
+    min: 80, max: 150, step: 5, unit: '%', echarts: '@typography.scale',
+    help: '자동 상태인 요소에만 적용됩니다. 크기를 직접 지정한 요소는 이 배율의 영향을 받지 않습니다.',
   },
 
   // ── 색상 ──
@@ -300,8 +290,8 @@ export const OPTION_REGISTRY: OptionDef[] = [
     default: DEFAULT_PALETTE_PRESET,
     defaultByType: { heatmap: DEFAULT_SEQUENTIAL_PRESET, map: DEFAULT_SEQUENTIAL_PRESET },
     echarts: '@palettePreset',
-    choices: CARTO_QUALITATIVE_CHOICES,
-    help: '차트 대분류에 맞는 CARTOColors 테마만 표시합니다.',
+    choices: [...CARTO_QUALITATIVE_CHOICES, ...CARTO_SEQUENTIAL_CHOICES],
+    help: '모든 차트에서 같은 색상 테마를 제공하며, 현재 차트에 어울리는 테마를 먼저 표시합니다.',
   },
   {
     key: 'palette', zone: 'common', section: '색상', label: '테마 색상',
@@ -312,7 +302,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
       map: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
     },
     echarts: 'color',
-    help: '선택한 시리즈·차트 요소에 테마 색상을 적용합니다. 영역 지도·행렬 히트맵은 전체 색상 단계를 값 범위에 사용합니다.',
+    help: '시리즈 또는 차트에서 선택한 요소에 팔레트 색상을 적용합니다. 직접 지정한 색은 테마를 바꿔도 유지되고, 지정 해제하면 현재 테마색으로 돌아갑니다.',
   },
   {
     key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
@@ -324,7 +314,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     key: 'colorMap', zone: 'common', section: '색상', label: '시리즈 색상',
     control: 'colorMap', appliesTo: MAJOR_TYPES, default: {},
     echarts: '@colorMap',
-    help: '시리즈 칩을 선택하거나 차트에서 막대·점·조각·지역을 선택한 뒤 색상을 적용합니다. 테마를 바꿔도 직접 지정한 색상은 유지됩니다.',
+    help: '시리즈 목록과 차트에서 선택한 단일 요소 목록을 따로 관리합니다. 차트 요소는 현재 선택 삭제 또는 모두 삭제할 수 있습니다.',
   },
 
   // ── 범례 ──
@@ -351,6 +341,19 @@ export const OPTION_REGISTRY: OptionDef[] = [
     showIf: (o) => o.legend?.show !== false && (o.legend?.position === 'left' || o.legend?.position === 'right'),
     echarts: '@legend.type',
     help: '상·하 범례는 단일행을 보장하기 위해 항상 scroll. 좌·우만 이 토글로 페이지네이션을 켠다',
+  },
+  {
+    key: 'typography.legendFontFamily', zone: 'common', section: '범례', label: '글꼴',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map'], default: 'default',
+    echarts: 'legend.textStyle.fontFamily',
+    choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
+    help: '행렬 히트맵·영역 지도에서는 색상 범례 글꼴에 적용됩니다.',
+  },
+  {
+    key: 'typography.legendFontSize', zone: 'common', section: '범례', label: '글자 크기',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map'], default: null,
+    min: 8, max: 32, step: 1, unit: 'px', echarts: 'legend.textStyle.fontSize',
+    help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다. 행렬 히트맵·영역 지도에서는 색상 범례 글자에 적용됩니다.',
   },
 
   // ── 툴팁 ──
@@ -422,6 +425,20 @@ export const OPTION_REGISTRY: OptionDef[] = [
     showIf: (o) => o.tooltip?.enabled !== false,
     min: 0, max: 40, step: 1, unit: 'px', echarts: 'tooltip.padding',
     help: '브라우저 HTML 툴팁에서 ECharts 기본 계산값은 10px입니다.',
+  },
+  {
+    key: 'typography.tooltipFontFamily', zone: 'common', section: '툴팁', label: '글꼴',
+    control: 'select', appliesTo: MAJOR_TYPES, default: 'default',
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: 'tooltip.textStyle.fontFamily',
+    choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
+  },
+  {
+    key: 'typography.tooltipFontSize', zone: 'common', section: '툴팁', label: '글자 크기',
+    control: 'slider', appliesTo: MAJOR_TYPES, default: null,
+    showIf: (o) => o.tooltip?.enabled !== false,
+    min: 8, max: 32, step: 1, unit: 'px', echarts: 'tooltip.textStyle.fontSize',
+    help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
   },
   {
     key: 'tooltip.contentMode', zone: 'common', section: '툴팁', label: '내용',
@@ -519,15 +536,36 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: 'heatmap = 셀 값, map = 지역명 라벨',
   },
   {
+    key: 'typography.dataLabelFontFamily', zone: 'common', section: '계열', label: '라벨 글꼴',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 'default',
+    showIf: (o) => o.dataLabel === true,
+    echarts: 'series.label.fontFamily',
+    choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
+  },
+  {
+    key: 'typography.dataLabelFontSize', zone: 'common', section: '계열', label: '라벨 글자 크기',
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: null,
+    showIf: (o) => o.dataLabel === true,
+    min: 8, max: 32, step: 1, unit: 'px', echarts: 'series.label.fontSize',
+    help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
+  },
+  {
     key: 'labelPosition', zone: 'common', section: '계열', label: '라벨 위치',
-    control: 'select', appliesTo: ['bar', 'line', 'pie'], tier: 'T2',
-    defaultByType: { bar: 'top', line: 'top', pie: 'outside' },
+    control: 'select', appliesTo: ['bar', 'line'], tier: 'T2',
+    defaultByType: { bar: 'top', line: 'top' },
     showIf: (o) => o.dataLabel === true,
     echarts: 'series.label.position',
     choices: [
       { value: 'top', label: '위' }, { value: 'inside', label: '안쪽' },
-      { value: 'outside', label: '바깥(원형)' },
     ],
+  },
+  {
+    key: 'labelRotate', zone: 'common', section: '계열', label: '라벨 텍스트 방향',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 0, tier: 'T2',
+    showIf: (o) => o.dataLabel === true,
+    echarts: 'series.label.rotate',
+    choices: [{ value: 0, label: '가로' }, { value: 90, label: '세로' }],
+    help: '세로는 라벨을 90° 회전합니다. 라벨이 겹치거나 표시 공간이 좁을 때 사용합니다.',
   },
   {
     key: 'sortOrder', zone: 'common', section: '계열', label: '정렬',
@@ -582,12 +620,27 @@ export const OPTION_REGISTRY: OptionDef[] = [
     key: 'showComputedAt', zone: 'common', section: '데이터 갱신', label: '데이터 기준 시각 표시',
     control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: true,
     showIf: (o) => o.refreshMode !== 'live',
-    echarts: '@none',
+    echarts: '@caption.computedAt',
     help: 'S4 "데이터 기준 {시각}" 캡션 (캐시 모드일 때만)',
   },
 
   // ════════════════════════════ ZONE 2 · 좌표/축 ════════════════════════════
   // 직교 차트(막대·선·산점도)만. 원형 전환 시 숨김+보존(복귀 시 복원).
+
+  // ── 축 글자 ──
+  {
+    key: 'typography.axisFontFamily', zone: 'axis', section: '축 글자', label: '글꼴',
+    control: 'select', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 'default',
+    echarts: '@axis.fontFamily',
+    choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
+    help: 'X·Y 축 제목과 축 레이블에 함께 적용됩니다.',
+  },
+  {
+    key: 'typography.axisFontSize', zone: 'axis', section: '축 글자', label: '글자 크기',
+    control: 'slider', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: null,
+    min: 8, max: 32, step: 1, unit: 'px', echarts: '@axis.fontSize',
+    help: 'X·Y 축의 라벨과 제목에 함께 적용됩니다. 비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
+  },
 
   // ── 여백 ──
   {
@@ -632,6 +685,12 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'segment', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 'bottom',
     echarts: 'xAxis.position',
     choices: [{ value: 'bottom', label: '아래' }, { value: 'top', label: '위' }],
+  },
+  {
+    key: 'xAxis.verticalLabels', zone: 'axis', section: 'X축', label: '라벨 세로쓰기',
+    control: 'toggle', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: false,
+    echarts: '@xAxis.axisLabel.verticalText',
+    help: '한 글자씩 줄을 바꿔 위에서 아래로 쌓습니다. 라벨 회전과 함께 사용할 수 있습니다.',
   },
   {
     key: 'xAxis.rotate', zone: 'axis', section: 'X축', label: '라벨 회전',
@@ -762,6 +821,12 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'segment', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: 'left',
     echarts: 'yAxis.position',
     choices: [{ value: 'left', label: '왼쪽' }, { value: 'right', label: '오른쪽' }],
+  },
+  {
+    key: 'yAxis.verticalLabels', zone: 'axis', section: 'Y축', label: '라벨 세로쓰기',
+    control: 'toggle', appliesTo: ['bar', 'line', 'scatter', 'boxplot', 'heatmap'], default: false,
+    echarts: '@yAxis.axisLabel.verticalText',
+    help: '한 글자씩 줄을 바꿔 위에서 아래로 쌓습니다. 라벨 회전과 함께 사용할 수 있습니다.',
   },
   {
     key: 'yAxis.labelIntervalMode', zone: 'axis', section: 'Y축', label: '라벨 표시',
@@ -960,6 +1025,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
   {
     key: 'pie.labelPosition', zone: 'type', section: '원형', label: '라벨 위치',
     control: 'segment', appliesTo: ['pie'], default: 'outside',
+    showIf: (o) => o.dataLabel === true,
     echarts: 'series.label.position',
     choices: [{ value: 'outside', label: '바깥' }, { value: 'inside', label: '안쪽' }, { value: 'center', label: '중앙' }],
   },
@@ -1000,6 +1066,16 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 지도 (map=코로플레스 · geoscatter=위경도 포인트 공용) ──
+  {
+    key: 'map.name', zone: 'type', section: '지도', label: '행정 경계',
+    control: 'segment', appliesTo: ['map', 'geoscatter'], default: 'kr-sido',
+    echarts: '@map.name',
+    choices: [
+      { value: 'kr-sido', label: '시·도' },
+      { value: 'kr-sigungu', label: '시·군·구' },
+    ],
+    help: '데이터의 지역명 수준과 같은 내장 행정 경계를 선택합니다.',
+  },
   {
     key: 'map.viewport', zone: 'type', section: '지도', label: '표시 영역',
     control: 'mapViewport', appliesTo: ['map', 'geoscatter'], default: { mode: 'data' },
@@ -1052,8 +1128,13 @@ export function defaultOf(def: OptionDef, chartType: MajorType): unknown {
 
 /** 특정 대분류 + 현재 options에서 패널에 노출할 def 목록 (zone → section 순서 유지) */
 export function visibleDefs(chartType: MajorType, options: Options): OptionDef[] {
+  const visibilityOptions = options?.chartType === chartType
+    ? options
+    : { ...options, chartType };
   return OPTION_REGISTRY.filter(
-    (d) => d.appliesTo.includes(chartType) && (!d.showIf || d.showIf(options)),
+    (d) => d.appliesTo.includes(chartType)
+      && (d.key !== 'variant' || getVariants(chartType).length > 1)
+      && (!d.showIf || d.showIf(visibilityOptions)),
   );
 }
 
@@ -1081,8 +1162,10 @@ const TOOLTIP_APPEARANCE_KEYS = new Set([
   'tooltip.borderColor',
   'tooltip.borderWidth',
   'tooltip.padding',
+  'typography.tooltipFontFamily',
+  'typography.tooltipFontSize',
 ]);
-const MAP_AREA_KEYS = new Set(['map.viewport', 'map.roam']);
+const MAP_AREA_KEYS = new Set(['map.name', 'map.viewport', 'map.roam']);
 
 /** 차트 대분류에 맞는 편집 탭을 사용자 작업 순서대로 반환한다. */
 export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
@@ -1095,6 +1178,7 @@ export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
 /** 레지스트리 옵션 하나가 편집 화면에서 속할 작업 탭. */
 export function optionEditorTabOf(def: OptionDef): OptionEditorTab {
   if (MAP_AREA_KEYS.has(def.key)) return 'area';
+  if (def.key === 'pie.labelPosition') return 'series';
   if (def.zone === 'axis') return 'axis';
   if (def.zone === 'type') return def.key === 'seriesTypes' ? 'series' : 'style';
 
@@ -1124,6 +1208,7 @@ export function optionEditorTabOf(def: OptionDef): OptionEditorTab {
 export function optionEditorSectionOf(def: OptionDef): string {
   if (MAP_AREA_KEYS.has(def.key)) return '표시 영역';
   if (def.key === 'geoscatter.symbolSize') return '점';
+  if (def.key === 'pie.labelPosition') return '라벨 · 정렬';
   if (TOOLTIP_APPEARANCE_KEYS.has(def.key)) return '툴팁 모양';
   if (def.section === '계열') return '라벨 · 정렬';
   return def.section;
@@ -1152,7 +1237,7 @@ export function optionEditorSectionOrder(chartType: MajorType, tab: OptionEditor
     case 'series':
       return [...(SERIES_SECTION_ORDER[chartType] ?? []), '분석 표시', '라벨 · 정렬', '범례'];
     case 'axis':
-      return ['여백', 'X축', 'Y축'];
+      return ['축 글자', '여백', 'X축', 'Y축'];
     case 'style':
       return ['색상', ...(STYLE_SECTION_ORDER[chartType] ?? []), '크기', '글꼴'];
     case 'interaction':
@@ -1194,12 +1279,64 @@ function mergeOptions(base: Options, override: Options): Options {
   return merged;
 }
 
+const TYPOGRAPHY_ELEMENT_SIZE_KEYS = [
+  'titleFontSize',
+  'legendFontSize',
+  'axisFontSize',
+  'dataLabelFontSize',
+  'tooltipFontSize',
+] as const;
+
+const TYPOGRAPHY_ELEMENT_FAMILY_KEYS = [
+  'titleFontFamily',
+  'legendFontFamily',
+  'axisFontFamily',
+  'dataLabelFontFamily',
+  'tooltipFontFamily',
+] as const;
+
+/**
+ * 폐기된 typography.mode 일괄 게이트를 요소별 auto/px 계약으로 옮긴다.
+ * 구 UX는 '자동'으로 되돌려도 직전 px 값을 남겨 두었으므로, mode='auto' 저장분의 잔존 px는
+ * 사용자가 의도한 값이 아니다 — 지우고 자동으로 되돌린다. mode='custom'은 px를 그대로 살린다.
+ */
+function migrateLegacyTypographyMode(next: Options): void {
+  if (!next.typography || typeof next.typography !== 'object' || Array.isArray(next.typography)) return;
+  const typography = { ...next.typography };
+  if (!('mode' in typography)) return;
+  if (typography.mode !== 'custom') {
+    for (const key of TYPOGRAPHY_ELEMENT_SIZE_KEYS) delete typography[key];
+  }
+  delete typography.mode;
+  next.typography = typography;
+}
+
+function normalizeStoredFontFamily(value: unknown): string {
+  return value === 'pretendard' || value === 'notoSansKr' ? value : 'default';
+}
+
+/** 전역 글꼴 저장본과 제거된 초기 선택값을 현재 3종 글꼴 계약으로 옮긴다. */
+function migrateLegacyTypographyFontFamily(next: Options): void {
+  if (!next.typography || typeof next.typography !== 'object' || Array.isArray(next.typography)) return;
+  const typography = { ...next.typography };
+  const hasLegacyGlobal = 'fontFamily' in typography;
+  const legacyGlobal = hasLegacyGlobal ? normalizeStoredFontFamily(typography.fontFamily) : undefined;
+  for (const key of TYPOGRAPHY_ELEMENT_FAMILY_KEYS) {
+    if (key in typography) typography[key] = normalizeStoredFontFamily(typography[key]);
+    else if (hasLegacyGlobal) typography[key] = legacyGlobal;
+  }
+  delete typography.fontFamily;
+  next.typography = typography;
+}
+
 /**
  * 지도 전용이던 상호작용 설정을 공통 계약으로 승격한다.
  * 서버에도 같은 규칙이 있어, 편집기를 거치지 않는 구 저장 데이터도 호환된다.
  */
 export function migrateLegacyInteractionOptions(options: Options, chartType: MajorType): Options {
   const next: Options = structuredClone(options ?? {});
+  migrateLegacyTypographyMode(next);
+  migrateLegacyTypographyFontFamily(next);
   const isCartesian = ['bar', 'line', 'scatter', 'boxplot', 'heatmap'].includes(chartType);
   if (isCartesian) {
     const metadata = next._chartsdk && typeof next._chartsdk === 'object' ? { ...next._chartsdk } : {};

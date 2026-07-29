@@ -17,6 +17,19 @@ export function hasChartTitle(option: Record<string, unknown>): boolean {
   return !!(title && title.text);
 }
 
+/**
+ * 폭 제한 + 말줄임을 주입해도 되는 제목인지.
+ *
+ * 세로쓰기 제목은 변환기가 글자마다 줄바꿈을 넣어 보낸다. 여기에 폭 제한을 걸면
+ * 모든 줄이 한 글자 폭에 맞춰 잘리므로 제외한다. 최초 setOption 과 resize 패치가
+ * 같은 판정을 써야 리사이즈 때 세로 제목이 다시 잘리지 않는다.
+ */
+export function usesResponsiveTitle(option: Record<string, unknown>): boolean {
+  if (!hasChartTitle(option)) return false;
+  const title = option.title as TitleOption;
+  return !(typeof title.text === 'string' && title.text.includes('\n'));
+}
+
 export function responsiveTitlePatch(containerWidth: number): Record<string, unknown> {
   return {
     title: {
@@ -32,7 +45,7 @@ export function withResponsiveTitle(
   option: Record<string, unknown>,
   containerWidth: number,
 ): Record<string, unknown> {
-  if (!hasChartTitle(option)) return option;
+  if (!usesResponsiveTitle(option)) return option;
   const title = option.title as TitleOption;
   const patch = responsiveTitlePatch(containerWidth) as { title: { textStyle: Record<string, unknown> } };
   return {

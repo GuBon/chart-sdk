@@ -61,6 +61,7 @@
     },
     "expected": {
       "visualMap.bottom": 26,
+      "series.0.bottom": 62,
       "series.0.label.show": true,
       "series.0.labelLayout.hideOverlap": true
     }
@@ -121,6 +122,24 @@
     }
   },
   {
+    "name": "portrait-preset-keeps-matching-auto-font-step",
+    "chartType": "bar",
+    "options": {
+      "title": "세로 표준 차트",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" },
+      "display": { "preset": "standardPortrait" },
+      "typography": { "scale": 100 }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 18,
+      "legend.top": 26,
+      "legend.textStyle.fontSize": 12,
+      "grid.top": 78,
+      "xAxis.axisLabel.fontSize": 12
+    }
+  },
+  {
     "name": "custom-tall-size-recalculates-auto-fonts",
     "chartType": "bar",
     "options": {
@@ -142,6 +161,288 @@
     }
   },
   {
+    "name": "typography-per-element-mix",
+    "chartType": "bar",
+    "options": {
+      "title": "요소별 혼합",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" },
+      "dataLabel": true,
+      "typography": { "scale": 120, "titleFontSize": 30 }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 30,
+      "legend.textStyle.fontSize": 14,
+      "legend.top": 40,
+      "grid.top": 95,
+      "xAxis.axisLabel.fontSize": 14,
+      "series.0.label.fontSize": 14,
+      "tooltip.textStyle.fontSize": 14
+    }
+  },
+  {
+    "name": "typography-legacy-auto-ignores-stale-px",
+    "chartType": "bar",
+    "options": {
+      "title": "구 자동 저장분",
+      "titleV": "top",
+      "legend": { "show": true, "position": "top" },
+      "typography": { "mode": "auto", "scale": 100, "titleFontSize": 44, "legendFontSize": 30 }
+    },
+    "expected": {
+      "title.textStyle.fontSize": 18,
+      "legend.textStyle.fontSize": 12,
+      "legend.top": 26,
+      "grid.top": 78
+    }
+  },
+  {
+    "name": "font-family-per-element",
+    "chartType": "bar",
+    "options": {
+      "title": "명조 제목",
+      "legend": { "show": true },
+      "dataLabel": true,
+      "typography": {
+        "titleFontFamily": "pretendard",
+        "legendFontFamily": "notoSansKr",
+        "axisFontFamily": "pretendard",
+        "dataLabelFontFamily": "notoSansKr",
+        "tooltipFontFamily": "pretendard"
+      }
+    },
+    "expected": {
+      "title.textStyle.fontFamily": "'ChartSDK Pretendard',sans-serif",
+      "legend.textStyle.fontFamily": "'ChartSDK Noto Sans KR',sans-serif",
+      "xAxis.axisLabel.fontFamily": "'ChartSDK Pretendard',sans-serif",
+      "xAxis.nameTextStyle.fontFamily": "'ChartSDK Pretendard',sans-serif",
+      "series.0.label.fontFamily": "'ChartSDK Noto Sans KR',sans-serif",
+      "tooltip.textStyle.fontFamily": "'ChartSDK Pretendard',sans-serif"
+    },
+    "absent": ["textStyle"]
+  },
+  {
+    "name": "font-family-legacy-global-migrates-to-elements",
+    "chartType": "bar",
+    "options": {
+      "title": "구 저장 제목",
+      "dataLabel": true,
+      "typography": { "fontFamily": "notoSansKr" }
+    },
+    "expected": {
+      "title.textStyle.fontFamily": "'ChartSDK Noto Sans KR',sans-serif",
+      "xAxis.axisLabel.fontFamily": "'ChartSDK Noto Sans KR',sans-serif",
+      "series.0.label.fontFamily": "'ChartSDK Noto Sans KR',sans-serif",
+      "tooltip.textStyle.fontFamily": "'ChartSDK Noto Sans KR',sans-serif"
+    },
+    "absent": ["textStyle"]
+  },
+  {
+    "name": "font-family-removed-choice-keeps-renderer-default",
+    "chartType": "bar",
+    "options": {
+      "title": "고딕 제목",
+      "typography": { "fontFamily": "gothic" }
+    },
+    "expected": {},
+    "absent": [
+      "textStyle",
+      "title.textStyle.fontFamily",
+      "xAxis.axisLabel.fontFamily",
+      "tooltip.textStyle.fontFamily"
+    ]
+  },
+  {
+    "name": "vertical-title-stacks-characters-and-reserves-height",
+    "chartType": "bar",
+    "options": {
+      "title": "매출추이",
+      "titleV": "top",
+      "titleDirection": "vertical",
+      "legend": { "show": true, "position": "top" }
+    },
+    "expected": {
+      "title.text": "매\n출\n추\n이",
+      "title.textStyle.fontSize": 18,
+      "legend.top": 92,
+      "grid.top": 144
+    }
+  },
+  {
+    "name": "horizontal-title-keeps-single-line",
+    "chartType": "bar",
+    "options": {
+      "title": "매출추이",
+      "titleV": "top",
+      "titleDirection": "horizontal",
+      "legend": { "show": true, "position": "top" }
+    },
+    "expected": {
+      "title.text": "매출추이",
+      "legend.top": 26,
+      "grid.top": 78
+    }
+  },
+  {
+    "name": "vertical-title-reserves-pie-series-box",
+    "chartType": "pie",
+    "options": {
+      "title": "매출추이",
+      "titleV": "top",
+      "titleDirection": "vertical",
+      "legend": { "show": true, "position": "top" }
+    },
+    "expected": {
+      "title.text": "매\n출\n추\n이",
+      "legend.top": 92,
+      "series.0.top": 116,
+      "series.0.bottom": 0
+    }
+  },
+  {
+    "name": "pie-label-stays-hidden-when-position-and-variant-are-set",
+    "chartType": "pie",
+    "options": {
+      "variant": "pie",
+      "dataLabel": false,
+      "pie": { "labelPosition": "outside" }
+    },
+    "expected": {
+      "series.0.label.show": false,
+      "series.0.label.position": "outside"
+    }
+  },
+  {
+    "name": "pie-label-toggle-enables-position-and-rotation",
+    "chartType": "pie",
+    "options": {
+      "variant": "donut",
+      "dataLabel": true,
+      "labelRotate": 90,
+      "pie": { "labelPosition": "inside" }
+    },
+    "expected": {
+      "series.0.label.show": true,
+      "series.0.label.position": "inside",
+      "series.0.label.rotate": 90
+    }
+  },
+  {
+    "name": "label-rotate-turns-bar-labels-vertical",
+    "chartType": "bar",
+    "options": {
+      "dataLabel": true,
+      "labelRotate": 90
+    },
+    "expected": {
+      "series.0.label.show": true,
+      "series.0.label.rotate": 90
+    }
+  },
+  {
+    "name": "label-rotate-turns-scatter-labels-vertical",
+    "chartType": "scatter",
+    "options": {
+      "dataLabel": true,
+      "labelRotate": 90
+    },
+    "expected": {
+      "series.0.label.show": true,
+      "series.0.label.rotate": 90
+    }
+  },
+  {
+    "name": "datazoom-inside-x-axis",
+    "chartType": "line",
+    "options": {
+      "dataZoom": { "enabled": true, "axis": "x" }
+    },
+    "expected": {
+      "dataZoom.0.type": "inside",
+      "dataZoom.0.xAxisIndex.0": 0,
+      "dataZoom.0.filterMode": "filter"
+    },
+    "absent": ["dataZoom.0.yAxisIndex"]
+  },
+  {
+    "name": "datazoom-inside-both-axes",
+    "chartType": "bar",
+    "options": {
+      "dataZoom": { "enabled": true, "axis": "both" }
+    },
+    "expected": {
+      "dataZoom.0.type": "inside",
+      "dataZoom.0.xAxisIndex.0": 0,
+      "dataZoom.0.yAxisIndex.0": 0
+    }
+  },
+  {
+    "name": "datazoom-both-axes-includes-second-y-axis",
+    "chartType": "line",
+    "options": {
+      "yAxis": { "secondAxis": true },
+      "dataZoom": { "enabled": true, "axis": "both" }
+    },
+    "expected": {
+      "dataZoom.0.xAxisIndex.0": 0,
+      "dataZoom.0.yAxisIndex.0": 0,
+      "dataZoom.0.yAxisIndex.1": 1
+    }
+  },
+  {
+    "name": "datazoom-invalid-axis-falls-back-to-x",
+    "chartType": "bar",
+    "options": {
+      "dataZoom": { "enabled": true, "axis": "diagonal" }
+    },
+    "expected": {
+      "dataZoom.0.xAxisIndex.0": 0
+    },
+    "absent": ["dataZoom.0.yAxisIndex"]
+  },
+  {
+    "name": "datazoom-remains-enabled-for-legacy-disabled-option",
+    "chartType": "bar",
+    "options": {
+      "dataZoom": { "enabled": false, "axis": "x" }
+    },
+    "expected": {
+      "dataZoom.0.type": "inside",
+      "dataZoom.0.xAxisIndex.0": 0
+    },
+    "absent": ["dataZoom.0.yAxisIndex"]
+  },
+  {
+    "name": "datazoom-horizontal-bar-automatically-uses-category-y-axis",
+    "chartType": "bar",
+    "options": {
+      "variant": "horizontal"
+    },
+    "expected": {
+      "dataZoom.0.type": "inside",
+      "dataZoom.0.yAxisIndex.0": 0
+    },
+    "absent": ["dataZoom.0.xAxisIndex"]
+  },
+  {
+    "name": "datazoom-scatter-automatically-uses-both-axes",
+    "chartType": "scatter",
+    "options": {},
+    "expected": {
+      "dataZoom.0.xAxisIndex.0": 0,
+      "dataZoom.0.yAxisIndex.0": 0
+    }
+  },
+  {
+    "name": "datazoom-absent-for-pie",
+    "chartType": "pie",
+    "options": {
+      "dataZoom": { "enabled": true, "axis": "x" }
+    },
+    "expected": {},
+    "absent": ["dataZoom"]
+  },
+  {
     "name": "category-axis-shows-all-labels-and-keeps-titles-inside",
     "chartType": "bar",
     "options": {
@@ -160,6 +461,87 @@
       "yAxis.name": "인구수",
       "yAxis.nameLocation": "middle",
       "yAxis.nameGap": 56
+    }
+  },
+  {
+    "name": "bar-axis-labels-carry-upright-vertical-runtime-metadata",
+    "chartType": "bar",
+    "options": {
+      "xAxis": { "verticalLabels": true, "rotate": 45 },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "x",
+      "xAxis.axisLabel.rotate": 45,
+      "yAxis.__chartsdkVerticalLabel": "y"
+    },
+    "absent": [
+      "yAxis.axisLabel.rotate"
+    ]
+  },
+  {
+    "name": "horizontal-bar-keeps-logical-axis-role-for-upright-labels",
+    "chartType": "bar",
+    "options": {
+      "variant": "horizontal",
+      "xAxis": { "verticalLabels": true, "rotate": 45 },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "y",
+      "yAxis.__chartsdkVerticalLabel": "x",
+      "yAxis.axisLabel.rotate": 45
+    },
+    "absent": [
+      "xAxis.axisLabel.rotate"
+    ]
+  },
+  {
+    "name": "line-axis-labels-support-upright-vertical-text",
+    "chartType": "line",
+    "options": {
+      "xAxis": { "verticalLabels": true },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "x",
+      "yAxis.__chartsdkVerticalLabel": "y"
+    }
+  },
+  {
+    "name": "scatter-numeric-axis-labels-support-upright-vertical-text",
+    "chartType": "scatter",
+    "options": {
+      "xAxis": { "verticalLabels": true },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "x",
+      "yAxis.__chartsdkVerticalLabel": "y"
+    }
+  },
+  {
+    "name": "boxplot-axis-labels-support-upright-vertical-text",
+    "chartType": "boxplot",
+    "options": {
+      "xAxis": { "verticalLabels": true },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "x",
+      "yAxis.__chartsdkVerticalLabel": "y"
+    }
+  },
+  {
+    "name": "heatmap-category-axes-support-upright-vertical-text",
+    "chartType": "heatmap",
+    "options": {
+      "xAxis": { "verticalLabels": true },
+      "yAxis": { "verticalLabels": true }
+    },
+    "expected": {
+      "xAxis.__chartsdkVerticalLabel": "x",
+      "yAxis.__chartsdkVerticalLabel": "y"
     }
   }
 ]

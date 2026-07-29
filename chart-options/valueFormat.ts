@@ -7,6 +7,7 @@ type TooltipMetadata = {
   chartType?: MajorType;
   template?: string;
 };
+type VerticalAxisRole = 'x' | 'y';
 
 type TooltipParams = {
   seriesId?: unknown;
@@ -33,6 +34,7 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
       axis.axisLabel.formatter = (value: unknown) => formatChartValue(value, metadata.yAxis ?? 'raw', metadata.unit ?? '');
     }
   }
+  hydrateVerticalAxisLabels(option, metadata);
 
   if (option.tooltip && tooltipMetadata?.template && tooltipMetadata.chartType) {
     const valueFormatter = typeof option.tooltip.valueFormatter === 'function'
@@ -52,6 +54,41 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
     };
   }
   return option;
+}
+
+/**
+ * ECharts Canvas 축 라벨에는 CSS writing-mode을 적용할 수 없다.
+ * 서버가 남긴 축 역할 메타데이터를 글자 단위 줄바꿈 formatter로 복원해,
+ * 글자를 90° 돌리지 않고 위에서 아래로 읽는 실제 세로쓰기를 만든다.
+ */
+function hydrateVerticalAxisLabels(option: Record<string, any>, metadata?: FormatMetadata): void {
+  const axes = [
+    ...(Array.isArray(option.xAxis) ? option.xAxis : option.xAxis ? [option.xAxis] : []),
+    ...(Array.isArray(option.yAxis) ? option.yAxis : option.yAxis ? [option.yAxis] : []),
+  ];
+  for (const axis of axes) {
+    const role = axis?.__chartsdkVerticalLabel as VerticalAxisRole | undefined;
+    delete axis?.__chartsdkVerticalLabel;
+    if ((role !== 'x' && role !== 'y') || !axis) continue;
+
+    axis.axisLabel = { ...(axis.axisLabel ?? {}) };
+    // 세로쓰기는 formatter만 교체하고 기존 rotate는 보존한다. category 축과 논리 X축은 원문을,
+    // 논리 Y 수치축은 기존 단위·숫자 포맷을 먼저 적용한 뒤 세로로 쌓는다.
+    const format = role === 'y' && axis.type !== 'category' && metadata
+      ? (value: unknown) => formatChartValue(value, metadata.yAxis ?? 'raw', metadata.unit ?? '')
+      : (value: unknown) => String(value ?? '');
+    axis.axisLabel.formatter = (value: unknown) => verticalizeAxisLabel(format(value));
+  }
+}
+
+/** 결합문자·이모지 ZWJ 시퀀스를 쪼개지 않는 grapheme 단위 세로쓰기. */
+export function verticalizeAxisLabel(value: unknown): string {
+  const text = String(value ?? '');
+  if (!text) return '';
+  const segments = typeof Intl.Segmenter === 'function'
+    ? [...new Intl.Segmenter('ko', { granularity: 'grapheme' }).segment(text)].map((entry) => entry.segment)
+    : Array.from(text);
+  return segments.filter((segment) => segment !== '\r' && segment !== '\n').join('\n');
 }
 
 function renderTooltip(
