@@ -8,11 +8,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -24,45 +22,38 @@ public class ChartComputeService {
     private final JdbcTemplate jdbc;
     private final FederatedQueryRunner runner;
     private final ChartCacheService cache;
+    private final ChartRefreshCoordinator refreshes;
     private final ObjectMapper mapper;
 
-    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache, ObjectMapper mapper) {
+    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
+                               ChartRefreshCoordinator refreshes, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.runner = runner;
         this.cache = cache;
+        this.refreshes = refreshes;
         this.mapper = mapper;
     }
 
     /** 차트를 즉시 재계산해 캐시에 반영. 차트 없으면 404. */
     public CachedChartRows recompute(long chartId) {
         Chart chart = definition(chartId);
-        Computed computed = execute(chartId, chart);
-        return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
+        try {
+            Computed computed = execute(chartId, chart);
+            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
+        } catch (RuntimeException failure) {
+            recordFailureQuietly(chartId, failure);
+            throw failure;
+        }
     }
 
     /**
-     * 임베드 핫패스의 단일 비행(single-flight) 재계산 — 캐시 미스/만료 시 호출.
-     * pg_try_advisory_xact_lock 으로 동시 재계산을 한 요청으로 합치고, 경쟁에서 진 요청은
-     * allowStale 이면 기존 stale 캐시를 즉시 반환한다. advisory lock은 트랜잭션 종료 시 자동 해제된다.
+     * 임베드 핫패스의 단일 비행(single-flight) 재계산.
+     * 실제 트랜잭션·advisory lock 소유는 별도 프록시 빈 ChartRefreshCoordinator가 담당한다.
      */
-    @Transactional
-    public CachedChartRows refreshSingleFlight(long chartId, boolean allowStale, SamplingMetadata sampling) {
-        Boolean won = jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(?)", Boolean.class, chartId);
-        if (Boolean.TRUE.equals(won)) {
-            Chart chart = definition(chartId);
-            Computed computed = execute(chartId, chart);
-            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
-        }
-        if (allowStale) {
-            Optional<CachedChartRows> stale = matchingSampling(cache.find(chartId), sampling);
-            if (stale.isPresent()) return stale.get();
-        }
-        jdbc.query("SELECT pg_advisory_xact_lock(?)", rs -> null, chartId);
-        return matchingSampling(cache.find(chartId), sampling).orElseGet(() -> {
-            Chart chart = definition(chartId);
-            Computed computed = execute(chartId, chart);
-            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
-        });
+    public CachedChartRows refreshSingleFlight(long chartId, int definitionVersion,
+                                               boolean allowStale, SamplingMetadata sampling) {
+        return refreshes.refreshSingleFlight(
+                chartId, definitionVersion, allowStale, sampling, () -> recompute(chartId));
     }
 
     /**
@@ -72,13 +63,14 @@ public class ChartComputeService {
     public CachedChartRows serve(long chartId, String refreshMode, int cacheTtlSeconds,
                                  int definitionVersion, SamplingMetadata sampling) {
         if (isMultiSource(chartId)) {
-            return matchingSampling(cache.find(chartId), sampling)
+            return cache.findCompatible(chartId, definitionVersion, sampling)
                     .orElseThrow(() -> new ApiException(
                             HttpStatus.SERVICE_UNAVAILABLE, "SNAPSHOT_NOT_READY",
                             "Multi-source chart snapshot is not ready; refresh the chart to compute it."));
         }
-        return matchingSampling(cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion), sampling)
-                .orElseGet(() -> refreshSingleFlight(chartId, !"live".equals(refreshMode), sampling));
+        return cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion, sampling)
+                .orElseGet(() -> refreshSingleFlight(
+                        chartId, definitionVersion, !"live".equals(refreshMode), sampling));
     }
 
     /** 차트가 2개 이상 데이터소스를 참조하는가 — 임베드 캐시-온리 판정의 단일 진실원. */
@@ -87,12 +79,13 @@ public class ChartComputeService {
         return n != null && n >= 2;
     }
 
-    /** 저장 직후 캐시 시드(베스트 에포트). 데이터소스 장애로 실패해도 저장은 유지한다. */
-    public void seedQuietly(long chartId) {
+    /** 저장 검증에서 이미 계산한 결과를 재조회 없이 현재 정의 버전의 캐시로 시드한다. */
+    public void seedPreparedQuietly(long chartId, QueryRows rows, int definitionVersion,
+                                    SamplingMetadata sampling) {
         try {
-            recompute(chartId);
-        } catch (RuntimeException ignored) {
-            // 시드는 self-heal로 대체 가능 — 저장 트랜잭션을 깨지 않는다.
+            cache.upsert(chartId, rows, definitionVersion, sampling);
+        } catch (RuntimeException failure) {
+            recordFailureQuietly(chartId, failure);
         }
     }
 
@@ -135,16 +128,17 @@ public class ChartComputeService {
         }
     }
 
-    /** 구 1,000행 절단 캐시와 sampling 계약이 없는 구 표본 캐시는 미스로 처리해 현재 실행 계약으로 재계산한다. */
-    private Optional<CachedChartRows> matchingSampling(Optional<CachedChartRows> cached, SamplingMetadata sampling) {
-        cached = cached.filter(rows -> !rows.rows().truncated());
-        if (sampling == null) return cached.filter(rows -> rows.sampling() == null);
-        return cached.filter(rows -> rows.sampling() != null && rows.sampling().matchesDefinition(sampling));
-    }
-
     private Set<Long> datasources(long chartId) {
         return new LinkedHashSet<>(
                 jdbc.queryForList("SELECT datasource_id FROM mc_chart_datasource WHERE chart_id=?", Long.class, chartId));
+    }
+
+    private void recordFailureQuietly(long chartId, RuntimeException failure) {
+        try {
+            cache.recordFailure(chartId, failure);
+        } catch (RuntimeException ignored) {
+            // 메타 DB 자체 장애가 원인이면 실패 상태 기록도 불가능하다. 원래 계산 예외를 보존한다.
+        }
     }
 
     record Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,

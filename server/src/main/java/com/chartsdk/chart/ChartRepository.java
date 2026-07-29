@@ -144,7 +144,8 @@ public class ChartRepository {
                 valueOrDefault(input.cacheTtlSeconds(), 3600));
     }
 
-    public int update(Long ownerId, long id, ChartSaveRequest input) {
+    /** 수정 성공 시 증가된 정의 버전, 소유자/낙관적 락 불일치 시 null을 반환한다. */
+    public Integer update(Long ownerId, long id, ChartSaveRequest input) {
         Integer expectedVersion = input.version();
         StringBuilder sql = new StringBuilder("""
                 UPDATE mc_chart
@@ -169,7 +170,8 @@ public class ChartRepository {
             sql.append(" AND version=?");
             args.add(expectedVersion);
         }
-        return jdbc.update(sql.toString(), args.toArray());
+        sql.append(" RETURNING version");
+        return jdbc.query(sql.toString(), rs -> rs.next() ? rs.getInt("version") : null, args.toArray());
     }
 
     public boolean exists(Long ownerId, long id) {
@@ -226,7 +228,9 @@ public class ChartRepository {
     public void copyCache(long newId, long originalId) {
         jdbc.update("""
                 INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)
-                SELECT ?, result, computed_at, elapsed_ms, row_count, 0 FROM mc_chart_cache WHERE chart_id=?
+                SELECT ?, result, computed_at, elapsed_ms, row_count, 0
+                  FROM mc_chart_cache
+                 WHERE chart_id=? AND result IS NOT NULL
                 ON CONFLICT (chart_id) DO NOTHING
                 """, newId, originalId);
     }

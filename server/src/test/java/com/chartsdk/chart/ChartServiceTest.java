@@ -3,11 +3,14 @@ package com.chartsdk.chart;
 import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartComputeService;
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.ApiException;
+import com.chartsdk.web.dto.ChartSaveRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -16,12 +19,16 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -89,5 +96,67 @@ class ChartServiceTest {
 
         verify(charts).previewDefinition(42L, 12L);
         verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    void createReusesBuilderValidationResultForCacheSeedWithoutSecondSourceQuery() {
+        Map<String, Object> builder = Map.of(
+                "table", "sales",
+                "xAxis", "category",
+                "yAxis", List.of(Map.of("column", "amount", "agg", "sum"))
+        );
+        SamplingMetadata sampling = SamplingMetadata.system(10);
+        FederatedQueryRunner.BuiltResult built = new FederatedQueryRunner.BuiltResult(
+                queryRows,
+                new BuilderSqlBuilder.Sql("SELECT category, SUM(amount) FROM sales GROUP BY category", List.of(), sampling),
+                Set.of(1L),
+                sampling
+        );
+        when(runner.runBuilder(1L, builder, "bar", false)).thenReturn(built);
+        when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(21L);
+        when(charts.get(null, 21L)).thenReturn(Map.of("id", 21L));
+        ChartSaveRequest request = new ChartSaveRequest(
+                "매출", null, 1L, "builder", null, builder, "bar", Map.of(), "ttl", 3600, null);
+
+        assertThat(service.create(request)).containsEntry("id", 21L);
+
+        verify(runner, times(1)).runBuilder(1L, builder, "bar", false);
+        verify(compute).seedPreparedQuietly(21L, queryRows, 0, sampling);
+        verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    void rawSqlSaveRunsUnboundedQueryOnceAndSeedsThatExactResult() {
+        String sql = "SELECT category, amount FROM sales";
+        when(queries.executeUnbounded(1L, sql, List.of())).thenReturn(queryRows);
+        when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(22L);
+        when(charts.get(null, 22L)).thenReturn(Map.of("id", 22L));
+        ChartSaveRequest request = new ChartSaveRequest(
+                "원시 SQL", null, 1L, "raw", sql, null, "bar", Map.of(), "manual", 3600, null);
+
+        service.create(request);
+
+        verify(queries, times(1)).executeUnbounded(1L, sql, List.of());
+        verify(compute).seedPreparedQuietly(22L, queryRows, 0, null);
+        verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    void updateSeedsPreparedResultWithRepositoryReturnedVersion() {
+        Map<String, Object> builder = Map.of("table", "sales");
+        when(runner.runBuilder(1L, builder, "bar", false)).thenReturn(
+                new FederatedQueryRunner.BuiltResult(
+                        queryRows,
+                        new BuilderSqlBuilder.Sql("SELECT * FROM sales", List.of()),
+                        Set.of(1L)
+                ));
+        when(charts.update(eq(null), eq(12L), any(ChartSaveRequest.class))).thenReturn(4);
+        when(charts.get(null, 12L)).thenReturn(Map.of("id", 12L, "version", 4));
+        ChartSaveRequest request = new ChartSaveRequest(
+                "수정", null, 1L, "builder", null, builder, "bar", Map.of(), "ttl", 3600, 3);
+
+        service.update(12L, request);
+
+        verify(compute).seedPreparedQuietly(12L, queryRows, 4, null);
     }
 }

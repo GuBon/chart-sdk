@@ -40,7 +40,9 @@ class ChartComputeServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
     private final ChartCacheService cache = mock(ChartCacheService.class);
-    private final ChartComputeService compute = spy(new ChartComputeService(jdbc, runner, cache, new ObjectMapper()));
+    private final ChartRefreshCoordinator refreshes = mock(ChartRefreshCoordinator.class);
+    private final ChartComputeService compute =
+            spy(new ChartComputeService(jdbc, runner, cache, refreshes, new ObjectMapper()));
 
     private static CachedChartRows snapshot() {
         return new CachedChartRows(new QueryRows(List.of(), List.of(), 0, false, 1), Instant.now());
@@ -53,61 +55,63 @@ class ChartComputeServiceTest {
     @Test
     void multiSourceServesCacheSnapshotWithoutFederating() {
         doReturn(true).when(compute).isMultiSource(1L);
-        when(cache.find(1L)).thenReturn(Optional.of(snapshot()));
+        when(cache.findCompatible(1L, 0, null)).thenReturn(Optional.of(snapshot()));
 
         assertThat(compute.serve(1L, "manual", 3600, 0, null)).isNotNull();
 
         // 핵심 불변식: 다중 소스 서빙은 재계산(페더레이션)을 절대 호출하지 않는다.
-        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
+        verify(compute, never()).refreshSingleFlight(
+                anyLong(), org.mockito.ArgumentMatchers.anyInt(), anyBoolean(), nullable(SamplingMetadata.class));
     }
 
     @Test
     void multiSourceWithoutSnapshotThrowsInsteadOfFederating() {
         doReturn(true).when(compute).isMultiSource(1L);
-        when(cache.find(1L)).thenReturn(Optional.empty());
+        when(cache.findCompatible(1L, 0, null)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> compute.serve(1L, "manual", 3600, 0, null))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("snapshot is not ready");
 
-        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
+        verify(compute, never()).refreshSingleFlight(
+                anyLong(), org.mockito.ArgumentMatchers.anyInt(), anyBoolean(), nullable(SamplingMetadata.class));
     }
 
     @Test
     void singleSourceRecomputesOnCacheMiss() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "ttl", 3600, 0)).thenReturn(Optional.empty());
-        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, true, null);
+        when(cache.findUsable(1L, "ttl", 3600, 0, null)).thenReturn(Optional.empty());
+        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, 0, true, null);
 
         assertThat(compute.serve(1L, "ttl", 3600, 0, null)).isNotNull();
 
-        verify(compute, times(1)).refreshSingleFlight(1L, true, null);
+        verify(compute, times(1)).refreshSingleFlight(1L, 0, true, null);
     }
 
     @Test
     void legacyThousandRowTruncatedCacheIsRecomputed() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(truncatedSnapshot()));
-        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, true, null);
+        when(cache.findUsable(1L, "manual", 3600, 0, null)).thenReturn(Optional.empty());
+        doReturn(snapshot()).when(compute).refreshSingleFlight(1L, 0, true, null);
 
         assertThat(compute.serve(1L, "manual", 3600, 0, null).rows().truncated()).isFalse();
 
-        verify(compute).refreshSingleFlight(1L, true, null);
+        verify(compute).refreshSingleFlight(1L, 0, true, null);
     }
 
     @Test
     void legacySampleCacheWithoutMetadataIsRecomputed() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(snapshot()));
+        when(cache.findUsable(1L, "manual", 3600, 0, SamplingMetadata.system(10))).thenReturn(Optional.empty());
         SamplingMetadata executed = SamplingMetadata.system(10).withExecution(
                 25, List.of(new SamplingMetadata.GroupSampleCount("A", 25)), List.of(), List.of());
         CachedChartRows refreshed = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
-        doReturn(refreshed).when(compute).refreshSingleFlight(1L, true, SamplingMetadata.system(10));
+        doReturn(refreshed).when(compute).refreshSingleFlight(1L, 0, true, SamplingMetadata.system(10));
 
         CachedChartRows rows = compute.serve(1L, "manual", 3600, 0, SamplingMetadata.system(10));
 
         assertThat(rows.sampling()).isEqualTo(executed);
-        verify(compute).refreshSingleFlight(1L, true, SamplingMetadata.system(10));
+        verify(compute).refreshSingleFlight(1L, 0, true, SamplingMetadata.system(10));
     }
 
     @Test
@@ -117,13 +121,14 @@ class ChartComputeServiceTest {
         SamplingMetadata executed = definition.withExecution(
                 42, List.of(new SamplingMetadata.GroupSampleCount("A", 42)), definition.estimates(), List.of());
         CachedChartRows cached = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
-        when(cache.findUsable(1L, "manual", 3600, 0)).thenReturn(Optional.of(cached));
+        when(cache.findUsable(1L, "manual", 3600, 0, definition)).thenReturn(Optional.of(cached));
 
         CachedChartRows served = compute.serve(1L, "manual", 3600, 0, definition);
 
         assertThat(served).isSameAs(cached);
         assertThat(served.sampling().sampledRowCount()).isEqualTo(42L);
-        verify(compute, never()).refreshSingleFlight(anyLong(), anyBoolean(), nullable(SamplingMetadata.class));
+        verify(compute, never()).refreshSingleFlight(
+                anyLong(), org.mockito.ArgumentMatchers.anyInt(), anyBoolean(), nullable(SamplingMetadata.class));
     }
 
     @Test
@@ -153,6 +158,20 @@ class ChartComputeServiceTest {
 
         verify(runner).runBuilder(2L, builderConfig, "bar", false);
         verify(runner, never()).runStored(any(), anyLong(), anyString());
+    }
+
+    @Test
+    void recomputeRecordsFailureWithoutReplacingLastSuccessfulCache() {
+        ChartComputeService.Chart definition = new ChartComputeService.Chart(
+                2L, "raw", "SELECT broken", Map.of(), "bar", 4, null);
+        RuntimeException failure = new RuntimeException("source unavailable");
+        doReturn(definition).when(compute).definition(1L);
+        when(runner.runStored(any(), eq(2L), eq("SELECT broken"))).thenThrow(failure);
+
+        assertThatThrownBy(() -> compute.recompute(1L)).isSameAs(failure);
+
+        verify(cache).recordFailure(1L, failure);
+        verify(cache, never()).upsert(eq(1L), any(), eq(4), nullable(SamplingMetadata.class));
     }
 
     @Test

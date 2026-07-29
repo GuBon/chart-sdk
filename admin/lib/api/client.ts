@@ -45,6 +45,7 @@ async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
   const { body, headers, ...rest } = init;
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
+    cache: rest.cache ?? 'no-store',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

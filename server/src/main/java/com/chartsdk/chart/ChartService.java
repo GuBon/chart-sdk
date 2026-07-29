@@ -3,6 +3,7 @@ package com.chartsdk.chart;
 import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartComputeService;
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.federation.FederatedQueryRunner;
@@ -73,22 +74,22 @@ public class ChartService {
         Prepared prepared = prepareForSave(input);
         Long id = charts.create(ownerId(), prepared.request());
         charts.setChartDatasources(id, prepared.datasources());
-        compute.seedQuietly(id);
+        compute.seedPreparedQuietly(id, prepared.rows(), 0, prepared.sampling());
         return charts.get(ownerId(), id);
     }
 
     public Map<String, Object> update(long id, ChartSaveRequest input) {
         Prepared prepared = prepareForSave(input);
         Long ownerId = ownerId();
-        int updated = charts.update(ownerId, id, prepared.request());
-        if (updated == 0) {
+        Integer updatedVersion = charts.update(ownerId, id, prepared.request());
+        if (updatedVersion == null) {
             if (charts.exists(ownerId, id)) {
                 throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "Chart was modified elsewhere; reload and retry.");
             }
             throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
         }
         charts.setChartDatasources(id, prepared.datasources());
-        compute.seedQuietly(id);
+        compute.seedPreparedQuietly(id, prepared.rows(), updatedVersion, prepared.sampling());
         return charts.get(ownerId, id);
     }
 
@@ -138,8 +139,12 @@ public class ChartService {
         return response;
     }
 
-    /** 저장 준비 결과 — 정규화된 요청 + 참조 데이터소스 집합(junction 영속화용). 소스 집합은 runBuilder 가 이미 계산한 값을 재사용(재계산 제거). */
-    private record Prepared(ChartSaveRequest request, Set<Long> datasources) {
+    /**
+     * 저장 준비 결과. 검증 과정에서 얻은 전체 차트 결과까지 보존해 저장 직후 캐시 시드가
+     * 원본 데이터소스를 두 번째로 조회하지 않도록 한다.
+     */
+    private record Prepared(ChartSaveRequest request, Set<Long> datasources,
+                            com.chartsdk.query.QueryRows rows, SamplingMetadata sampling) {
     }
 
     private Prepared prepareForSave(ChartSaveRequest input) {
@@ -156,13 +161,24 @@ public class ChartService {
             Set<Long> datasources = built.datasourceIds();
             // 다중 소스는 스냅샷 모델 → refresh_mode 를 manual 로 고정(임베드는 캐시-온리라 live 무의미, §7).
             String refreshMode = datasources.size() >= 2 ? "manual" : input.refreshMode();
-            return new Prepared(copy(input, defineMode, storedSql, chartType, refreshMode), datasources);
+            return new Prepared(
+                    copy(input, defineMode, storedSql, chartType, refreshMode),
+                    datasources,
+                    built.rows(),
+                    built.sampling()
+            );
         }
         String sql = input.sqlQuery() == null ? "" : input.sqlQuery().trim();
         assertSelectOnly(sql);
-        queries.execute(input.datasourceId(), sql);
+        // 캐시에는 전체 차트 결과가 필요하므로 제한 실행 후 재조회하지 않고 처음부터 한 번만 전체 실행한다.
+        var rows = queries.executeUnbounded(input.datasourceId(), sql, List.of());
         // raw SQL 은 항상 단일 소스(primary) — 구조상 페더레이션 대상 아님.
-        return new Prepared(copy(input, defineMode, sql, chartType, input.refreshMode()), Set.of(input.datasourceId()));
+        return new Prepared(
+                copy(input, defineMode, sql, chartType, input.refreshMode()),
+                Set.of(input.datasourceId()),
+                rows,
+                null
+        );
     }
 
     private static ChartSaveRequest copy(ChartSaveRequest input, String defineMode, String sqlQuery, String chartType, String refreshMode) {

@@ -16,7 +16,7 @@
 --   ④ pg_trgm GIN 검색 인덱스 활성화 — S1 이름·설명 ILIKE 검색 최적화
 --   ※ owner_id 는 로그인 구현 전까지 NULL 허용(인증 컨텍스트에서 자동 주입). 노코드 신기능(표본추출 sample·stddev·none 원본값 모드)은
 --     builder_config JSONB 가 그대로 수용하므로 스키마 변경 없음. chart_type 4종(bar/line/pie/scatter)이 원형·분포 대분류를 커버.
---     none + sample, none + 집계 혼합 금지는 앱/서버 검증 책임이다. joins[] + sample은 sampling v6 RESULT_RANDOM으로 실행한다.
+--     none + sample은 sampling v6 ROW_SAMPLE로 허용하고, none + 집계 혼합만 앱/서버에서 금지한다. joins[] + sample은 RESULT_RANDOM으로 실행한다.
 --     기존 고객 DB의 TABLE/VIEW/MATERIALIZED VIEW를 읽기 원본으로 지원하되, 앱은 고객 DB 객체를 생성·수정·갱신하지 않는다.
 -- ============================================
 
@@ -129,7 +129,7 @@ CREATE TABLE mc_chart (
     datasource_id   BIGINT       NOT NULL,           -- 어느 DB에서 뽑는가 (차트 1개 = 소스 1개)
     define_mode     VARCHAR(10)  NOT NULL DEFAULT 'builder',  -- 새 차트는 항상 노코드 시작 (v2.2)
     sql_query       TEXT         NOT NULL,           -- 실행 SQL. builder 모드면 저장 시 서버가 builder_config에서 재생성(일관성 보장)
-    builder_config  JSONB,                           -- 노코드 상태 (builder 모드만, 복원용). joins·sample·stddev·none(모든 차트 원본값 튜플) 등 신규 키는 마이그레이션 0. joins+sample, none+sample, none+집계 혼합 금지는 앱 검증.
+    builder_config  JSONB,                           -- 노코드 상태 (builder 모드만, 복원용). joins·sample·stddev·none(모든 차트 원본값 튜플) 등 신규 키는 마이그레이션 0. joins+sample·none+sample 허용, none+집계 혼합만 앱 검증.
     chart_type      VARCHAR(20)  NOT NULL,           -- 대분류만 (4종 활성: bar/line/pie/scatter). 소분류·외형은 options.variant + options JSONB
 
     options         JSONB        NOT NULL DEFAULT '{}',

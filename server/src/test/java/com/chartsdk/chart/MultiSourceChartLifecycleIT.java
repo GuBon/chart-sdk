@@ -1,6 +1,10 @@
 package com.chartsdk.chart;
 
+import com.chartsdk.cache.CachedChartRows;
+import com.chartsdk.cache.ChartCacheService;
+import com.chartsdk.cache.ChartRefreshCoordinator;
 import com.chartsdk.crypto.DatasourcePasswordCodec;
+import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.dto.ChartSaveRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +20,12 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -46,6 +56,8 @@ class MultiSourceChartLifecycleIT {
     @Autowired ChartService chartService;
     @Autowired JdbcTemplate meta;
     @Autowired DatasourcePasswordCodec codec;
+    @Autowired ChartRefreshCoordinator refreshes;
+    @Autowired ChartCacheService cache;
 
     @Test
     void multiSourceChartSaveSeedsJunctionAndCacheThenServesSnapshot() {
@@ -126,12 +138,156 @@ class MultiSourceChartLifecycleIT {
         assertThat(preview.get("option")).isNotNull();
     }
 
+    @Test
+    void advisoryTransactionLockRunsConcurrentRefreshOnlyOnce() throws Exception {
+        long datasourceId = insertDatasource(
+                "it-lock-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
+        Long chartId = meta.queryForObject("""
+                INSERT INTO mc_chart(name, datasource_id, define_mode, sql_query, chart_type)
+                VALUES (?, ?, 'sql', 'SELECT 1', 'bar')
+                RETURNING id
+                """, Long.class, "lock-test", datasourceId);
+        assertThat(chartId).isNotNull();
+
+        QueryRows queryRows = new QueryRows(List.of(), List.of(), 0, false, 1);
+        CountDownLatch winnerEntered = new CountDownLatch(1);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+        AtomicInteger refreshCalls = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<CachedChartRows> winner = pool.submit(() -> refreshes.refreshSingleFlight(
+                    chartId, 0, false, null, () -> {
+                        refreshCalls.incrementAndGet();
+                        winnerEntered.countDown();
+                        await(releaseWinner);
+                        return cache.upsert(chartId, queryRows, 0, null);
+                    }));
+            assertThat(winnerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            Future<CachedChartRows> loser = pool.submit(() -> refreshes.refreshSingleFlight(
+                    chartId, 0, false, null, () -> {
+                        refreshCalls.incrementAndGet();
+                        return cache.upsert(chartId, queryRows, 0, null);
+                    }));
+
+            assertThat(waitingOnAdvisoryLock()).isTrue();
+            releaseWinner.countDown();
+
+            CachedChartRows winnerResult = winner.get(5, TimeUnit.SECONDS);
+            CachedChartRows loserResult = loser.get(5, TimeUnit.SECONDS);
+            assertThat(refreshCalls).hasValue(1);
+            // PostgreSQL timestamptz는 마이크로초 정밀도라 JVM Instant 나노초가 반올림될 수 있다.
+            assertThat(java.time.Duration.between(
+                    loserResult.computedAt(), winnerResult.computedAt()).abs())
+                    .isLessThanOrEqualTo(java.time.Duration.ofNanos(1_000));
+            assertThat(meta.queryForObject(
+                    "SELECT count(*) FROM mc_chart_cache WHERE chart_id=?", Integer.class, chartId)).isEqualTo(1);
+        } finally {
+            releaseWinner.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void firstRefreshFailureIsRecordedAndNextSuccessClearsIt() {
+        long datasourceId = insertDatasource(
+                "it-failure-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
+        Long chartId = meta.queryForObject("""
+                INSERT INTO mc_chart(name, datasource_id, define_mode, sql_query, chart_type)
+                VALUES (?, ?, 'sql', 'SELECT 1', 'bar')
+                RETURNING id
+                """, Long.class, "failure-test", datasourceId);
+        assertThat(chartId).isNotNull();
+
+        cache.recordFailure(chartId, new RuntimeException("source unavailable"));
+
+        Map<String, Object> failureState = meta.queryForMap("""
+                SELECT result, computed_at, last_error, last_error_at
+                  FROM mc_chart_cache
+                 WHERE chart_id=?
+                """, chartId);
+        assertThat(failureState)
+                .containsEntry("result", null)
+                .containsEntry("computed_at", null)
+                .containsEntry("last_error", "source unavailable");
+        assertThat(failureState.get("last_error_at")).isNotNull();
+
+        cache.upsert(chartId, new QueryRows(List.of(), List.of(), 0, false, 1), 0, null);
+
+        Map<String, Object> successState = meta.queryForMap("""
+                SELECT result, computed_at, last_error, last_error_at
+                  FROM mc_chart_cache
+                 WHERE chart_id=?
+                """, chartId);
+        assertThat(successState.get("result")).isNotNull();
+        assertThat(successState.get("computed_at")).isNotNull();
+        assertThat(successState)
+                .containsEntry("last_error", null)
+                .containsEntry("last_error_at", null);
+    }
+
+    @Test
+    void updateReturnsIncrementedVersionAndSeedsPreparedRowsWithThatVersion() {
+        long datasourceId = insertDatasource(
+                "it-update-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
+        ChartSaveRequest create = new ChartSaveRequest(
+                "update-test", null, datasourceId, "sql", "SELECT 1 AS value",
+                null, "bar", Map.of(), "manual", 3600, null);
+        Map<String, Object> created = chartService.create(create);
+        long chartId = ((Number) created.get("id")).longValue();
+        assertThat(created.get("version")).isEqualTo(0);
+
+        ChartSaveRequest update = new ChartSaveRequest(
+                "update-test", null, datasourceId, "sql", "SELECT 2 AS value",
+                null, "bar", Map.of(), "manual", 3600, 0);
+        Map<String, Object> updated = chartService.update(chartId, update);
+
+        assertThat(updated.get("version")).isEqualTo(1);
+        assertThat(meta.queryForObject("""
+                SELECT definition_version
+                  FROM mc_chart_cache
+                 WHERE chart_id=?
+                """, Integer.class, chartId)).isEqualTo(1);
+        assertThat(meta.queryForObject("""
+                SELECT result->'rows'->0->>0
+                  FROM mc_chart_cache
+                 WHERE chart_id=?
+                """, String.class, chartId)).isEqualTo("2");
+    }
+
     private long insertDatasource(String name, String host, int port, String db, String user, String pass) {
         Long id = meta.queryForObject("""
                 INSERT INTO mc_datasource(name, host, port, database_name, db_user, db_password_enc, max_pool_size)
                 VALUES (?,?,?,?,?,?,5) RETURNING id
                 """, Long.class, name, host, port, db, user, codec.encrypt(pass));
         return id;
+    }
+
+    private boolean waitingOnAdvisoryLock() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            Integer waiting = meta.queryForObject("""
+                    SELECT count(*)
+                      FROM pg_stat_activity
+                     WHERE datname=current_database()
+                       AND wait_event_type='Lock'
+                       AND lower(wait_event)='advisory'
+                    """, Integer.class);
+            if (waiting != null && waiting > 0) return true;
+            Thread.sleep(20);
+        }
+        return false;
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("advisory lock test release timed out");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private static boolean reachable(String host, int port) {
