@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Maximize2 } from 'lucide-react';
 import { setPath, type Options } from '@chartsdk/chart-options';
 import type { MajorType } from '@chartsdk/chart-options';
@@ -8,14 +8,19 @@ import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import {
   CHART_SIZE_PRESETS,
+  MAX_CHART_HEIGHT,
+  MAX_CHART_WIDTH,
+  MIN_CHART_HEIGHT,
+  MIN_CHART_WIDTH,
   resolveChartDesignSize,
   type ChartSizePreset,
   type PreviewFitMode,
 } from '@chartsdk/chart-options/display';
+import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ChartDesignViewport } from './ChartDesignViewport';
 import { ChartFocusDialog } from './ChartFocusDialog';
-import type { MapBoundsChangeSource } from './ChartPreview';
+import { supportsPreviewDataZoom, type MapBoundsChangeSource } from './ChartPreview';
 import { PreviewFitControls } from './PreviewFitControls';
 import { mapViewportStatus } from './MapViewportControl';
 
@@ -23,9 +28,9 @@ interface Props {
   option: Record<string, unknown> | null;
   options: Options;
   chartType: MajorType;
+  computedAt: string | null;
   loading: boolean;
   error: string | null;
-  wide: boolean;
   mapViewportEditing: boolean;
   mapViewport: MapViewport;
   mapViewportRevision: number;
@@ -37,13 +42,25 @@ interface Props {
   onChangeOptions: (next: Options) => void;
 }
 
+type SizeDimension = 'width' | 'height';
+
+const SIZE_LIMITS: Record<SizeDimension, { min: number; max: number }> = {
+  width: { min: MIN_CHART_WIDTH, max: MAX_CHART_WIDTH },
+  height: { min: MIN_CHART_HEIGHT, max: MAX_CHART_HEIGHT },
+};
+
+function normalizedDimension(value: number, dimension: SizeDimension): number {
+  const { min, max } = SIZE_LIMITS[dimension];
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 export function ChartPreviewPanel({
   option,
   options,
   chartType,
+  computedAt,
   loading,
   error,
-  wide,
   mapViewportEditing,
   mapViewport,
   mapViewportRevision,
@@ -54,10 +71,18 @@ export function ChartPreviewPanel({
   onColorPickingChange,
   onChangeOptions,
 }: Props) {
+  const designSize = resolveChartDesignSize(options);
   const [fitMode, setFitMode] = useState<PreviewFitMode>('contain');
   const [zoom, setZoom] = useState(100);
   const [focusOpen, setFocusOpen] = useState(false);
-  const designSize = resolveChartDesignSize(options);
+  const [widthDraft, setWidthDraft] = useState(String(designSize.width));
+  const [heightDraft, setHeightDraft] = useState(String(designSize.height));
+
+  useEffect(() => {
+    setWidthDraft(String(designSize.width));
+    setHeightDraft(String(designSize.height));
+  }, [designSize.height, designSize.width]);
+
   const presetOptions = [
     ...CHART_SIZE_PRESETS.map((item) => ({ value: item.preset, label: item.label })),
     { value: 'custom', label: designSize.preset === 'custom' ? designSize.label : '사용자 지정' },
@@ -66,12 +91,56 @@ export function ChartPreviewPanel({
   const changePreset = (preset: ChartSizePreset) => {
     const next = structuredClone(options);
     setPath(next, 'display.preset', preset);
+    if (preset === 'custom') {
+      // 저장된 width/height가 과거 기본값이어도 현재 프리셋 크기에서 자연스럽게 편집을 시작한다.
+      setPath(next, 'display.width', designSize.width);
+      setPath(next, 'display.height', designSize.height);
+    }
     onChangeOptions(next);
     setFitMode('contain');
   };
 
+  const changeCustomSize = (width: number, height: number) => {
+    const normalizedWidth = normalizedDimension(width, 'width');
+    const normalizedHeight = normalizedDimension(height, 'height');
+    const next = structuredClone(options);
+    setPath(next, 'display.preset', 'custom');
+    setPath(next, 'display.width', normalizedWidth);
+    setPath(next, 'display.height', normalizedHeight);
+    setWidthDraft(String(normalizedWidth));
+    setHeightDraft(String(normalizedHeight));
+    onChangeOptions(next);
+    setFitMode('contain');
+  };
+
+  const changeDimension = (dimension: SizeDimension, raw: string) => {
+    if (dimension === 'width') setWidthDraft(raw);
+    else setHeightDraft(raw);
+
+    const parsed = Number(raw);
+    const { min, max } = SIZE_LIMITS[dimension];
+    if (!raw.trim() || !Number.isFinite(parsed) || parsed < min || parsed > max) return;
+    changeCustomSize(
+      dimension === 'width' ? parsed : designSize.width,
+      dimension === 'height' ? parsed : designSize.height,
+    );
+  };
+
+  const commitDimension = (dimension: SizeDimension, raw: string) => {
+    const parsed = Number(raw);
+    if (!raw.trim() || !Number.isFinite(parsed)) {
+      if (dimension === 'width') setWidthDraft(String(designSize.width));
+      else setHeightDraft(String(designSize.height));
+      return;
+    }
+    changeCustomSize(
+      dimension === 'width' ? parsed : designSize.width,
+      dimension === 'height' ? parsed : designSize.height,
+    );
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="chart-preview-panel">
+    <div className="chart-preview-panel flex h-full min-h-0 flex-col" data-testid="chart-preview-panel">
       <div className="shrink-0 border-b border-border bg-bg-panel px-3 py-2.5">
         <div className="flex items-center gap-2">
           <div className="min-w-0">
@@ -81,6 +150,14 @@ export function ChartPreviewPanel({
           {(chartType === 'map' || chartType === 'geoscatter') && (
             <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(mapViewport)}`}>
               표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(mapViewport)}
+            </span>
+          )}
+          {option && supportsPreviewDataZoom(chartType) && (
+            <span
+              className="max-w-48 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary"
+              title="저장되지 않는 미리보기 탐색입니다. 차트 위에서 휠로 확대·축소하고, 드래그로 이동하며, 더블클릭하면 초기화됩니다."
+            >
+              미리보기 전용 · 휠 줌
             </span>
           )}
           {colorPicking && (
@@ -104,8 +181,8 @@ export function ChartPreviewPanel({
             전체 화면
           </button>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <div className="w-[190px]">
+        <div className="chart-preview-toolbar mt-2">
+          <div className="chart-preview-size-preset w-[180px]">
             <Select
               aria-label="미리보기 설계 크기"
               value={designSize.preset}
@@ -115,8 +192,53 @@ export function ChartPreviewPanel({
               className="h-7 text-xs"
             />
           </div>
-          <div className="flex-1" />
-          <PreviewFitControls compact={!wide} fitMode={fitMode} zoom={zoom} onFitMode={setFitMode} onZoom={setZoom} />
+          <div className="chart-preview-size-inputs flex items-center gap-1.5" data-testid="chart-size-inputs">
+            <label className="relative block w-[72px]">
+              <span aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 z-10 -translate-y-1/2 text-[10px] font-medium text-text-tertiary">W</span>
+              <Input
+                aria-label="차트 너비"
+                title={`${MIN_CHART_WIDTH}~${MAX_CHART_WIDTH}px`}
+                type="number"
+                inputMode="numeric"
+                min={MIN_CHART_WIDTH}
+                max={MAX_CHART_WIDTH}
+                step={1}
+                value={widthDraft}
+                disabled={!option}
+                onChange={(event) => changeDimension('width', event.target.value)}
+                onBlur={(event) => commitDimension('width', event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                }}
+                size="sm"
+                className="h-7 w-[72px] pl-6 pr-1.5 text-xs tabular-nums"
+              />
+            </label>
+            <span aria-hidden="true" className="text-[11px] text-text-tertiary">×</span>
+            <label className="relative block w-[72px]">
+              <span aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 z-10 -translate-y-1/2 text-[10px] font-medium text-text-tertiary">H</span>
+              <Input
+                aria-label="차트 높이"
+                title={`${MIN_CHART_HEIGHT}~${MAX_CHART_HEIGHT}px`}
+                type="number"
+                inputMode="numeric"
+                min={MIN_CHART_HEIGHT}
+                max={MAX_CHART_HEIGHT}
+                step={1}
+                value={heightDraft}
+                disabled={!option}
+                onChange={(event) => changeDimension('height', event.target.value)}
+                onBlur={(event) => commitDimension('height', event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.currentTarget.blur();
+                }}
+                size="sm"
+                className="h-7 w-[72px] pl-6 pr-1.5 text-xs tabular-nums"
+              />
+            </label>
+            <span className="text-[11px] text-text-tertiary">px</span>
+          </div>
+          <PreviewFitControls responsive fitMode={fitMode} zoom={zoom} onFitMode={setFitMode} onZoom={setZoom} />
         </div>
       </div>
 
@@ -125,6 +247,7 @@ export function ChartPreviewPanel({
           <ChartDesignViewport
             option={option}
             chartType={chartType}
+            computedAt={computedAt}
             designSize={designSize}
             fitMode={fitMode}
             zoom={zoom}
@@ -149,6 +272,7 @@ export function ChartPreviewPanel({
         <ChartFocusDialog
           option={option}
           chartType={chartType}
+          computedAt={computedAt}
           designSize={designSize}
           mapViewportEditing={mapViewportEditing}
           mapViewport={mapViewport}

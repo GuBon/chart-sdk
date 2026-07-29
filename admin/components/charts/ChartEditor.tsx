@@ -11,6 +11,7 @@ import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryRes
 import { activeTables, builderExecutionIssue, builderValidationIssue, emptyBuilder, emptyJoin, isTableQueryMode, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import { chartSaveIssue } from '@/lib/chartSave';
+import { optionDockThresholds, resolveAutoOptionDock } from '@/lib/chartPreviewLayout';
 import {
   cloneEditorSnapshot,
   createEditorSnapshot,
@@ -45,9 +46,18 @@ const LEFT_PANEL_DEFAULT_WIDTH = 320;
 const RIGHT_PANEL_DEFAULT_WIDTH = 440;
 const PANEL_COLLAPSE_THRESHOLD = 48;
 const PANEL_RESTORE_MIN_WIDTH = 200;
-const OPTION_DOCK_RIGHT_AT = 840;
-const OPTION_DOCK_BOTTOM_AT = 760;
 const OPTION_DOCK_MANUAL_MIN_WIDTH = 640;
+
+/** mode=rows SQL에 실제로 참여하는 구성만 비교한다. 축·계열·표본 변경은 원본 미리보기를 무효화하지 않는다. */
+function rawPreviewSignature(config: BuilderConfig): string {
+  const rawOrder = config.orderBy?.target.startsWith('column:') ? config.orderBy : null;
+  return JSON.stringify({
+    table: config.table ?? null,
+    joins: config.joins ?? [],
+    where: config.where ?? [],
+    orderBy: rawOrder,
+  });
+}
 
 function useStoredBoolean(key: string, initial: boolean) {
   const [value, setValue] = useState(initial);
@@ -185,12 +195,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [rawError, setRawError] = useState<string | null>(null);
-  const [resultTab, setResultTab] = useState<ResultTab>('result');
+  const [resultTab, setResultTab] = useState<ResultTab>('raw');
   const rawRequestId = useRef(0);
   const runRequestId = useRef(0);
   const optionPreviewRequestId = useRef(0);
-  const runBuilderRef = useRef<() => Promise<void>>(async () => {});
-  const autoRunTimerRef = useRef<number | null>(null);
   const editorBodyRef = useRef<HTMLDivElement>(null);
   const builderWorkspaceRef = useRef<HTMLElement>(null);
   const visualWorkspaceRef = useRef<HTMLElement>(null);
@@ -366,27 +374,31 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     const workspace = visualWorkspaceRef.current;
     if (!workspace) return;
     const observer = new ResizeObserver(([entry]) => {
-      const width = entry.contentRect.width;
-      setAutoOptionDock((current) => {
-        if (width >= OPTION_DOCK_RIGHT_AT) return 'right';
-        if (width <= OPTION_DOCK_BOTTOM_AT) return 'bottom';
-        return current;
-      });
+      setAutoOptionDock((current) => resolveAutoOptionDock({
+        workspaceWidth: entry.contentRect.width,
+        optionPanelWidth: optionEditorWidth.size,
+        optionPanelCollapsed: optionEditorCollapsed,
+        currentDock: current,
+      }));
     });
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, []);
+  }, [optionEditorCollapsed, optionEditorWidth.size]);
 
   // 오른쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 우측 작업영역을 먼저 확보한다.
   useEffect(() => {
     if (!optionDockPreferenceRestored || optionDockPreference !== 'right' || builderCollapsed) return;
-    if (rightPanelSize >= OPTION_DOCK_BOTTOM_AT) return;
     const editorWidth = editorBodyRef.current?.clientWidth;
     if (editorWidth == null) return;
     const leftWidth = leftCollapsed ? 40 : leftPanel.size;
     const availableWidth = editorWidth - leftWidth - PANEL_RESTORE_MIN_WIDTH;
     if (availableWidth >= OPTION_DOCK_MANUAL_MIN_WIDTH) {
-      setRightPanelSize(Math.min(OPTION_DOCK_RIGHT_AT, availableWidth));
+      const preferredWidth = optionDockThresholds({
+        optionPanelWidth: optionEditorWidth.size,
+        optionPanelCollapsed: optionEditorCollapsed,
+      }).enterRightAt;
+      const targetWidth = Math.min(preferredWidth, availableWidth);
+      if (rightPanelSize < targetWidth) setRightPanelSize(targetWidth);
     } else {
       setBuilderCollapsed(true);
     }
@@ -396,6 +408,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     leftPanel.size,
     optionDockPreference,
     optionDockPreferenceRestored,
+    optionEditorCollapsed,
+    optionEditorWidth.size,
     rightPanelSize,
     setRightPanelSize,
     setBuilderCollapsed,
@@ -490,6 +504,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   const applyBuilderChange = (next: BuilderConfig) => {
     const normalized = normalizeBuilderForChartType(next, chartType);
+    const rawQueryChanged = rawPreviewSignature(normalized) !== rawPreviewSignature(builder);
     if ((normalized.seriesBy ?? null) !== (builder.seriesBy ?? null)) {
       // The series namespace changes when a grouping dimension is added, removed, or replaced.
       // Start that namespace at the beginning of the selected palette; filters and sorting keep
@@ -500,8 +515,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setTableSelectionTarget(null);
     setDirty(true);
     resetResults();
-    invalidateRawPreview();
-    setResultTab('result');
+    // X/Y·계열·표본 설정은 원본 행 SQL을 바꾸지 않는다. 이 경우 실행 전까지 현재 원본
+    // 미리보기를 유지한다. JOIN·WHERE·원본 컬럼 정렬이 바뀐 경우에만 지연 조회를 무효화한다.
+    if (rawQueryChanged) invalidateRawPreview();
   };
 
   // 실행·저장에 쓰는 primary 데이터소스는 base 테이블에서 파생(사이드바 탐색 소스와 무관).
@@ -595,10 +611,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   );
 
   const runBuilder = async () => {
-    if (autoRunTimerRef.current != null) {
-      window.clearTimeout(autoRunTimerRef.current);
-      autoRunTimerRef.current = null;
-    }
     const issue = builderExecutionIssue(builder, chartType, tables);
     if (issue || primaryDatasourceId == null) {
       if (issue) setRunError(issue);
@@ -635,23 +647,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       if (requestId === runRequestId.current) setRunning(false);
     }
   };
-  runBuilderRef.current = runBuilder;
-
-  // 필수 필드가 완성되는 순간 자동 실행한다. 저장된 차트 진입은 캐시를 복원하고,
-  // 사용자가 빌더를 실제로 바꾼 경우에만 고객 DB를 다시 조회한다.
-  useEffect(() => {
-    if (!dirty || initialPreviewLoading || primaryDatasourceId == null) return;
-    if (builderValidationIssue(builder, chartType, tables)) return;
-    const timer = window.setTimeout(() => {
-      if (autoRunTimerRef.current === timer) autoRunTimerRef.current = null;
-      void runBuilderRef.current();
-    }, 350);
-    autoRunTimerRef.current = timer;
-    return () => {
-      window.clearTimeout(timer);
-      if (autoRunTimerRef.current === timer) autoRunTimerRef.current = null;
-    };
-  }, [builder, chartType, tables, dirty, initialPreviewLoading, primaryDatasourceId]);
 
   const loadBuilderRows = async () => {
     if (!builder.table || primaryDatasourceId == null || rawRunning) return;
@@ -845,10 +840,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   const resetOptions = () => {
     if (!savedSnapshot) return;
-    if (autoRunTimerRef.current != null) {
-      window.clearTimeout(autoRunTimerRef.current);
-      autoRunTimerRef.current = null;
-    }
     runRequestId.current += 1;
     optionPreviewRequestId.current += 1;
     rawRequestId.current += 1;
@@ -1060,9 +1051,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 option={option}
                 options={options}
                 chartType={chartType}
+                computedAt={computedAt}
                 loading={initialPreviewLoading}
                 error={initialPreviewError}
-                wide={builderCollapsed}
                 mapViewportEditing={mapViewportSession.editing}
                 mapViewport={mapViewportSession.draft}
                 mapViewportRevision={mapViewportSession.revision}

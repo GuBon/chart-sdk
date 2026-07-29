@@ -14,9 +14,18 @@ import {
   type SamplingMetadata,
   type SamplingWarningCode,
 } from '@chartsdk/chart-options/sampling';
-import { resolveChartLayoutMetrics, resolveChartTypography } from '@chartsdk/chart-options/display';
+import {
+  resolveChartFontFamilies,
+  resolveChartLayoutMetrics,
+  resolveChartTitleText,
+  resolveChartTypography,
+} from '@chartsdk/chart-options/display';
 import { EMBEDDED_MAPS_KEY, MAP_VIEWPORT_KEY } from '@chartsdk/chart-options/geo';
-import { DEFAULT_PALETTE, resolveSeriesColorMap } from '@chartsdk/chart-options/palettes';
+import {
+  DEFAULT_PALETTE,
+  isPalettePresetForFamily,
+  resolveSeriesColorMap,
+} from '@chartsdk/chart-options/palettes';
 import {
   itemColorSeriesKey,
   itemColorTargetKey,
@@ -36,7 +45,7 @@ import {
   movingAverageOf,
   movingAverageOverridesSort,
 } from '@chartsdk/chart-options/statisticalOverlays';
-import { migrateLegacyInteractionOptions, type MajorType } from '@chartsdk/chart-options';
+import { optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
 import { columnsForBuilder } from '@/lib/builder';
 import { schemaTables } from './seed';
 
@@ -167,14 +176,61 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${spatialWhere}`;
   }
   if (!cfg.xAxis || cfg.yAxis.length === 0) return '';
+  const plan = samplePlanForConfig(cfg);
   const rawMode = cfg.yAxis.some((y) => y.agg === 'none');
   if (rawMode) {
+    if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
+      const population = qident('__chartsdk_population');
+      const sample = qident('__chartsdk_sample');
+      const seedCte = qident('__chartsdk_seed');
+      const xAlias = '__chartsdk_x';
+      const yAliases = cfg.yAxis.map((_, i) => `__chartsdk_y_${i}`);
+      const projected = [
+        `${qcol(cfg.xAxis)} AS ${qident(xAlias)}`,
+        ...(cfg.seriesBy ? [`${qcol(cfg.seriesBy)} AS ${qident('__chartsdk_series')}`] : []),
+        ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
+      ];
+      const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
+      const sampleBody = multi
+        ? `SELECT * FROM ${population} USING SAMPLE reservoir(${plan.sampleSize} ROWS) REPEATABLE (${plan.seed})`
+        : `SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize}`;
+      const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
+      const ctes = [
+        ...(!multi ? [`${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')})`] : []),
+        populationCte,
+        `${sample} AS MATERIALIZED (${sampleBody})`,
+      ];
+      const selects = [
+        `${qcol(`__chartsdk_sample.${xAlias}`)} AS ${qident(colName(cfg.xAxis))}`,
+        ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(colName(cfg.seriesBy))}`] : []),
+        ...cfg.yAxis.map((y, i) => `${qcol(`__chartsdk_sample.${yAliases[i]}`)} AS ${qident(aliasOf(y))}`),
+      ];
+      return `WITH ${ctes.join(',\n')}
+SELECT ${selects.join(', ')}
+FROM ${sample}${orderSql()}`;
+    }
+
+    const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
+    const sourceColumn = (ref: string) => indexRandom ? qident(colName(ref)) : qcol(ref);
     const selects = [
-      qcol(cfg.xAxis),
-      ...(cfg.seriesBy ? [qcol(cfg.seriesBy)] : []),
-      ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column) ? qcol(y.column) : `${qcol(y.column)} AS ${qident(aliasOf(y))}`)),
+      sourceColumn(cfg.xAxis),
+      ...(cfg.seriesBy ? [sourceColumn(cfg.seriesBy)] : []),
+      ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column)
+        ? sourceColumn(y.column)
+        : `${sourceColumn(y.column)} AS ${qident(aliasOf(y))}`)),
     ];
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${orderSql()}`;
+    if (indexRandom) {
+      const seed = plan.seed ?? DEFAULT_SAMPLE_SEED;
+      const population = Math.max(1, plan.populationEstimate);
+      const cte = `WITH ${qident('__chartsdk_seed')} AS MATERIALIZED (SELECT setseed(${Math.max(-1, Math.min(1, (seed / 2_147_483_647) * 2 - 1))}) AS ${qident('seeded')}),\n`
+        + `${qident('__chartsdk_keys')} AS MATERIALIZED (SELECT 1 + floor(random() * ${population})::bigint AS ${qident('v')} FROM ${qident('__chartsdk_seed')} CROSS JOIN generate_series(1, ${plan.sampleSize})),\n`
+        + `${qident('__chartsdk_sample')} AS (SELECT ${qident('__chartsdk_base')}.* FROM ${qident('__chartsdk_keys')} JOIN ${qtable(cfg.table, multi)} ${qident('__chartsdk_base')} ON ${qident('__chartsdk_base')}.${qident('id')} = ${qident('__chartsdk_keys')}.${qident('v')}) `;
+      return `${cte}SELECT ${selects.join(', ')}\nFROM ${qident('__chartsdk_sample')}${where}${orderSql()}`;
+    }
+    const systemSample = plan?.approximate && plan.method === 'SYSTEM'
+      ? ` TABLESAMPLE SYSTEM (${plan.executionRate}) REPEATABLE (${plan.seed})`
+      : '';
+    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${systemSample}${joinSql}${where}${orderSql()}`;
   }
   const aggSql: Record<string, (expr: string) => string> = {
     sum: (expr) => `SUM(${expr})`,
@@ -186,7 +242,6 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     min: (expr) => `MIN(${expr})`,
     max: (expr) => `MAX(${expr})`,
   };
-  const plan = samplePlanForConfig(cfg);
   const approximate = plan?.approximate === true;
 
   // JOIN+WHERE 또는 VIEW 조회 결과를 먼저 확정한 뒤, 그 결과 행을 뽑고 마지막에 집계한다.
@@ -393,7 +448,8 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
 
   const { method, populationEstimate, sampleSize, executionRate } = plan;
   const uniformRandom = method === 'INDEX_RANDOM' || method === 'RESULT_RANDOM';
-  const groups = labels.map((key, index) => ({
+  const rowSample = cfg.yAxis.length > 0 && cfg.yAxis.every((y) => y.agg === 'none');
+  const groups = rowSample ? [] : labels.map((key, index) => ({
     key,
     sampleCount: uniformRandom
       ? Math.floor(sampleSize / Math.max(1, labels.length)) + (index < sampleSize % Math.max(1, labels.length) ? 1 : 0)
@@ -433,8 +489,10 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
     seed: plan.seed,
     valueMode: 'sample',
     ...(method === 'RESULT_RANDOM' && populationEstimate <= 0 ? {} : { populationEstimate }), sampleSize,
-    sampledRowCount: groups.reduce((sum, group) => sum + group.sampleCount, 0),
-    ...(uniformRandom ? { confidenceLevel: 0.95 } : {}),
+    sampledRowCount: rowSample
+      ? labels.length
+      : groups.reduce((sum, group) => sum + group.sampleCount, 0),
+    ...(uniformRandom && !rowSample ? { confidenceLevel: 0.95 } : {}),
     groups, estimates,
     warnings: [...warnings],
   };
@@ -470,7 +528,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       category,
       ...years.map((_year, yearIndex) => 2_500_000 + categoryIndex * 1_150_000 + yearIndex * 85_000),
     ]);
-    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 24 };
+    const sampling = samplingForConfig(cfg, categories);
+    return {
+      columns,
+      rows,
+      rowCount: rows.length,
+      truncated: false,
+      elapsedMs: sampling?.approximate ? 12 : 24,
+      ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
+    };
   }
   // 상자수염: 카테고리별로 원본값 여러 개(분포) — 변환기가 그룹핑해 5수 요약 계산.
   if (chartType === 'boxplot') {
@@ -483,7 +549,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       for (let k = 0; k < 9; k++) rows.push([cat, Math.round(center + (k - 4) * spread + (k % 3) * 6)]);
       rows.push([cat, center + spread * 12]);
     });
-    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+    return {
+      columns,
+      rows,
+      rowCount: rows.length,
+      truncated: false,
+      elapsedMs: sampling?.approximate ? 12 : 20,
+      ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
+    };
   }
   // 지도: 시·도 라벨 + 값 1개.
   if (chartType === 'map') {
@@ -523,7 +597,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
     ];
     const rows: Rows = SAMPLE_SPATIAL_POINTS.map(([lng, lat, size]) =>
       hasSize ? [lng, lat, size] : [lng, lat]);
-    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
+    const sampling = spatial ? undefined : samplingForConfig(cfg, rows.map((row) => row[0]));
+    return {
+      columns,
+      rows,
+      rowCount: rows.length,
+      truncated: false,
+      elapsedMs: sampling?.approximate ? 12 : 20,
+      ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
+    };
   }
   if (cfg.yAxis.some((y) => y.agg === 'none')) {
     const sourceColumns = columnsForBuilder(cfg, schemaTables);
@@ -539,7 +621,15 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       sampleValue(xType, i),
       ...yTypes.map((type) => sampleValue(type, i)),
     ]);
-    return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 18 };
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+    return {
+      columns,
+      rows,
+      rowCount: rows.length,
+      truncated: false,
+      elapsedMs: sampling?.approximate ? 10 : 18,
+      ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
+    };
   }
   const xType = builderColumnType(cfg, cfg.xAxis);
   const labels = cfg.xAxisBucket || isTemporalColumnType(xType) ? SAMPLE_MONTHS : SAMPLE_CATS;
@@ -688,6 +778,24 @@ function gridMargins(o: any, includeLegend: boolean, horizontal = false): { left
   return b;
 }
 
+/** grid가 없는 원형·지도 계열도 제목·범례·색상 범례가 플롯을 가리지 않도록 박스 여백을 준다. */
+function nonCartesianInsets(
+  o: any,
+  includeLegend: boolean,
+  includeVisualMap = false,
+): { top: number; bottom: number } {
+  const metrics = resolveChartLayoutMetrics(o);
+  let top = !!o.title && (o.titleV ?? 'top') === 'top' ? metrics.titleHeight : 0;
+  let bottom = titleAtBottom(o) ? metrics.titleHeight : 0;
+  if (includeLegend && o.legend?.show !== false) {
+    const position = o.legend?.position ?? 'bottom';
+    if (position === 'top') top += metrics.legendHeight;
+    if (position === 'bottom') bottom += metrics.legendHeight;
+  }
+  if (includeVisualMap) bottom += metrics.visualMapHeight;
+  return { top, bottom };
+}
+
 const AXIS_NAME_GAP = 56;
 const AXIS_ENDPOINT_NAME_GAP = 8;
 
@@ -744,7 +852,17 @@ function axisEndpointReserve(
   return AXIS_ENDPOINT_NAME_GAP + Math.ceil(projectedLength);
 }
 
-function axisOptions(config: any, fontSize: number, logical: AxisKind, physical: AxisKind): Record<string, unknown> {
+function chartTextStyle(fontSize: number, fontFamily: string | null): Record<string, unknown> {
+  return { fontSize, ...(fontFamily ? { fontFamily } : {}) };
+}
+
+function axisOptions(
+  config: any,
+  fontSize: number,
+  logical: AxisKind,
+  physical: AxisKind,
+  fontFamily: string | null,
+): Record<string, unknown> {
   const location = config?.titleLocation === 'start' || config?.titleLocation === 'end'
     ? config.titleLocation
     : 'middle';
@@ -761,7 +879,8 @@ function axisOptions(config: any, fontSize: number, logical: AxisKind, physical:
         }
       : {}),
     position,
-    nameTextStyle: { fontSize },
+    nameTextStyle: chartTextStyle(fontSize, fontFamily),
+    ...(config?.verticalLabels === true ? { __chartsdkVerticalLabel: logical } : {}),
   };
 }
 
@@ -771,6 +890,7 @@ function categoryAxisLabel(
   config: any,
   defaultMode: 'all' | 'auto',
   hideOverlapOnAuto: boolean,
+  fontFamily: string | null,
 ): Record<string, unknown> {
   const mode = config?.labelIntervalMode === 'step' || config?.labelIntervalMode === 'auto' || config?.labelIntervalMode === 'all'
     ? config.labelIntervalMode
@@ -782,13 +902,13 @@ function categoryAxisLabel(
       : 0;
   return {
     interval,
-    rotate: typeof rotate === 'number' ? rotate : 30,
+    ...(typeof rotate === 'number' && rotate !== 0 ? { rotate } : {}),
     ...(typeof config?.showMinLabel === 'boolean' ? { showMinLabel: config.showMinLabel } : {}),
     ...(typeof config?.showMaxLabel === 'boolean' ? { showMaxLabel: config.showMaxLabel } : {}),
     hideOverlap: hideOverlapOnAuto
       ? mode === 'auto'
       : mode !== 'all' && config?.hideOverlap === true,
-    fontSize,
+    ...chartTextStyle(fontSize, fontFamily),
   };
 }
 
@@ -819,7 +939,9 @@ function numericAxisOptions(
 
 /** (rows, chartType, options) → ECharts option (방식 A 모사, MVP 옵션 범위) */
 export function assembleOption(result: QueryResult, chartType: ChartType, options: Record<string, any>): Record<string, unknown> {
-  const o = migrateLegacyInteractionOptions(options ?? {}, chartType as MajorType);
+  // Java 변환기와 동일하게 저장 옵션 마이그레이션과 대분류 기본값 병합을 변환기 진입점에서 수행한다.
+  // 호출자가 부분 저장 옵션을 넘겨도 MSW 미리보기와 실제 서버가 같은 결과를 내야 한다.
+  const o = optionsWithDefaults(chartType as MajorType, options ?? {});
   const movingAverage = movingAverageOf(o.analysis?.movingAverage);
   const movingAverageEligible = movingAverageOverridesSort(chartType, o, result.columns);
   // 이동평균은 sortOrder 대신 시간 오름차순을 강제한다(서버 변환기와 동일).
@@ -830,17 +952,33 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const cats = displayRows.map((r) => r[0]);
   const seriesCols = result.columns.slice(1);
   const palette = orderedPalette(o.palette ?? DEFAULT_PALETTE, o.paletteActiveIndex, o.paletteReversed);
-  const colorNames = chartType === 'pie' ? cats.map((category) => String(category)) : seriesCols.map((column) => column.name);
-  const autoColorMap = resolveSeriesColorMap(colorNames, palette, o.autoColorMap ?? {});
   const variant: string = o.variant ?? (chartType === 'pie' ? 'pie' : chartType === 'scatter' ? 'scatter' : chartType === 'line' ? 'basic' : 'basic');
+  const bubbleCandidate = chartType === 'scatter' && variant === 'bubble'
+    ? result.columns.findIndex((column) => column.name === o.scatter?.bubbleField)
+    : -1;
+  const bubbleColumnIndex = bubbleCandidate > 1 ? bubbleCandidate : -1;
+  const scatterSeriesCols = chartType === 'scatter' && bubbleColumnIndex >= 0
+    ? seriesCols.filter((_column, index) => index + 1 !== bubbleColumnIndex)
+    : seriesCols;
+  const colorNames = chartType === 'pie'
+    ? cats.map((category) => String(category))
+    : (chartType === 'scatter' ? scatterSeriesCols : seriesCols).map((column) => column.name);
+  const autoColorMap = resolveSeriesColorMap(
+    colorNames,
+    palette,
+    o.autoColorMap ?? {},
+    isPalettePresetForFamily(o.palettePreset, 'sequential'),
+  );
   const typography = resolveChartTypography(o);
   const metrics = resolveChartLayoutMetrics(o);
+  const fonts = resolveChartFontFamilies(o);
 
   // 배경: 서버 변환기와 동일하게 불투명 기본(흰색) — 미리보기가 임베드 결과와 일치하도록.
   const opt: Record<string, any> = {
     color: palette,
     backgroundColor: o.backgroundColor ?? '#ffffff',
     __chartsdkAutoColorMap: autoColorMap,
+    __chartsdkShowComputedAt: o.showComputedAt !== false,
     __chartsdkValueFormat: {
       tooltip: o.tooltip?.valueFormat ?? 'raw',
       yAxis: o.yAxis?.format ?? 'raw',
@@ -848,8 +986,15 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     },
   };
 
-  if (o.title) opt.title = { text: o.title, left: o.titleH ?? 'center', top: o.titleV ?? 'top', textStyle: { fontSize: typography.title } };
-  applyCommonTooltip(opt, o, chartType, typography.tooltip);
+  if (o.title) {
+    opt.title = {
+      text: resolveChartTitleText(o),
+      left: o.titleH ?? 'center',
+      top: o.titleV ?? 'top',
+      textStyle: chartTextStyle(typography.title, fonts.title),
+    };
+  }
+  applyCommonTooltip(opt, o, chartType, typography.tooltip, fonts.tooltip);
   if (o.legend?.show !== false) {
     const pos = o.legend?.position ?? 'bottom';
     // 제목이 같은 모서리면 범례를 제목 다음 줄로(규칙 1, 서버 미러).
@@ -860,14 +1005,25 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       show: true,
       [pos]: offset,
       orient: horizontalLegend ? 'horizontal' : 'vertical',
-      textStyle: { fontSize: typography.legend },
+      textStyle: chartTextStyle(typography.legend, fonts.legend),
       ...(horizontalLegend || o.legend?.scroll === true ? { type: 'scroll' } : {}),
     };
   } else {
     opt.legend = { show: false };
   }
 
-  const label = { show: o.dataLabel === true, fontSize: typography.dataLabel };
+  applyDataZoom(opt, o, chartType);
+
+  // 0°는 ECharts 기본이라 내보내지 않는다(서버 미러).
+  const labelRotate = typeof o.labelRotate === 'number' && o.labelRotate !== 0
+    ? o.labelRotate
+    : null;
+  const label = {
+    show: o.dataLabel === true,
+    ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+    ...(o.dataLabel === true && typeof o.labelPosition === 'string' ? { position: o.labelPosition } : {}),
+    ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+  };
   // 겹치는 데이터 라벨 자동 숨김(규칙 3, 공식 labelLayout).
   const labelLayout = o.dataLabel === true ? { hideOverlap: true } : undefined;
   const horizontal = variant === 'horizontal';
@@ -887,16 +1043,19 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       type: 'category',
       data: cats,
       boundaryGap: true,
-      splitArea: { show: false },
-      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true),
-      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true, fonts.axis),
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x', fonts.axis),
     };
     opt.yAxis = {
       type: o.yAxis?.scale === 'log' ? 'log' : 'value',
       splitLine: { show: o.yAxis?.splitLine !== false },
-      axisLabel: { fontSize: typography.axis },
-      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+      axisLabel: {
+        ...chartTextStyle(typography.axis, fonts.axis),
+        ...(o.yAxis?.unit ? { formatter: `{value}${o.yAxis.unit}` } : {}),
+      },
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y', fonts.axis),
       ...numericAxisOptions(o.yAxis, o.yAxis?.scale === 'log' ? 'log' : 'value', false),
+      ...(o.yAxis?.rangeMode === 'manual' ? { min: o.yAxis?.min, max: o.yAxis?.max } : {}),
     };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
     const seriesName = seriesCols[0]?.name ?? '산점도';
@@ -962,20 +1121,20 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     });
     if (!Number.isFinite(min)) { min = 0; max = 1; }
     if (min === max) max = min + 1;
-    opt.legend = { show: false };
+    delete opt.legend;
     opt.xAxis = {
       type: 'category',
       data: cats,
       splitArea: { show: true },
-      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true),
-      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+      axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true, fonts.axis),
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x', fonts.axis),
     };
     opt.yAxis = {
       type: 'category',
       data: yNames,
       splitArea: { show: true },
-      axisLabel: categoryAxisLabel(typography.axis, 0, o.yAxis, 'auto', false),
-      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+      axisLabel: categoryAxisLabel(typography.axis, undefined, o.yAxis, 'auto', false, fonts.axis),
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y', fonts.axis),
     };
     const hm = gridMargins(o, false); // heatmap 은 범례 제거 → 제목만 가산
     opt.grid = { ...hm, bottom: hm.bottom + metrics.visualMapHeight, containLabel: o.grid?.containLabel !== false };
@@ -985,9 +1144,19 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       palette,
       titleAtBottom(o) ? metrics.titleHeight : 0,
       typography.legend,
+      fonts.legend,
       o.colorTheme?.version === 2,
     );
-    const series: Record<string, any> = { type: 'heatmap', name: '값', data, label: { show: o.dataLabel === true, fontSize: typography.dataLabel } };
+    const series: Record<string, any> = {
+      type: 'heatmap',
+      name: '값',
+      data,
+      label: {
+        show: o.dataLabel === true,
+        ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+        ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+      },
+    };
     applySeriesEmphasis(series, o, 'heatmap');
     opt.series = [series];
     return opt;
@@ -1011,13 +1180,14 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     let min = vals.length ? Math.min(...vals) : 0;
     let max = vals.length ? Math.max(...vals) : 1;
     if (min === max) max = min + 1;
-    opt.legend = { show: false };
+    delete opt.legend;
     opt.visualMap = visualMapConfig(
       min,
       max,
       palette,
       titleAtBottom(o) ? metrics.titleHeight : 0,
       typography.legend,
+      fonts.legend,
       o.colorTheme?.version === 2,
     );
     let mapName = o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido';
@@ -1042,8 +1212,13 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       name: seriesCols[0]?.name ?? '값',
       map: mapName,
       roam: o.map?.roam === true,
-      label: { show: o.dataLabel === true, fontSize: typography.dataLabel },
+      label: {
+        show: o.dataLabel === true,
+        ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+        ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+      },
       ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
+      ...nonCartesianInsets(o, false, true),
       data,
     };
     applySeriesEmphasis(series, o, 'map');
@@ -1061,14 +1236,15 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
     // JSON 전송이라 symbolSize 콜백 불가 → 포인트별 symbolSize 를 데이터 항목에 계산해 넣는다(6~28px sqrt 스케일).
     const sizeOf = (v: number) => (sMax === sMin ? base : Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-    opt.legend = { show: false };
+    delete opt.legend;
     opt.geo = {
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
       roam: o.map?.roam === true,
+      ...nonCartesianInsets(o, false),
       label: { show: false },
-      itemStyle: { areaColor: '#f3f4f6', borderColor: '#d1d5db' },
+      // 포인트 지도에서 강조 대상은 점 시리즈뿐이다. 배경 행정구역 hover 강조는 항상 차단한다.
+      emphasis: { disabled: true },
     };
-    applyGeoEmphasis(opt.geo, o);
     const occurrences = new Map<string, number>();
     const series: Record<string, any> = {
       type: 'scatter',
@@ -1094,13 +1270,22 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   }
 
   if (chartType === 'pie') {
-    const radius = variant === 'donut' ? [`${100 - (o.pie?.donutWidth ?? 40)}%`, '100%'] : '70%';
     const occurrences = new Map<string, number>();
     const series: Record<string, any> = {
         type: 'pie',
-        radius,
+        ...(variant === 'donut'
+          ? { radius: [`${100 - (o.pie?.donutWidth ?? 40)}%`, '100%'] }
+          : {}),
+        ...nonCartesianInsets(o, true),
         roseType: variant === 'rose' ? 'radius' : undefined,
-        label: { show: o.dataLabel === true, position: o.pie?.labelPosition ?? 'outside', fontSize: typography.dataLabel },
+        startAngle: o.pie?.startAngle,
+        minAngle: o.pie?.minAngle,
+        label: {
+          show: o.dataLabel === true,
+          position: o.pie?.labelPosition ?? 'outside',
+          ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+          ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+        },
         data: cats.map((name, i) => {
           const dimensions: ItemColorDimension[] = [colorDimension(name)];
           const occurrence = nextMockOccurrence(occurrences, 'pie', '', dimensions);
@@ -1121,34 +1306,58 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     const yAxisType = o.yAxis?.scale === 'log' ? 'log' : 'value';
     opt.xAxis = {
       type: xAxisType,
-      axisLabel: { fontSize: typography.axis },
-      ...axisOptions(o.xAxis, typography.axis, 'x', 'x'),
+      splitLine: { show: o.xAxis?.splitLine === true },
+      axisLabel: chartTextStyle(typography.axis, fonts.axis),
+      ...axisOptions(o.xAxis, typography.axis, 'x', 'x', fonts.axis),
       ...numericAxisOptions(o.xAxis, xAxisType, true),
       ...(o.xAxis?.min != null ? { min: o.xAxis.min } : {}),
       ...(o.xAxis?.max != null ? { max: o.xAxis.max } : {}),
     };
     opt.yAxis = {
       type: yAxisType,
-      axisLabel: { fontSize: typography.axis },
-      ...axisOptions(o.yAxis, typography.axis, 'y', 'y'),
+      splitLine: { show: o.yAxis?.splitLine !== false },
+      axisLabel: {
+        ...chartTextStyle(typography.axis, fonts.axis),
+        ...(o.yAxis?.unit ? { formatter: `{value}${o.yAxis.unit}` } : {}),
+      },
+      ...axisOptions(o.yAxis, typography.axis, 'y', 'y', fonts.axis),
       ...numericAxisOptions(o.yAxis, yAxisType, false),
       ...(o.yAxis?.rangeMode === 'manual' ? { min: o.yAxis?.min, max: o.yAxis?.max } : {}),
     };
     opt.grid = { ...gridMargins(o, true), containLabel: o.grid?.containLabel !== false };
-    opt.series = seriesCols.map((c, s) => {
+    const bubbleSizes = bubbleColumnIndex >= 0
+      ? displayRows.map((row) => Number(row[bubbleColumnIndex])).filter(Number.isFinite)
+      : [];
+    const bubbleMin = bubbleSizes.length ? Math.min(...bubbleSizes) : 0;
+    const bubbleMax = bubbleSizes.length ? Math.max(...bubbleSizes) : 1;
+    const bubbleBaseSize = typeof o.scatter?.symbolSize === 'number' ? o.scatter.symbolSize : 10;
+    const bubbleSizeOf = (value: unknown) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || bubbleMax === bubbleMin) return bubbleBaseSize;
+      const ratio = Math.max(0, Math.min(1, (numeric - bubbleMin) / (bubbleMax - bubbleMin)));
+      return Math.round(6 + 22 * Math.sqrt(ratio));
+    };
+    opt.series = scatterSeriesCols.map((c) => {
+      const sourceIndex = result.columns.findIndex((column) => column.name === c.name);
       const occurrences = new Map<string, number>();
       const series: Record<string, any> = {
         type: 'scatter',
         name: c.name,
-        symbolSize: o.scatter?.symbolSize ?? 10,
+        ...(bubbleColumnIndex < 0 ? { symbolSize: o.scatter?.symbolSize ?? 10 } : {}),
         symbol: o.scatter?.symbol ?? 'circle',
         data: displayRows.map((r) => {
           const x = Number(r[0]) || 0;
-          const y = Number(r[1 + s]) || 0;
+          const y = Number(r[sourceIndex]) || 0;
           const dimensions: ItemColorDimension[] = [x, y];
           const occurrence = nextMockOccurrence(occurrences, 'scatter', c.name, dimensions);
+          const value: unknown = bubbleColumnIndex >= 0
+            ? {
+                value: [x, y, r[bubbleColumnIndex]],
+                symbolSize: bubbleSizeOf(r[bubbleColumnIndex]),
+              }
+            : [x, y];
           return withMockItemColor(
-            [x, y],
+            value,
             itemColorFor(itemColors, 'scatter', c.name, dimensions, occurrence),
             'color',
           );
@@ -1170,14 +1379,17 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     type: 'category',
     data: cats,
     splitLine: { show: o.xAxis?.splitLine === true },
-    axisLabel: categoryAxisLabel(typography.axis, horizontal ? 0 : o.xAxis?.rotate, o.xAxis, 'all', true),
-    ...axisOptions(o.xAxis, typography.axis, 'x', horizontal ? 'y' : 'x'),
+    axisLabel: categoryAxisLabel(typography.axis, o.xAxis?.rotate, o.xAxis, 'all', true, fonts.axis),
+    ...axisOptions(o.xAxis, typography.axis, 'x', horizontal ? 'y' : 'x', fonts.axis),
   };
   const valAxis = {
     type: o.yAxis?.scale === 'log' ? 'log' : 'value',
     splitLine: { show: o.yAxis?.splitLine !== false },
-    axisLabel: { fontSize: typography.axis },
-    ...axisOptions(o.yAxis, typography.axis, 'y', horizontal ? 'x' : 'y'),
+    axisLabel: {
+      ...chartTextStyle(typography.axis, fonts.axis),
+      ...(o.yAxis?.unit ? { formatter: `{value}${o.yAxis.unit}` } : {}),
+    },
+    ...axisOptions(o.yAxis, typography.axis, 'y', horizontal ? 'x' : 'y', fonts.axis),
     ...numericAxisOptions(o.yAxis, o.yAxis?.scale === 'log' ? 'log' : 'value', false),
     ...(o.yAxis?.rangeMode === 'manual' ? { min: o.yAxis?.min, max: o.yAxis?.max } : {}),
   };
@@ -1228,11 +1440,13 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     if (seriesType === 'bar') {
       if (o.bar?.width != null) base.barWidth = `${o.bar.width}%`;
       if (o.bar?.gap != null) base.barGap = `${o.bar.gap}%`;
-      if (o.bar?.borderRadius) base.itemStyle = { ...base.itemStyle, borderRadius: o.bar.borderRadius };
+      if (typeof o.bar?.borderRadius === 'number') {
+        base.itemStyle = { ...base.itemStyle, borderRadius: o.bar.borderRadius };
+      }
       if (o.bar?.showBackground) base.showBackground = true;
     }
     if (seriesType === 'line') {
-      base.smooth = variant === 'smooth';
+      if (variant === 'smooth') base.smooth = true;
       base.step = variant === 'step' ? 'end' : undefined;
       if (variant === 'area' || variant === 'stackedArea') base.areaStyle = { opacity: o.line?.areaOpacity ?? 0.3 };
       base.lineStyle = { width: o.line?.width ?? 2, type: o.line?.lineType ?? 'solid', color: o.colorMap?.[c.name] ?? autoColorMap[c.name] };
@@ -1599,15 +1813,43 @@ function paletteColor(palette: string[], index: number): string {
   return palette[index % palette.length] ?? DEFAULT_PALETTE[0];
 }
 
+const DATA_ZOOM_CHART_TYPES = new Set(['bar', 'line', 'scatter', 'boxplot', 'heatmap']);
+
+/**
+ * 항상 활성화되는 휠 확대·축소(ECharts dataZoom type='inside') — 서버 변환기 미러.
+ * 안쪽 방식이라 예약 높이가 0이고 제목·범례·grid 수식에 영향을 주지 않는다.
+ * 과거 저장 축 설정은 보존하고, 설정이 없으면 차트 형태에 맞는 축을 자동 선택한다.
+ */
+function applyDataZoom(option: Record<string, any>, source: Record<string, any>, chartType: ChartType): void {
+  if (!DATA_ZOOM_CHART_TYPES.has(chartType)) return;
+  const storedAxis = source.dataZoom?.axis;
+  const axis = storedAxis === 'x' || storedAxis === 'y' || storedAxis === 'both'
+    ? storedAxis
+    : chartType === 'scatter' || chartType === 'heatmap'
+      ? 'both'
+      : chartType === 'bar' && source.variant === 'horizontal'
+        ? 'y'
+        : 'x';
+  const yAxisIndex = source.yAxis?.secondAxis === true ? [0, 1] : [0];
+  option.dataZoom = [{
+    type: 'inside',
+    ...(axis !== 'y' ? { xAxisIndex: [0] } : {}),
+    ...(axis !== 'x' ? { yAxisIndex } : {}),
+    filterMode: 'filter',
+  }];
+}
+
 function applyCommonTooltip(
   option: Record<string, any>,
   source: Record<string, any>,
   chartType: ChartType,
   fontSize: number,
+  fontFamily: string | null,
 ): void {
   const config = source.tooltip ?? {};
   const enabled = config.enabled !== false;
-  const tooltip: Record<string, any> = { textStyle: { fontSize } };
+  // 툴팁은 HTML 렌더라 루트 textStyle 을 상속하지 않는다 — 글꼴을 따로 지정한다(서버 미러).
+  const tooltip: Record<string, any> = { textStyle: { fontSize, ...(fontFamily ? { fontFamily } : {}) } };
   if (!enabled) tooltip.show = false;
   if (config.trigger && config.trigger !== 'auto') tooltip.trigger = config.trigger;
   if (config.axisPointer && config.axisPointer !== 'auto') tooltip.axisPointer = { type: config.axisPointer };
@@ -1728,6 +1970,7 @@ function visualMapConfig(
   palette: string[],
   bottom = 0,
   fontSize = 12,
+  fontFamily: string | null = null,
   continuousPalette = false,
 ): Record<string, unknown> {
   return {
@@ -1737,7 +1980,7 @@ function visualMapConfig(
     orient: 'horizontal',
     left: 'center',
     bottom, // 제목이 하단이면 그 위로 올려 겹침 방지(규칙 1)
-    textStyle: { fontSize },
+    textStyle: chartTextStyle(fontSize, fontFamily),
     inRange: { color: continuousPalette ? [...palette] : ['#f7f7f7', paletteColor(palette, 0)] },
   };
 }

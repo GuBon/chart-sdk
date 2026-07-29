@@ -9,3 +9,48 @@
 body {
   @apply bg-bg-page text-text-primary font-sans;
 }
+
+.chart-preview-panel {
+  container: chart-preview / inline-size;
+}
+
+.chart-preview-toolbar {
+  display: grid;
+  grid-template-columns: 180px max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chart-preview-fit-controls {
+  grid-column: 4;
+}
+
+@container chart-preview (max-width: 719px) {
+  .chart-preview-toolbar {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .chart-preview-size-inputs {
+    justify-self: end;
+  }
+
+  .chart-preview-fit-controls {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .chart-preview-width-fit {
+    display: none;
+  }
+}
+
+@container chart-preview (max-width: 419px) {
+  .chart-preview-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-preview-size-inputs,
+  .chart-preview-fit-controls {
+    justify-self: start;
+  }
+}

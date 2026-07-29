@@ -15,7 +15,8 @@ import {
   type MapBounds,
   type MapViewport,
 } from '@chartsdk/chart-options/geo';
-import { hasChartTitle, responsiveTitlePatch, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
+import { responsiveTitlePatch, usesResponsiveTitle, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
+import { ensureChartWebFonts } from '@chartsdk/chart-options/webFonts';
 import {
   colorSelectionFromChartClick,
   locateColorSelection,
@@ -25,6 +26,12 @@ import {
 import { cn } from '@/lib/cn';
 
 export type MapBoundsChangeSource = 'sync' | 'roam' | 'box';
+
+const PREVIEW_DATA_ZOOM_CHART_TYPES = new Set<MajorType>(['bar', 'line', 'scatter', 'boxplot', 'heatmap']);
+
+export function supportsPreviewDataZoom(chartType: MajorType): boolean {
+  return PREVIEW_DATA_ZOOM_CHART_TYPES.has(chartType);
+}
 
 interface Point {
   x: number;
@@ -58,6 +65,7 @@ export function ChartPreview({
   colorSelection = null,
   onColorSelection,
   onColorPickingChange,
+  transientDataZoom = false,
 }: {
   option: Record<string, unknown> | null;
   chartType?: MajorType;
@@ -70,6 +78,8 @@ export function ChartPreview({
   colorSelection?: ColorSelection | null;
   onColorSelection?: (selection: Extract<ColorSelection, { scope: 'item' }>) => void;
   onColorPickingChange?: (picking: boolean) => void;
+  /** 편집 미리보기에서만 쓰는 임시 휠 줌. 저장 옵션과 임베드 결과에는 반영하지 않는다. */
+  transientDataZoom?: boolean;
 }) {
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -85,8 +95,10 @@ export function ChartPreview({
   const roamFrameRef = useRef<number | null>(null);
   const shiftPressedRef = useRef(false);
   const boxDragRef = useRef<BoxDrag | null>(null);
+  const transientDataZoomRef = useRef(transientDataZoom);
   const [boxZoomArmed, setBoxZoomArmed] = useState(false);
   const [boxDrag, setBoxDrag] = useState<BoxDrag | null>(null);
+  const [previewZoomed, setPreviewZoomed] = useState(false);
 
   useEffect(() => {
     onMapBoundsChangeRef.current = onMapBoundsChange;
@@ -100,7 +112,8 @@ export function ChartPreview({
     chartTypeRef.current = chartType;
     colorPickingRef.current = colorPicking;
     onColorSelectionRef.current = onColorSelection;
-  }, [chartType, colorPicking, onColorSelection]);
+    transientDataZoomRef.current = transientDataZoom;
+  }, [chartType, colorPicking, onColorSelection, transientDataZoom]);
 
   useEffect(() => {
     if (!elRef.current) return;
@@ -127,8 +140,12 @@ export function ChartPreview({
       );
       if (selection) onColorSelectionRef.current?.(selection);
     };
+    const reportDataZoom = () => {
+      setPreviewZoomed(transientDataZoomRef.current && hasActiveDataZoom(chart));
+    };
     chart.on('georoam', reportRoamedMapBounds);
     chart.on('click', selectChartItem);
+    chart.on('datazoom', reportDataZoom);
     const ro = new ResizeObserver(() => {
       chart.resize();
       if (hasTitleRef.current) chart.setOption(responsiveTitlePatch(el.clientWidth));
@@ -140,6 +157,7 @@ export function ChartPreview({
       if (roamFrameRef.current != null) cancelAnimationFrame(roamFrameRef.current);
       chart.off('georoam', reportRoamedMapBounds);
       chart.off('click', selectChartItem);
+      chart.off('datazoom', reportDataZoom);
       chart.dispose();
       chartRef.current = null;
     };
@@ -149,6 +167,7 @@ export function ChartPreview({
     const chart = chartRef.current;
     const el = elRef.current;
     if (!chart || !el) return;
+    let cancelled = false;
     if (option) {
       const isMapChart = chartType === 'map' || chartType === 'geoscatter';
       const preserveCurrentCamera = isMapChart
@@ -157,6 +176,7 @@ export function ChartPreview({
       const mapCamera = preserveCurrentCamera ? currentMapCamera(chart) : null;
       const renderOption = structuredClone(option);
       delete renderOption.__chartsdkAutoColorMap;
+      delete renderOption.__chartsdkShowComputedAt;
       hydrateValueFormat(renderOption);
       for (const embedded of takeEmbeddedMaps(renderOption)) {
         if (!echarts.getMap(embedded.name)) echarts.registerMap(embedded.name, embedded.geoJSON as never);
@@ -169,25 +189,37 @@ export function ChartPreview({
       // Admin 미리보기는 저장 옵션의 roam 여부와 무관하게 탐색 가능해야 한다.
       // 임베드/최종 차트의 인터랙션 여부는 기존 map.roam 옵션을 계속 따른다.
       enableMapRoam(renderOption);
+      if (transientDataZoom && supportsPreviewDataZoom(chartType)) {
+        enablePreviewDataZoom(renderOption, chartType);
+      }
       if (mapCamera) applyMapCamera(renderOption, mapCamera);
       applyColorEditorState(renderOption, colorPickingRef.current);
-      hasTitleRef.current = hasChartTitle(renderOption);
-      chart.setOption(withResponsiveTitle(renderOption, el.clientWidth), true);
-      hasRenderedRef.current = true;
-      renderedMapViewportRevisionRef.current = mapViewportRevision;
-      requestAnimationFrame(() => onMapBoundsChangeRef.current?.(visibleMapBounds(chart), 'sync'));
+      hasTitleRef.current = usesResponsiveTitle(renderOption);
+      void (async () => {
+        await ensureChartWebFonts(renderOption, `${window.location.origin}/`);
+        if (cancelled || chart.isDisposed()) return;
+        chart.setOption(withResponsiveTitle(renderOption, el.clientWidth), true);
+        setPreviewZoomed(false);
+        hasRenderedRef.current = true;
+        renderedMapViewportRevisionRef.current = mapViewportRevision;
+        requestAnimationFrame(() => onMapBoundsChangeRef.current?.(visibleMapBounds(chart), 'sync'));
+      })();
     } else {
       hasTitleRef.current = false;
       hasRenderedRef.current = false;
       renderedMapViewportRevisionRef.current = null;
       chart.clear();
+      setPreviewZoomed(false);
       onMapBoundsChangeRef.current?.(null, 'sync');
     }
-  }, [chartType, mapViewportRevision, option]);
+    return () => {
+      cancelled = true;
+    };
+  }, [chartType, mapViewportRevision, option, transientDataZoom]);
 
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !option) return;
+    if (!chart || !option || !hasRenderedRef.current) return;
     const patches = colorPickingPatches(option, colorPicking);
     if (patches) chart.setOption({ series: patches });
   }, [colorPicking, option]);
@@ -347,6 +379,18 @@ export function ChartPreview({
     width: Math.abs(boxDrag.current.x - boxDrag.start.x),
     height: Math.abs(boxDrag.current.y - boxDrag.start.y),
   } : null;
+  const previewDataZoomEnabled = transientDataZoom && supportsPreviewDataZoom(chartType);
+
+  const resetPreviewDataZoom = () => {
+    if (!previewDataZoomEnabled) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+    const dataZoom = asObjects((chart.getOption() as Record<string, unknown>).dataZoom);
+    dataZoom.forEach((_item, dataZoomIndex) => {
+      chart.dispatchAction({ type: 'dataZoom', dataZoomIndex, start: 0, end: 100 });
+    });
+    setPreviewZoomed(false);
+  };
 
   return (
     <div
@@ -354,6 +398,9 @@ export function ChartPreview({
       data-color-picking={colorPicking}
       data-map-viewport-editing={mapViewportEditing}
       data-box-zoom-armed={boxZoomArmed}
+      data-preview-data-zoom={previewDataZoomEnabled}
+      data-preview-data-zoomed={previewZoomed}
+      onDoubleClick={resetPreviewDataZoom}
       className={cn('relative h-full w-full', colorPicking && 'cursor-crosshair')}
     >
       <div ref={elRef} className="absolute inset-0" />
@@ -434,6 +481,49 @@ function enableMapRoam(option: Record<string, unknown>): void {
       (item as Record<string, unknown>).roam = true;
     }
   }
+}
+
+/**
+ * 편집기에서 값을 자세히 살피기 위한 임시 inside dataZoom.
+ * 서버가 만든 option의 복제본에만 추가하므로 저장 options와 임베드 차트는 바뀌지 않는다.
+ */
+function enablePreviewDataZoom(option: Record<string, unknown>, chartType: MajorType): void {
+  if (!supportsPreviewDataZoom(chartType) || asObjects(option.dataZoom).length > 0) return;
+
+  const xAxes = asObjects(option.xAxis);
+  const yAxes = asObjects(option.yAxis);
+  const xCategoryIndices = xAxes
+    .map((axis, index) => axis.type === 'category' ? index : -1)
+    .filter((index) => index >= 0);
+  const yCategoryIndices = yAxes
+    .map((axis, index) => axis.type === 'category' ? index : -1)
+    .filter((index) => index >= 0);
+  const zoomBothAxes = chartType === 'scatter' || chartType === 'heatmap';
+  const zoom: Record<string, unknown> = {
+    id: '__chartsdk_preview_data_zoom__',
+    type: 'inside',
+    filterMode: 'filter',
+  };
+
+  if (zoomBothAxes) {
+    if (xAxes.length > 0) zoom.xAxisIndex = xAxes.map((_axis, index) => index);
+    if (yAxes.length > 0) zoom.yAxisIndex = yAxes.map((_axis, index) => index);
+  } else if (yCategoryIndices.length > 0 && xCategoryIndices.length === 0) {
+    zoom.yAxisIndex = yCategoryIndices;
+  } else {
+    zoom.xAxisIndex = xCategoryIndices.length > 0 ? xCategoryIndices : [0];
+  }
+
+  option.dataZoom = [zoom];
+}
+
+function hasActiveDataZoom(chart: echarts.ECharts): boolean {
+  const dataZoom = asObjects((chart.getOption() as Record<string, unknown>).dataZoom);
+  return dataZoom.some((item) => {
+    const start = typeof item.start === 'number' ? item.start : 0;
+    const end = typeof item.end === 'number' ? item.end : 100;
+    return start > 0.01 || end < 99.99;
+  });
 }
 
 interface MapCamera {

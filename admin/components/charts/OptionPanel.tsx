@@ -18,14 +18,16 @@ import {
   type OptionEditorTab,
   type Options,
 } from '@chartsdk/chart-options';
-import { resolveChartTypography } from '@chartsdk/chart-options/display';
+import { resolveChartDesignSize, resolveChartTypography } from '@chartsdk/chart-options/display';
 import {
   applyPalettePreset,
   applySequentialPaletteDirection,
   cartoPaletteForChartType,
 } from '@chartsdk/chart-options/palettes';
 import {
+  findItemColorOverride,
   normalizeHexColor,
+  normalizeItemColorOverrides,
   removeItemColorOverride,
   upsertItemColorOverride,
   type ColorSelection,
@@ -36,7 +38,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { chartTypeLabel } from '@/lib/chartTypes';
 import type { MapViewportSession } from '@/lib/mapViewportSession';
-import { OptionControl, TypographyPolicy } from './OptionControl';
+import { OptionControl, TypographyPolicy, autoTypographySizeOf } from './OptionControl';
 import { MapViewportControl } from './MapViewportControl';
 import { staticColorSelections } from '@/lib/chartColorSelection';
 
@@ -134,8 +136,12 @@ export function OptionPanel({
     ? availableTabs.filter((tab) => definitions.some((definition) => optionEditorTabOf(definition) === tab))
     : activeTab ? [activeTab] : [];
   const typography = resolveChartTypography(options);
-  const colorTargets = staticColorSelections(chartType, columns, rows);
-  const effectiveColorSelection = colorSelection ?? colorTargets[0] ?? null;
+  const colorTargets = staticColorSelections(chartType, columns, rows, options);
+  // 자동 선택은 실제 시리즈에만 적용한다. 원형 조각·지도 지역·점 같은 항목은
+  // 반드시 차트에서 고른 뒤 팔레트/직접 지정 색상을 적용한다.
+  const effectiveColorSelection = colorSelection
+    ?? colorTargets.find((target) => target.scope === 'series')
+    ?? null;
   const paletteColors = Array.isArray(options.palette) && options.palette.length > 0
     ? options.palette.map(String)
     : cartoPaletteForChartType(chartType, options.palettePreset);
@@ -155,6 +161,13 @@ export function OptionPanel({
     } else if (definition.key === 'palette') {
       setPath(next, definition.key, value);
       setPath(next, 'autoColorMap', {});
+    } else if (definition.key === 'display.preset' && value === 'custom') {
+      // 프리셋에서 사용자 지정으로 들어갈 때 과거 기본 width/height로 튀지 않고
+      // 지금 보고 있는 논리 캔버스 크기부터 편집을 시작한다.
+      const currentSize = resolveChartDesignSize(options);
+      setPath(next, 'display.preset', 'custom');
+      setPath(next, 'display.width', currentSize.width);
+      setPath(next, 'display.height', currentSize.height);
     } else {
       setPath(next, definition.key, value);
     }
@@ -208,6 +221,40 @@ export function OptionPanel({
       delete colorMap[String(effectiveColorSelection.dimensions[0] ?? '')];
       setPath(next, 'colorMap', colorMap);
     }
+    onChangeOptions(next);
+  };
+  const deleteSelectedChartItem = () => {
+    if (effectiveColorSelection?.scope !== 'item') return;
+    const next = structuredClone(options);
+    const overrides = getPath(next, 'itemColorOverrides');
+    const hadOverride = !!findItemColorOverride(overrides, effectiveColorSelection);
+    let changed = hadOverride;
+    if (hadOverride) {
+      setPath(next, 'itemColorOverrides', removeItemColorOverride(overrides, effectiveColorSelection));
+    }
+    if (effectiveColorSelection.kind === 'pie') {
+      const colorMap = {
+        ...((getPath(next, 'colorMap') && typeof getPath(next, 'colorMap') === 'object')
+          ? getPath(next, 'colorMap') as Record<string, string>
+          : {}),
+      };
+      const itemName = String(effectiveColorSelection.dimensions[0] ?? '');
+      if (colorMap[itemName] != null) {
+        delete colorMap[itemName];
+        setPath(next, 'colorMap', colorMap);
+        changed = true;
+      }
+    }
+    onColorSelectionChange(null);
+    if (changed) onChangeOptions(next);
+  };
+  const clearAllChartItemOverrides = () => {
+    const overrides = normalizeItemColorOverrides(getPath(options, 'itemColorOverrides'));
+    onColorSelectionChange(effectiveColorSelection?.scope === 'item' ? null : effectiveColorSelection);
+    onColorPickingChange(false);
+    if (overrides.length === 0) return;
+    const next = structuredClone(options);
+    setPath(next, 'itemColorOverrides', []);
     onChangeOptions(next);
   };
   const changeType = (nextType: MajorType) => {
@@ -392,6 +439,7 @@ export function OptionPanel({
                             ? refreshDisabledReason != null
                             : disabled}
                           lockNote={definition.key === 'sortOrder' ? sortLockNote : null}
+                          autoValue={autoTypographySizeOf(definition.key, typography)}
                           paletteColors={paletteColors}
                           paletteReversed={options.paletteReversed === true}
                           continuousPalette={options.colorTheme?.version === 2}
@@ -416,6 +464,8 @@ export function OptionPanel({
                           onColorPickingChange={onColorPickingChange}
                           onApplySelectedColor={applySelectedColor}
                           onClearSelectedColor={clearSelectedColorOverride}
+                          onDeleteSelectedChartItem={deleteSelectedChartItem}
+                          onClearAllChartItems={clearAllChartItemOverrides}
                         />
                       ))}
                     </div>

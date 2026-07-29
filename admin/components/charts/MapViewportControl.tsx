@@ -60,7 +60,9 @@ export function MapViewportControl({
   const activeMode = session.activePanel;
   const currentBounds = session.visibleBounds;
   const editing = session.editing;
-  const modes: MapViewportMode[] = chartType === 'map'
+  // 영역 지도와 포인트 지도 모두 같은 행정구역 표시 범위 계약을 사용한다.
+  // 포인트 지도도 배경 geo가 동일한 대한민국 경계를 사용하므로 지역 선택을 숨길 이유가 없다.
+  const modes: MapViewportMode[] = chartType === 'map' || chartType === 'geoscatter'
     ? ['data', 'regions', 'manual', 'coordinates']
     : ['data', 'manual', 'coordinates'];
   const viewportBounds = 'bounds' in viewport ? viewport.bounds : undefined;

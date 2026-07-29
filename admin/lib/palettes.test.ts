@@ -8,6 +8,7 @@ import {
   cartoPalette,
   paletteChoicesForChartType,
   paletteFamilyForChartType,
+  resolveSeriesColorMap,
 } from '@chartsdk/chart-options/palettes';
 
 describe('CARTO 정성형 팔레트 계약', () => {
@@ -41,8 +42,22 @@ describe('차트 대분류별 CARTO 팔레트 정책', () => {
     for (const [chartType, family] of Object.entries(expected)) {
       expect(paletteFamilyForChartType(chartType)).toBe(family);
     }
-    expect(paletteChoicesForChartType('bar')).toHaveLength(6);
-    expect(paletteChoicesForChartType('map')).toHaveLength(19);
+    const barChoices = paletteChoicesForChartType('bar');
+    const mapChoices = paletteChoicesForChartType('map');
+    expect(barChoices).toHaveLength(25);
+    expect(mapChoices).toHaveLength(25);
+    expect(new Set(barChoices.slice(0, 6).map((choice) => choice.value))).toEqual(new Set(Object.keys(CARTO_QUALITATIVE)));
+    expect(new Set(mapChoices.slice(0, 19).map((choice) => choice.value))).toEqual(new Set(Object.keys(CARTO_SEQUENTIAL)));
+    expect(new Set(barChoices.map((choice) => choice.value))).toEqual(new Set(mapChoices.map((choice) => choice.value)));
+  });
+
+  it('편집기 테마 이름에는 CARTO 접두어를 노출하지 않는다', () => {
+    const labels = [
+      ...paletteChoicesForChartType('bar'),
+      ...paletteChoicesForChartType('map'),
+    ].map((choice) => choice.label);
+    expect(labels).not.toContain('CARTO');
+    expect(labels.every((label) => !label.startsWith('CARTO '))).toBe(true);
   });
 
   it('공식 순차형 19개를 7단계로 제공하고 Teal 순서를 유지한다', () => {
@@ -55,6 +70,37 @@ describe('차트 대분류별 CARTO 팔레트 정책', () => {
     expect(cartoPalette('teal')).toEqual([
       '#D1EEEA', '#A8DBD9', '#85C4C9', '#68ABB8', '#4F90A6', '#3B738F', '#2A5674',
     ]);
+  });
+
+  it('차트 권장 계열과 다른 테마도 선택하면 그대로 적용하고 계열별 선택을 기억한다', () => {
+    const sequentialBar = applyPalettePreset(defaultsFor('bar'), 'bar', 'burg');
+    expect(sequentialBar.palettePreset).toBe('burg');
+    expect(sequentialBar.palette).toEqual(cartoPalette('burg'));
+    expect(sequentialBar.paletteReversed).toBe(false);
+    expect(sequentialBar.colorTheme).toMatchObject({ sequentialPreset: 'burg' });
+
+    const qualitativeMap = applyPalettePreset(defaultsFor('map'), 'map', 'bold');
+    expect(qualitativeMap.palettePreset).toBe('bold');
+    expect(qualitativeMap.palette).toEqual(cartoPalette('bold'));
+    expect(qualitativeMap.paletteReversed).toBe(false);
+    expect(qualitativeMap.colorTheme).toMatchObject({ qualitativePreset: 'bold' });
+  });
+
+  it('순차형 테마는 시리즈 수가 팔레트 단계보다 적거나 많아도 전체 그라데이션에 고르게 배정한다', () => {
+    const teal = cartoPalette('teal');
+    expect(resolveSeriesColorMap(['s1', 's2', 's3'], teal, {}, true)).toEqual({
+      s1: teal[0],
+      s2: teal[3],
+      s3: teal[6],
+    });
+
+    const names = Array.from({ length: 10 }, (_unused, index) => `s${index}`);
+    const spread = resolveSeriesColorMap(names, ['#000000', '#FFFFFF'], { s0: '#FF0000' }, true);
+    expect(Object.keys(spread)).toHaveLength(10);
+    expect(spread.s0).toBe('#000000');
+    expect(spread.s5).toBe('#8E8E8E');
+    expect(spread.s9).toBe('#FFFFFF');
+    expect(new Set(Object.values(spread)).size).toBe(10);
   });
 
   it('새 지도 기본값은 Teal이고 구 저장 지도는 이전 팔레트 계약을 표시한다', () => {

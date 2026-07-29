@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bubbleSizeColumns,
   colorSelectionFromChartClick,
+  colorSelectionFromItemTarget,
   cssColorToHex,
   itemTargetAt,
   locateColorSelection,
@@ -8,6 +10,19 @@ import {
 } from './chartColorSelection';
 
 describe('chart color selection', () => {
+  it('저장된 포인트 지도 항목을 값·색상 칩용 선택으로 복원한다', () => {
+    expect(colorSelectionFromItemTarget({
+      kind: 'geoscatter',
+      seriesName: '__geoscatter__',
+      dimensions: [126.978, 37.5665],
+      occurrence: 0,
+    })).toMatchObject({
+      scope: 'item',
+      label: '126.978, 37.5665',
+      dimensions: [126.978, 37.5665],
+    });
+  });
+
   it('막대 클릭을 시리즈명과 카테고리로 식별한다', () => {
     const option = {
       xAxis: { type: 'category', data: ['서울', '부산'] },
@@ -99,6 +114,30 @@ describe('chart color selection', () => {
       [{ name: '지역' }, { name: '값' }],
       [['서울', 10], ['서울', 20], ['부산', 30]],
     ).map((item) => item.label)).toEqual(['서울', '부산']);
+  });
+
+  it('버블 크기 컬럼은 색상 시리즈 대상에서 제외한다', () => {
+    const selections = staticColorSelections(
+      'scatter',
+      [
+        { name: 'x', type: 'number' },
+        { name: 'y', type: 'numeric' },
+        { name: 'size', type: 'integer' },
+      ],
+      [[1, 10, 3]],
+      { variant: 'bubble', scatter: { bubbleField: 'size' } },
+    );
+
+    expect(selections.map((selection) => selection.label)).toEqual(['y']);
+  });
+
+  it('버블 크기 선택기는 X·Y 이후의 숫자 컬럼만 제공한다', () => {
+    expect(bubbleSizeColumns([
+      { name: 'x', type: 'number' },
+      { name: 'y', type: 'number' },
+      { name: 'label', type: 'text' },
+      { name: 'size', type: 'double precision' },
+    ]).map((column) => column.name)).toEqual(['size']);
   });
 
   it('CSS rgb 색상을 HEX로 변환한다', () => {

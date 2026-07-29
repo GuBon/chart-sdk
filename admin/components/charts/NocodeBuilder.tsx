@@ -83,11 +83,11 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
   const areaNameOptions = colOptions.filter((column) => !/\b(?:geometry|geography)\b/i.test(column.type));
   const numericOptions = colOptions.filter((column) => isNumericType(column.type));
-  // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]). 버킷·표본은 원본값 모드에서 숨김.
+  // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]).
   const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
   const maxSeries = isPie || isMap || isBoxplot || !!config.seriesBy ? 1 : isGeoScatter ? 2 : Infinity;
   const hideBucket = isScatter || isBoxplot || isGeoScatter;
-  const hideSampleRow = isScatter || isBoxplot || isGeoScatter || spatialGeoArea || tableQueryMode;
+  const hideSampleRow = spatialGeometry || tableQueryMode;
   const xLabel = isMap ? '지역' : isBoxplot ? '카테고리' : isGeoScatter ? '경도' : 'X축';
   const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 값';
   const yAggChoices = aggChoicesForChart(chartType);
@@ -122,9 +122,10 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       ...config.yAxis,
       {
         column: firstValueCol,
-        // 활성 표본은 집계 모드에서만 유효하다. 테이블 변경 뒤 값 축을 다시 추가할 때
-        // 원본값을 잠깐 거치며 보존된 표본 설정이 지워지지 않도록 집계값으로 시작한다.
-        agg: config.sample ? (isNumericType(firstValueType) ? 'sum' : 'count') : 'none',
+        // 기존 값 축이 있으면 같은 집계 방식을 이어 받아 원본값·집계값 혼합 오류를 피한다.
+        // 값 축이 비어 있는 표본 구성은 종전과 같이 숫자=sum, 그 외=count로 시작한다.
+        agg: config.yAxis[0]?.agg
+          ?? (config.sample ? (isNumericType(firstValueType) ? 'sum' : 'count') : 'none'),
       },
     ],
   });
@@ -150,7 +151,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   // ── 조인 (생성규칙 11장) ──
   const joins = config.joins ?? [];
   const rawValueMode = config.yAxis.some((y) => y.agg === 'none');
-  const sampleDisabled = rawValueMode;
   const colsOf = (ref: TableRef) => tables.find((t) => tableRefKey(t) === tableRefKey(ref))?.columns ?? [];
   // 조인 컬럼 참조는 테이블 핸들로 qualified — 백엔드가 핸들을 소스로 해석(§11.2). 동명 테이블은 핸들이 달라 구분됨.
   const qualOpts = (refs: TableRef[]) =>
@@ -596,15 +596,12 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         <Row label="표본 추출">
           <Switch
             aria-label="표본 추출"
-            checked={!!config.sample && !sampleDisabled}
-            disabled={sampleDisabled}
+            checked={!!config.sample}
             onChange={(on) => {
-              if (!sampleDisabled) patch({ sample: on ? createSampleConfig() : null });
+              patch({ sample: on ? createSampleConfig() : null });
             }}
           />
-          {rawValueMode ? (
-            <span className="text-[13px] text-text-tertiary">원본값 모드에서는 표본 추출을 사용할 수 없습니다.</span>
-          ) : config.sample ? (
+          {config.sample ? (
             <>
               <div className="w-32">
                 <Select
@@ -651,7 +648,11 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               </button>
             </>
           ) : (
-            <span className="text-[13px] text-text-tertiary">무작위 표본으로 빠르게 확인 — SUM·COUNT는 표본값, AVG·표준편차·분산은 가능한 경우 95% 추정 구간을 표시합니다.</span>
+            <span className="text-[13px] text-text-tertiary">
+              {rawValueMode
+                ? '무작위로 선택한 원본 행만 차트에 표시합니다. 지도는 표본에 포함되지 않은 영역이 비어 보일 수 있습니다.'
+                : '무작위 표본으로 빠르게 확인 — SUM·COUNT는 표본값, AVG·표준편차·분산은 가능한 경우 95% 추정 구간을 표시합니다.'}
+            </span>
           )}
         </Row>
         )}

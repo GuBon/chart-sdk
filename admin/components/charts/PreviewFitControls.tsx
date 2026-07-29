@@ -10,17 +10,30 @@ interface Props {
   onFitMode: (mode: PreviewFitMode) => void;
   onZoom: (zoom: number) => void;
   compact?: boolean;
+  responsive?: boolean;
 }
 
-export function PreviewFitControls({ fitMode, zoom, onFitMode, onZoom, compact = false }: Props) {
+export function PreviewFitControls({ fitMode, zoom, onFitMode, onZoom, compact = false, responsive = false }: Props) {
   const chooseZoom = (next: number) => {
     onFitMode('actual');
     onZoom(Math.min(200, Math.max(25, next)));
   };
   return (
-    <div role="group" className="flex items-center gap-1" aria-label="미리보기 맞춤 방식">
+    <div
+      role="group"
+      className={cn('flex items-center gap-1', responsive && 'chart-preview-fit-controls')}
+      aria-label="미리보기 맞춤 방식"
+    >
       <FitButton active={fitMode === 'contain'} onClick={() => onFitMode('contain')}>화면 맞춤</FitButton>
-      {!compact && <FitButton active={fitMode === 'width'} onClick={() => onFitMode('width')}>너비 맞춤</FitButton>}
+      {!compact && (
+        <FitButton
+          active={fitMode === 'width'}
+          className={responsive ? 'chart-preview-width-fit' : undefined}
+          onClick={() => onFitMode('width')}
+        >
+          너비 맞춤
+        </FitButton>
+      )}
       <FitButton active={fitMode === 'actual'} onClick={() => { onFitMode('actual'); onZoom(100); }}>100%</FitButton>
       <button
         type="button"
@@ -43,7 +56,17 @@ export function PreviewFitControls({ fitMode, zoom, onFitMode, onZoom, compact =
   );
 }
 
-function FitButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function FitButton({
+  active,
+  onClick,
+  children,
+  className,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <button
       type="button"
@@ -52,6 +75,7 @@ function FitButton({ active, onClick, children }: { active: boolean; onClick: ()
       className={cn(
         'h-7 rounded px-2 text-[11px] font-medium transition-colors',
         active ? 'bg-primary text-primary-foreground' : 'text-text-secondary hover:bg-muted hover:text-text-primary',
+        className,
       )}
     >
       {children}

@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 import { getVariants, type MajorType, type OptionDef } from '@chartsdk/chart-options';
 import type { ChartTypography } from '@chartsdk/chart-options/display';
 import { Input } from '@/components/ui/Input';
@@ -9,13 +10,19 @@ import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 import { CHART_TYPE_META } from '@/lib/chartTypes';
 import {
+  bubbleSizeColumns,
+  colorSelectionFromItemTarget,
+} from '@/lib/chartColorSelection';
+import {
   DEFAULT_PALETTE,
+  cartoPalette,
   paletteChoicesForChartType,
   paletteFamilyForChartType,
 } from '@chartsdk/chart-options/palettes';
 import {
   findItemColorOverride,
   itemColorTargetKey,
+  normalizeItemColorOverrides,
   type ColorSelection,
 } from '@chartsdk/chart-options/colorOverrides';
 import { AnalysisAnnotationsControl } from './AnalysisAnnotationsControl';
@@ -25,10 +32,24 @@ import {
 } from './StatisticalOverlaysControl';
 
 
+/** 요소별 글자 크기 슬라이더가 자동일 때 실제 적용 중인 px 를 보여 주기 위한 대응표. */
+const TYPOGRAPHY_AUTO_FIELDS: Record<string, 'title' | 'legend' | 'axis' | 'dataLabel' | 'tooltip'> = {
+  'typography.titleFontSize': 'title',
+  'typography.legendFontSize': 'legend',
+  'typography.axisFontSize': 'axis',
+  'typography.dataLabelFontSize': 'dataLabel',
+  'typography.tooltipFontSize': 'tooltip',
+};
+
+export function autoTypographySizeOf(key: string, typography: ChartTypography): number | null {
+  const field = TYPOGRAPHY_AUTO_FIELDS[key];
+  return field ? typography[field] : null;
+}
+
 export function TypographyPolicy({ typography }: { typography: ChartTypography }) {
   return (
     <div data-testid="typography-policy" aria-live="polite" className="rounded-md bg-muted px-2.5 py-2 text-[11px] leading-4 text-text-tertiary">
-      <p>{typography.mode === 'auto' ? '자동: 논리 차트 크기를 바꾸면 다시 계산합니다.' : '직접 지정: 저장한 px 값을 그대로 사용합니다.'}</p>
+      <p>요소별 글꼴과 글자 크기는 제목·범례·축 글자·라벨·툴팁 모양 섹션에서 각각 지정합니다. 전체 글자 크기는 자동 상태인 요소에만 적용됩니다.</p>
       <p>현재 제목 {typography.title}px · 범례 {typography.legend}px · 축 {typography.axis}px · 라벨 {typography.dataLabel}px · 툴팁 {typography.tooltip}px</p>
       <p>임베드 영역만 CSS로 리사이즈하면 위 px 값은 유지됩니다.</p>
     </div>
@@ -54,12 +75,15 @@ export function OptionControl({
   colorPicking,
   action,
   lockNote,
+  autoValue,
   onChange,
   onChangeType,
   onSelectColorTarget,
   onColorPickingChange,
   onApplySelectedColor,
   onClearSelectedColor,
+  onDeleteSelectedChartItem,
+  onClearAllChartItems,
 }: {
   def: OptionDef;
   value: unknown;
@@ -86,12 +110,16 @@ export function OptionControl({
   };
   /** 다른 옵션이 이 값을 무효로 만들 때의 안내. 값은 보존하고 입력만 잠근다. */
   lockNote?: string | null;
+  /** 값이 비어 자동으로 해석될 때 실제 적용되는 값(슬라이더 표시·눈금 위치용). */
+  autoValue?: number | null;
   onChange: (value: unknown) => void;
   onChangeType: (type: MajorType) => void;
   onSelectColorTarget: (target: ColorSelection) => void;
   onColorPickingChange: (picking: boolean) => void;
   onApplySelectedColor: (color: string) => void;
   onClearSelectedColor: () => void;
+  onDeleteSelectedChartItem: () => void;
+  onClearAllChartItems: () => void;
 }) {
   const fieldName = fieldNameFor(def.key);
   const fieldId = `option-${fieldName}`;
@@ -138,7 +166,7 @@ export function OptionControl({
 
   if (def.control === 'textarea') {
     return (
-      <Labeled label={def.label} stack>
+      <Labeled label={def.label} htmlFor={fieldId} stack>
         <textarea
           id={fieldId}
           name={fieldName}
@@ -216,7 +244,7 @@ export function OptionControl({
   switch (def.control) {
     case 'segment': {
       const choices = def.key === 'variant' ? getVariants(chartType) : (def.choices ?? []);
-      control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Segmented value={String(value)} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={onChange} /></div>;
+      control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Segmented value={String(value)} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(next) => onChange(coerce(def, next))} /></div>;
       break;
     }
     case 'select': {
@@ -225,7 +253,21 @@ export function OptionControl({
       const choices = def.key === 'palettePreset' && currentValue && !baseChoices.some((choice) => String(choice.value) === currentValue)
         ? [{ value: currentValue, label: '기존 테마' }, ...baseChoices]
         : baseChoices;
-      control = <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={currentValue} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(event) => onChange(coerce(def, event.target.value))} /></div>;
+      control = def.key === 'palettePreset'
+        ? (
+          <div className="w-60 shrink-0">
+            <ThemeSelect
+              id={fieldId}
+              name={fieldName}
+              label={def.label}
+              disabled={disabled}
+              value={currentValue}
+              choices={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))}
+              onChange={(next) => onChange(coerce(def, next))}
+            />
+          </div>
+        )
+        : <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={currentValue} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(event) => onChange(coerce(def, event.target.value))} /></div>;
       break;
     }
     case 'text':
@@ -234,14 +276,32 @@ export function OptionControl({
     case 'number':
       control = <div className="w-24"><Input id={fieldId} name={fieldName} disabled={disabled} size="sm" type="number" value={value == null ? '' : String(value)} min={def.min} max={def.max} step={def.step} onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))} /></div>;
       break;
-    case 'slider':
+    case 'slider': {
+      // 기본값이 null 인 슬라이더는 '자동'이 정상 상태다 — 눈금은 실제 적용 중인 값에 두고, 되돌릴 버튼을 함께 낸다.
+      const automatic = value == null;
+      const resettable = def.default === null;
       control = (
-        <div className="flex items-center gap-2">
-          <input id={fieldId} name={fieldName} aria-label={def.label} type="range" min={def.min} max={def.max} step={def.step} value={Number(value ?? def.min ?? 0)} onChange={(event) => onChange(Number(event.target.value))} disabled={disabled} className="w-28 accent-primary disabled:opacity-50" />
-          <span className="w-10 text-right text-xs text-text-tertiary">{value == null ? '자동' : `${value}${def.unit ?? ''}`}</span>
+        <div className="flex items-center gap-2" data-testid={`option-slider-${fieldName}`}>
+          <input id={fieldId} name={fieldName} aria-label={def.label} type="range" min={def.min} max={def.max} step={def.step} value={Number(value ?? autoValue ?? def.min ?? 0)} onChange={(event) => onChange(Number(event.target.value))} disabled={disabled} className="w-28 accent-primary disabled:opacity-50" />
+          <span className="w-16 text-right text-xs text-text-tertiary">
+            {automatic
+              ? (autoValue == null ? '자동' : `자동 ${autoValue}${def.unit ?? ''}`)
+              : `${value}${def.unit ?? ''}`}
+          </span>
+          {resettable && (
+            <button
+              type="button"
+              disabled={disabled || automatic}
+              onClick={() => onChange(null)}
+              className="text-[11px] text-text-tertiary hover:text-text-primary disabled:opacity-50"
+            >
+              자동
+            </button>
+          )}
         </div>
       );
       break;
+    }
     case 'toggle':
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Switch checked={value === true} onChange={onChange} aria-label={def.label} /></div>;
       break;
@@ -281,26 +341,36 @@ export function OptionControl({
             ? resolvedSelectionColor(colorSelection, colorTargets, colorMap, autoColorMap, itemColorOverrides, paletteColors)
             : null}
           selectedTarget={colorSelection}
+          selectedHasOverride={selectionHasColorOverride(colorSelection, colorMap, itemColorOverrides)}
           disabled={disabled}
           label={def.label}
           sequential={paletteFamilyForChartType(chartType) === 'sequential'}
           reversed={paletteReversed}
           continuous={continuousPalette}
           onApply={onApplySelectedColor}
+          onClear={onClearSelectedColor}
         />
       );
       break;
-    case 'columnRef':
-      control = hasResult
-        ? <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={columns.map((column) => ({ value: column.name, label: column.name }))} onChange={(event) => onChange(event.target.value)} placeholder="컬럼" /></div>
-        : <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>;
+    case 'columnRef': {
+      if (!hasResult) {
+        control = <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>;
+      } else {
+        const eligibleColumns = def.key === 'scatter.bubbleField'
+          ? bubbleSizeColumns(columns)
+          : columns;
+        control = eligibleColumns.length > 0
+          ? <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={eligibleColumns.map((column) => ({ value: column.name, label: column.name }))} onChange={(event) => onChange(event.target.value)} placeholder="컬럼" /></div>
+          : <span className="text-xs text-text-tertiary">크기로 사용할 숫자 컬럼이 없습니다</span>;
+      }
       break;
+    }
     case 'colorMap': {
       const colorMap = value && typeof value === 'object' ? value as Record<string, string> : {};
       control = !hasResult
         ? <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>
         : <ColorTargetControl
-            label={chartType === 'map' || chartType === 'heatmap' ? '요소 색상' : def.label}
+            label={def.label}
             targets={colorTargets}
             selection={colorSelection}
             colorMap={colorMap}
@@ -311,8 +381,8 @@ export function OptionControl({
             disabled={disabled}
             onSelect={onSelectColorTarget}
             onPickingChange={onColorPickingChange}
-            onApplyColor={onApplySelectedColor}
-            onClearColor={onClearSelectedColor}
+            onDeleteSelectedItem={onDeleteSelectedChartItem}
+            onClearAllItems={onClearAllChartItems}
           />;
       break;
     }
@@ -344,28 +414,264 @@ export function OptionControl({
   if (lockNote) {
     return (
       <div className="flex flex-col gap-1" data-testid={`option-locked-${def.key}`}>
-        <Labeled label={def.label}>{control}</Labeled>
+        <Labeled label={def.label} htmlFor={fieldId}>{control}</Labeled>
         <p className="text-[11px] leading-4 text-text-tertiary">{lockNote}</p>
       </div>
     );
   }
-  return <Labeled label={def.label}>{control}</Labeled>;
+  return <Labeled label={def.label} htmlFor={def.key === 'palettePreset' ? `${fieldId}-trigger` : fieldId}>{control}</Labeled>;
 }
 
 function coerce(def: OptionDef, raw: string): unknown {
   return def.choices?.some((choice) => typeof choice.value === 'number') ? Number(raw) : raw;
 }
 
-function PaletteControl({ value, selectedColor, selectedTarget, disabled, label, sequential, reversed, continuous, onApply }: {
+function ThemeSelect({
+  id,
+  name,
+  label,
+  value,
+  choices,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  value: string;
+  choices: { value: string; label: string }[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({
+    top: 0,
+    left: 0,
+    width: 288,
+    maxHeight: 320,
+  });
+  const selectedIndex = Math.max(0, choices.findIndex((choice) => choice.value === value));
+  const selectedChoice = choices[selectedIndex] ?? { value, label: '기존 테마' };
+
+  useEffect(() => {
+    if (!open) return;
+    const positionMenu = () => {
+      setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
+    };
+    positionMenu();
+    optionRefs.current[selectedIndex]?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('resize', positionMenu);
+      window.removeEventListener('scroll', positionMenu, true);
+    };
+  }, [choices.length, open, selectedIndex]);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  const selectChoice = (next: string) => {
+    onChange(next);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const focusOption = (index: number) => {
+    const normalizedIndex = (index + choices.length) % choices.length;
+    optionRefs.current[normalizedIndex]?.focus();
+  };
+
+  const handleOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusOption(index + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusOption(index - 1);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusOption(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusOption(choices.length - 1);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    } else if (event.key === 'Tab') {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div ref={rootRef} className="relative w-full">
+      <select
+        id={id}
+        name={name}
+        aria-hidden="true"
+        tabIndex={-1}
+        disabled={disabled}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="hidden"
+      >
+        {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+      </select>
+      <button
+        ref={triggerRef}
+        id={`${id}-trigger`}
+        type="button"
+        role="combobox"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-controls={`${id}-menu`}
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
+            setOpen(true);
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
+        className={cn(
+          'flex h-8 w-full items-center gap-2 rounded-md border border-border bg-bg-panel px-2 text-[13px] text-text-primary outline-none',
+          'focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50',
+        )}
+      >
+        <PaletteStrip colors={cartoPalette(selectedChoice.value)} testId="theme-selected-preview" />
+        <span className="shrink-0">{selectedChoice.label}</span>
+        <ChevronDown className={cn('size-3.5 shrink-0 text-text-secondary transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div
+          id={`${id}-menu`}
+          role="listbox"
+          aria-label={`${label} 목록`}
+          style={menuPosition}
+          className="fixed z-[100] overflow-y-auto rounded-md border border-border bg-bg-panel p-1 shadow-lg"
+        >
+          {choices.map((choice, index) => {
+            const selected = choice.value === value;
+            return (
+              <button
+                key={choice.value}
+                ref={(element) => { optionRefs.current[index] = element; }}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => selectChoice(choice.value)}
+                onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                className={cn(
+                  'flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-text-primary outline-none',
+                  'hover:bg-muted focus-visible:bg-muted',
+                  selected && 'bg-muted',
+                )}
+              >
+                <PaletteStrip colors={cartoPalette(choice.value)} testId={`theme-option-preview-${choice.value}`} />
+                <span className="shrink-0">{choice.label}</span>
+                <Check className={cn('ml-auto size-3.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function calculateThemeMenuPosition(trigger: HTMLButtonElement | null, choiceCount: number) {
+  const viewportPadding = 8;
+  const menuGap = 4;
+  const menuWidth = Math.min(288, window.innerWidth - viewportPadding * 2);
+  const desiredHeight = Math.min(choiceCount * 32 + 8, 320);
+  if (!trigger) {
+    return {
+      top: viewportPadding,
+      left: viewportPadding,
+      width: menuWidth,
+      maxHeight: desiredHeight,
+    };
+  }
+
+  const bounds = trigger.getBoundingClientRect();
+  const spaceAbove = bounds.top - viewportPadding - menuGap;
+  const spaceBelow = window.innerHeight - bounds.bottom - viewportPadding - menuGap;
+  const openAbove = spaceAbove >= desiredHeight || spaceAbove > spaceBelow;
+  const availableHeight = Math.max(72, openAbove ? spaceAbove : spaceBelow);
+  const maxHeight = Math.min(desiredHeight, availableHeight);
+  const top = openAbove
+    ? Math.max(viewportPadding, bounds.top - menuGap - maxHeight)
+    : bounds.bottom + menuGap;
+  const left = Math.min(
+    Math.max(viewportPadding, bounds.right - menuWidth),
+    window.innerWidth - viewportPadding - menuWidth,
+  );
+  return { top, left, width: menuWidth, maxHeight };
+}
+
+function PaletteStrip({ colors, testId }: { colors: readonly string[]; testId: string }) {
+  return (
+    <span
+      data-testid={testId}
+      aria-hidden="true"
+      className="flex h-4 min-w-0 flex-1 overflow-hidden rounded-[3px] border border-black/10"
+    >
+      {colors.map((color, index) => (
+        <span
+          key={`${color}-${index}`}
+          className="h-full min-w-0 flex-1"
+          style={{ backgroundColor: color }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function PaletteControl({
+  value,
+  selectedColor,
+  selectedTarget,
+  selectedHasOverride,
+  disabled,
+  label,
+  sequential,
+  reversed,
+  continuous,
+  onApply,
+  onClear,
+}: {
   value: unknown;
   selectedColor: string | null;
   selectedTarget: ColorSelection | null;
+  selectedHasOverride: boolean;
   disabled: boolean;
   label: string;
   sequential: boolean;
   reversed: boolean;
   continuous: boolean;
   onApply: (color: string) => void;
+  onClear: () => void;
 }) {
   const palette = normalizePalette(value);
   const displayPalette = sequential && reversed ? [...palette].reverse() : palette;
@@ -374,6 +680,16 @@ function PaletteControl({ value, selectedColor, selectedTarget, disabled, label,
     : displayPalette;
   const normalizedSelected = selectedColor ? normalizeHex(selectedColor) : null;
   const unavailable = disabled || !selectedTarget;
+  const openEditor = () => {
+    const picker = document.getElementById('option-series-color-picker') as HTMLInputElement | null;
+    if (!picker) return;
+    try {
+      if (typeof picker.showPicker === 'function') picker.showPicker();
+      else picker.click();
+    } catch {
+      picker.click();
+    }
+  };
 
   return (
     <div className={cn('flex flex-col gap-2', unavailable && 'opacity-50')}>
@@ -391,16 +707,16 @@ function PaletteControl({ value, selectedColor, selectedTarget, disabled, label,
         </div>
       )}
       <div className="flex flex-wrap gap-1.5">
-        {displayPalette.map((item, index) => {
-          const swatch = normalizeHex(item);
+        {displayPalette.map((color, index) => {
+          const swatch = normalizeHex(color);
           const active = normalizedSelected === swatch;
           return (
             <button
               key={`${swatch}-${index}`}
               type="button"
-              aria-label={`${label} ${index + 1}번 색상을 ${selectedTarget?.label ?? '선택한 대상'}에 적용`}
+              aria-label={`${label} ${index + 1}번 색상을 ${selectedTarget?.label ?? '선택 대상'}에 적용`}
               data-testid={`palette-swatch-${index}`}
-              title={selectedTarget ? `${selectedTarget.label}에 적용` : '먼저 시리즈 칩을 선택하거나 차트에서 요소를 선택하세요'}
+              title={selectedTarget ? `${selectedTarget.label}에 적용` : '먼저 시리즈 또는 차트 요소를 선택하세요'}
               disabled={unavailable}
               onClick={() => onApply(swatch)}
               className={cn('size-6 rounded border transition-transform disabled:cursor-not-allowed', active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105')}
@@ -409,6 +725,43 @@ function PaletteControl({ value, selectedColor, selectedTarget, disabled, label,
           );
         })}
       </div>
+      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
+        <span data-testid="selected-color-target" className="mr-auto min-w-0 truncate text-[11px] text-text-tertiary">
+          {selectedTarget ? `선택: ${selectedTarget.label}` : '시리즈 또는 차트 요소를 선택하세요'}
+        </span>
+        <div className="relative shrink-0">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            data-testid="series-color-edit"
+            disabled={unavailable}
+            onClick={openEditor}
+          >
+            직접 지정
+          </Button>
+          <input
+            id="option-series-color-picker"
+            name="seriesColor"
+            aria-label={`${selectedTarget?.label ?? '선택한 대상'} 색상 직접 지정`}
+            type="color"
+            value={normalizedSelected ?? normalizeHex(palette[0] ?? DEFAULT_PALETTE[0])}
+            disabled={unavailable}
+            tabIndex={-1}
+            onChange={(event) => onApply(event.target.value.toUpperCase())}
+            className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={unavailable || !selectedHasOverride}
+          onClick={onClear}
+          className="h-7 shrink-0 rounded px-1.5 text-[11px] text-text-secondary hover:bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          지정 해제
+        </button>
+      </div>
+      <p className="text-[10px] leading-4 text-text-tertiary">직접 지정한 색은 테마를 바꿔도 유지됩니다.</p>
     </div>
   );
 }
@@ -425,8 +778,8 @@ function ColorTargetControl({
   disabled,
   onSelect,
   onPickingChange,
-  onApplyColor,
-  onClearColor,
+  onDeleteSelectedItem,
+  onClearAllItems,
 }: {
   label: string;
   targets: ColorSelection[];
@@ -439,120 +792,122 @@ function ColorTargetControl({
   disabled: boolean;
   onSelect: (target: ColorSelection) => void;
   onPickingChange: (picking: boolean) => void;
-  onApplyColor: (color: string) => void;
-  onClearColor: () => void;
+  onDeleteSelectedItem: () => void;
+  onClearAllItems: () => void;
 }) {
-  const activeColor = selection
-    ? resolvedSelectionColor(selection, targets, colorMap, autoColorMap, itemColorOverrides, palette)
-    : normalizeHex(palette[0] ?? DEFAULT_PALETTE[0]);
-  const selectionHasOverride = selection?.scope === 'series'
-    ? colorMap[selection.seriesName] != null
-    : selection?.scope === 'item' && (
-      !!findItemColorOverride(itemColorOverrides, selection)
-      || (selection.kind === 'pie' && colorMap[String(selection.dimensions[0])] != null)
-    );
-  const openEditor = () => {
-    const picker = document.getElementById('option-series-color-picker') as HTMLInputElement | null;
-    if (!picker) return;
-    try {
-      if (typeof picker.showPicker === 'function') picker.showPicker();
-      else picker.click();
-    } catch {
-      picker.click();
-    }
-  };
+  const seriesTargets = targets.filter(
+    (target): target is Extract<ColorSelection, { scope: 'series' }> => target.scope === 'series',
+  );
+  const itemTargetsByKey = new Map(
+    normalizeItemColorOverrides(itemColorOverrides).map((override) => {
+      const target = colorSelectionFromItemTarget(override);
+      return [itemColorTargetKey(target), target] as const;
+    }),
+  );
+  if (selection?.scope === 'item') {
+    itemTargetsByKey.set(itemColorTargetKey(selection), selection);
+  }
+  const itemTargets = [...itemTargetsByKey.values()];
+  const allTargets: ColorSelection[] = [...seriesTargets, ...itemTargets];
+  const selectedItem = selection?.scope === 'item' ? selection : null;
 
   return (
     <div className="flex w-full flex-col gap-2">
-      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
-        <span className="mr-auto text-[13px] text-text-secondary">{label}</span>
-        <Button
-          variant={picking ? 'primary' : 'secondary'}
-          size="sm"
-          className="h-7 px-2 text-[11px]"
-          data-testid="chart-color-pick"
-          aria-pressed={picking}
-          disabled={disabled}
-          onClick={() => onPickingChange(!picking)}
-        >
-          {picking ? '선택 중' : '차트에서 선택'}
-        </Button>
-        <div className="relative shrink-0">
+      {seriesTargets.length > 0 && (
+        <>
+          <span className="text-[13px] text-text-secondary">{label}</span>
+          <div data-testid="series-color-grid" className="grid grid-cols-5 gap-1.5">
+            {seriesTargets.map((target) => {
+              const color = resolvedSelectionColor(target, allTargets, colorMap, autoColorMap, itemColorOverrides, palette);
+              const active = sameColorSelection(target, selection);
+              return (
+                <button
+                  key={colorSelectionId(target)}
+                  type="button"
+                  data-testid={`series-color-chip-${target.label}`}
+                  aria-label={`${target.label} 색상 선택`}
+                  title={target.label}
+                  disabled={disabled}
+                  onClick={() => onSelect(target)}
+                  className={cn(
+                    'flex h-7 min-w-0 items-center justify-between gap-1.5 rounded border px-2 text-[11px] text-text-secondary transition-colors disabled:cursor-not-allowed',
+                    active ? 'border-text-primary bg-muted ring-2 ring-primary/20' : 'border-border hover:bg-muted',
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate text-left">{target.label}</span>
+                  <span
+                    data-testid={`series-color-swatch-${target.label}`}
+                    className="size-3.5 shrink-0 rounded-sm border border-black/10"
+                    style={{ backgroundColor: color }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div className={cn('flex flex-col gap-2', seriesTargets.length > 0 && 'mt-1 border-t border-border pt-2')}>
+        <div className="flex min-h-7 flex-wrap items-center gap-1.5">
+          <span className="mr-auto text-[13px] text-text-secondary">차트 요소 색상</span>
           <Button
-            variant="secondary"
+            variant={picking ? 'primary' : 'secondary'}
             size="sm"
             className="h-7 px-2 text-[11px]"
-            data-testid="series-color-edit"
-            disabled={disabled || !selection}
-            onClick={openEditor}
+            data-testid="chart-color-pick"
+            aria-pressed={picking}
+            disabled={disabled}
+            onClick={() => onPickingChange(!picking)}
           >
-            직접 지정
+            {picking ? '선택 중' : '차트에서 선택'}
           </Button>
-          <input
-            id="option-series-color-picker"
-            name="seriesColor"
-            aria-label={`${selection?.label ?? '선택한 대상'} 색상 직접 지정`}
-            type="color"
-            value={activeColor}
-            disabled={disabled || !selection}
-            tabIndex={-1}
-            onChange={(event) => onApplyColor(event.target.value.toUpperCase())}
-            className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-          />
-        </div>
-        <button
-          type="button"
-          disabled={disabled || !selectionHasOverride}
-          onClick={onClearColor}
-          className="h-7 shrink-0 rounded px-1.5 text-[11px] text-text-secondary hover:bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          지정 해제
-        </button>
-      </div>
-      {selection?.scope === 'item' && (
-        <div className="flex min-h-8 items-center gap-1.5" aria-live="polite">
-          <div
-            data-testid="selected-chart-color-item"
-            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-text-primary bg-muted px-2.5 py-1.5 text-[11px] text-text-primary ring-2 ring-primary/20"
-            title={selection.label}
+          <button
+            type="button"
+            data-testid="delete-selected-chart-color"
+            disabled={disabled || !selectedItem}
+            onClick={onDeleteSelectedItem}
+            className="h-7 shrink-0 rounded px-1.5 text-[11px] text-text-secondary hover:bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <span className="min-w-0 truncate">{selection.label}</span>
-            <span className="size-3.5 shrink-0 rounded-sm border border-black/10" style={{ backgroundColor: activeColor }} />
-          </div>
+            선택 삭제
+          </button>
+          <button
+            type="button"
+            data-testid="clear-all-chart-colors"
+            disabled={disabled || itemTargets.length === 0}
+            onClick={onClearAllItems}
+            className="h-7 shrink-0 rounded px-1.5 text-[11px] text-text-secondary hover:bg-muted hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            모두 삭제
+          </button>
         </div>
-      )}
-      <div data-testid="series-color-grid" className="grid grid-cols-5 gap-1.5">
-        {targets.map((target) => {
-          const color = resolvedSelectionColor(target, targets, colorMap, autoColorMap, itemColorOverrides, palette);
-          const active = sameColorSelection(target, selection);
-          const targetId = colorSelectionId(target);
-          return (
-            <button
-              key={targetId}
-              type="button"
-              data-testid={`series-color-chip-${target.label}`}
-              aria-label={`${target.label} 색상 선택`}
-              title={target.label}
-              disabled={disabled}
-              onClick={() => onSelect(target)}
-              className={cn(
-                'flex h-7 min-w-0 items-center justify-between gap-1.5 rounded border px-2 text-[11px] text-text-secondary transition-colors disabled:cursor-not-allowed',
-                active ? 'border-text-primary bg-muted ring-2 ring-primary/20' : 'border-border hover:bg-muted',
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate text-left">{target.label}</span>
-              <span
-                data-testid={`series-color-swatch-${target.label}`}
-                className="size-3.5 shrink-0 rounded-sm border border-black/10"
-                style={{ backgroundColor: color }}
-              />
-            </button>
-          );
-        })}
+        <div data-testid="chart-color-item-grid" className="grid grid-cols-5 gap-1.5" aria-live="polite">
+          {itemTargets.map((target) => {
+            const color = resolvedSelectionColor(target, allTargets, colorMap, autoColorMap, itemColorOverrides, palette);
+            const active = sameColorSelection(target, selection);
+            return (
+              <button
+                key={colorSelectionId(target)}
+                type="button"
+                data-testid={active ? 'selected-chart-color-item' : `chart-color-item-chip-${itemColorTargetKey(target)}`}
+                aria-label={`${target.label} 차트 요소 색상 선택`}
+                title={target.label}
+                disabled={disabled}
+                onClick={() => onSelect(target)}
+                className={cn(
+                  'flex h-7 min-w-0 items-center justify-between gap-1.5 rounded border px-2 text-[11px] text-text-secondary transition-colors disabled:cursor-not-allowed',
+                  active ? 'border-text-primary bg-muted ring-2 ring-primary/20' : 'border-border hover:bg-muted',
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate text-left">{target.label}</span>
+                <span className="size-3.5 shrink-0 rounded-sm border border-black/10" style={{ backgroundColor: color }} />
+              </button>
+            );
+          })}
+        </div>
+        {itemTargets.length === 0 && (
+          <p className="text-[11px] leading-4 text-text-tertiary">차트에서 선택한 요소가 여기에 추가됩니다.</p>
+        )}
       </div>
-      {targets.length === 0 && !selection && (
-        <p className="text-[11px] leading-4 text-text-tertiary">차트에서 요소를 선택한 뒤 색상을 지정할 수 있습니다.</p>
-      )}
     </div>
   );
 }
@@ -605,6 +960,17 @@ function resolvedSelectionColor(
   return normalizeHex(selection.renderedColor ?? palette[0] ?? DEFAULT_PALETTE[0]);
 }
 
+function selectionHasColorOverride(
+  selection: ColorSelection | null,
+  colorMap: Record<string, string>,
+  itemColorOverrides: unknown,
+): boolean {
+  if (!selection) return false;
+  if (selection.scope === 'series') return colorMap[selection.seriesName] != null;
+  return !!findItemColorOverride(itemColorOverrides, selection)
+    || (selection.kind === 'pie' && colorMap[String(selection.dimensions[0])] != null);
+}
+
 function sameColorSelection(left: ColorSelection, right: ColorSelection | null): boolean {
   if (!right || left.scope !== right.scope) return false;
   if (left.scope === 'series' && right.scope === 'series') return left.seriesName === right.seriesName;
@@ -638,9 +1004,20 @@ function fieldNameFor(key: string): string {
   return key.replace(/[^a-zA-Z0-9]+/g, '_');
 }
 
-function Labeled({ label, children, stack }: { label: string; children: ReactNode; stack?: boolean }) {
+function Labeled({
+  label,
+  children,
+  stack,
+  htmlFor,
+}: {
+  label: string;
+  children: ReactNode;
+  stack?: boolean;
+  htmlFor?: string;
+}) {
+  const labelElement = <label htmlFor={htmlFor} className="text-[13px] text-text-secondary">{label}</label>;
   if (stack) {
-    return <div className="flex flex-col gap-1.5"><span className="text-[13px] text-text-secondary">{label}</span>{children}</div>;
+    return <div className="flex flex-col gap-1.5">{labelElement}{children}</div>;
   }
-  return <div className="flex min-h-7 items-center justify-between gap-2"><span className="text-[13px] text-text-secondary">{label}</span>{children}</div>;
+  return <div className="flex min-h-7 items-center justify-between gap-2">{labelElement}{children}</div>;
 }

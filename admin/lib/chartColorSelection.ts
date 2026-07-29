@@ -27,8 +27,9 @@ export interface LocatedColorItem {
 
 export function staticColorSelections(
   chartType: MajorType,
-  columns: { name: string }[],
+  columns: { name: string; type?: string }[],
   rows: unknown[][],
+  options: Record<string, unknown> = {},
 ): ColorSelection[] {
   if (chartType === 'pie') {
     const seen = new Set<string>();
@@ -54,13 +55,31 @@ export function staticColorSelections(
     return name ? [{ scope: 'series', seriesName: name, label: name }] : [];
   }
   if (chartType === 'bar' || chartType === 'line' || chartType === 'scatter') {
-    return columns.slice(1).map((column) => ({
-      scope: 'series',
-      seriesName: column.name,
-      label: column.name,
-    }));
+    const bubbleField = chartType === 'scatter'
+      && options.variant === 'bubble'
+      && options.scatter
+      && typeof options.scatter === 'object'
+      && !Array.isArray(options.scatter)
+      ? (options.scatter as Record<string, unknown>).bubbleField
+      : null;
+    const bubbleColumnIndex = typeof bubbleField === 'string'
+      ? columns.findIndex((column) => column.name === bubbleField)
+      : -1;
+    return columns.slice(1)
+      .filter((_column, index) => index + 1 !== (bubbleColumnIndex > 1 ? bubbleColumnIndex : -1))
+      .map((column) => ({
+        scope: 'series',
+        seriesName: column.name,
+        label: column.name,
+      }));
   }
   return [];
+}
+
+export function bubbleSizeColumns<T extends { name: string; type?: string }>(
+  columns: readonly T[],
+): T[] {
+  return columns.slice(2).filter((column) => isNumericColumnType(column.type));
 }
 
 export function colorSelectionFromChartClick(
@@ -80,6 +99,17 @@ export function colorSelectionFromChartClick(
     renderedColor: cssColorToHex(click.color) ?? undefined,
     seriesIndex: click.seriesIndex,
     dataIndex: click.dataIndex,
+  };
+}
+
+/** 저장된 단일 요소 색상 덮어쓰기를 편집기 칩에서 다시 선택할 수 있는 형태로 복원한다. */
+export function colorSelectionFromItemTarget(
+  target: ItemColorTarget,
+): Extract<ColorSelection, { scope: 'item' }> {
+  return {
+    scope: 'item',
+    ...target,
+    label: itemSelectionLabel(target.kind, target.seriesName, target.dimensions),
   };
 }
 
@@ -151,6 +181,11 @@ export function cssColorToHex(value: unknown): string | null {
 function colorKind(chartType: MajorType): ItemColorKind | null {
   if (chartType === 'bar' || chartType === 'line') return 'cartesian';
   return chartType;
+}
+
+function isNumericColumnType(type: unknown): boolean {
+  if (typeof type !== 'string') return false;
+  return /(number|numeric|decimal|int|float|double|real)/i.test(type);
 }
 
 function itemDimensions(

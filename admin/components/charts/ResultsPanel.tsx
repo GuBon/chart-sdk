@@ -86,6 +86,7 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTable
 
 function treatmentLabel(estimate: Pick<SamplingEstimate, 'aggregate' | 'treatment'>): string {
   switch (estimate.treatment) {
+    case 'ROW_SAMPLE': return '표본 원본값';
     case 'SAMPLE_AGGREGATE': return estimate.aggregate === 'count' ? '표본 개수' : '표본 합계';
     case 'EXTRAPOLATED_TOTAL': return '이전 계약의 전체 합계 추정';
     case 'SAMPLE_ESTIMATE': return '표본 통계 추정';

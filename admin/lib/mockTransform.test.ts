@@ -82,6 +82,62 @@ describe('mock 축 없는 조회', () => {
     ]);
     expect(rawChart.rows[0]).toEqual(['의류', 7]);
   });
+
+  it('원본값 지도에서도 행 표본 SQL과 ROW_SAMPLE 메타데이터를 만든다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [], xAxis: 'category', xAxisBucket: null,
+      yAxis: [{ column: 'amount', agg: 'none' }],
+      where: [], orderBy: null,
+      sample: { mode: 'manual', rate: 10, seed: 77 },
+      geoArea: { mode: 'regions' },
+    };
+
+    const sql = buildGeneratedSql(config, 'map');
+    expect(sql).toContain('TABLESAMPLE SYSTEM (10) REPEATABLE (77)');
+    expect(sql).not.toMatch(/GROUP BY|__chartsdk_sample_count|__chartsdk_sample_total/);
+
+    const sampled = buildAggregateRows(config, 'map');
+    expect(sampled.sampling).toMatchObject({
+      approximate: true,
+      method: 'SYSTEM',
+      groups: [],
+      estimates: [{ series: 'amount', aggregate: 'none', treatment: 'ROW_SAMPLE' }],
+    });
+    expect(sampled.sampling?.confidenceLevel).toBeUndefined();
+    expect(sampled.sampling?.sampledRowCount).toBe(sampled.rows.length);
+  });
+
+  it('조인된 원본값은 집계 없이 RESULT_RANDOM 행을 반환한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [{
+        table: { datasourceId: 1, schema: 'public', name: 'orders' },
+        type: 'left',
+        on: { leftColumn: 'sales.id', rightColumn: 'orders.sale_id' },
+      }],
+      xAxis: 'sales.category',
+      xAxisBucket: null,
+      yAxis: [{ column: 'orders.amount', agg: 'none' }],
+      where: [], orderBy: null,
+      sample: { mode: 'manual', size: 12_000, seed: 321 },
+    };
+
+    const sql = buildGeneratedSql(config, 'bar');
+    expect(sql).toContain('"__chartsdk_population" AS (SELECT');
+    expect(sql).toContain('ORDER BY random() LIMIT 12000');
+    expect(sql).toContain('"__chartsdk_sample"."__chartsdk_y_0" AS "amount"');
+    expect(sql).not.toMatch(/GROUP BY|__chartsdk_sample_count|__chartsdk_sample_total/);
+
+    const sampled = buildAggregateRows(config, 'bar');
+    expect(sampled.sampling).toMatchObject({
+      approximate: true,
+      method: 'RESULT_RANDOM',
+      groups: [],
+      estimates: [{ aggregate: 'none', treatment: 'ROW_SAMPLE' }],
+    });
+    expect(sampled.sampling?.confidenceLevel).toBeUndefined();
+  });
 });
 
 describe('mock 변환기 레이아웃 계약', () => {
@@ -238,7 +294,9 @@ describe('mock 변환기 레이아웃 계약', () => {
     } else {
       expect(series.emphasis).toBeUndefined();
     }
-    if (chartType === 'geoscatter') expect((option.geo as Record<string, any>).emphasis).toBeUndefined();
+    if (chartType === 'geoscatter') {
+      expect((option.geo as Record<string, any>).emphasis).toEqual({ disabled: true });
+    }
   });
 
   it.each(MAJOR_TYPES)('%s 툴팁과 강조 효과를 공통 옵션으로 끌 수 있다', (chartType) => {
@@ -306,7 +364,7 @@ describe('mock 변환기 레이아웃 계약', () => {
 
     expect(valueAt(series.emphasis, path)).toBe('#12AB34');
     if (chartType === 'geoscatter') {
-      expect(valueAt((option.geo as Record<string, any>).emphasis, 'itemStyle.areaColor')).toBe('#12AB34');
+      expect((option.geo as Record<string, any>).emphasis).toEqual({ disabled: true });
     }
   });
 });
@@ -593,7 +651,60 @@ describe('계열 피벗·색상 계약', () => {
   });
 });
 
+describe('혼합 차트 변형 계약', () => {
+  it('선 변형은 혼합 차트의 선 시리즈에만 적용한다', () => {
+    const option = assembleOption(result, 'line', {
+      variant: 'smooth',
+      seriesTypes: { s2: 'bar' },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect(series[0]).toMatchObject({ name: 's1', type: 'line', smooth: true });
+    expect(series[1]).toMatchObject({ name: 's2', type: 'bar' });
+    expect(series[1].smooth).toBeUndefined();
+    expect(series[1].step).toBeUndefined();
+    expect(series[1].areaStyle).toBeUndefined();
+    expect(series[1].lineStyle).toBeUndefined();
+  });
+});
+
+describe('표시 메타데이터 계약', () => {
+  it('데이터 라벨을 끄면 저장된 회전을 내보내지 않고 기준 시각 표시 설정을 전달한다', () => {
+    const option = assembleOption(result, 'pie', {
+      dataLabel: false,
+      labelRotate: 90,
+      showComputedAt: false,
+    });
+    const label = (option.series as Array<Record<string, any>>)[0].label;
+
+    expect(label.show).toBe(false);
+    expect(label.rotate).toBeUndefined();
+    expect(option.__chartsdkShowComputedAt).toBe(false);
+  });
+});
+
 describe('순차형 visualMap 색상 계약', () => {
+  it('일반 차트에서 선택한 순차형 테마를 전체 시리즈 구간에 펼친다', () => {
+    const burg = cartoPalette('burg');
+    const option = assembleOption(result, 'bar', {
+      palettePreset: 'burg',
+      palette: burg,
+      colorTheme: { version: 2, qualitativePreset: 'safe', sequentialPreset: 'burg', sequentialReversed: false },
+      autoColorMap: { s1: '#010203', s2: '#040506' },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect(series.map((item) => item.color)).toEqual([burg[0], burg[6]]);
+    expect(option.__chartsdkAutoColorMap).toMatchObject({ s1: burg[0], s2: burg[6] });
+  });
+
+  it.each(['map', 'heatmap'] as const)('%s 빈 옵션도 신규 기본 순차 팔레트로 해석한다', (chartType) => {
+    const option = assembleOption(result, chartType, {});
+    const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
+
+    expect(colors).toEqual(cartoPalette('teal'));
+  });
+
   it.each(['map', 'heatmap'] as const)('%s는 새 테마의 7단계 전체를 낮은 값부터 사용한다', (chartType) => {
     const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
@@ -680,6 +791,34 @@ describe('개별 데이터 색상 계약', () => {
     expect(data[1]).toEqual({ value: [5, 20], itemStyle: { color: '#FFB000' } });
   });
 
+  it('버블 크기 필드는 시리즈에서 제외하고 포인트별 크기로만 사용한다', () => {
+    const bubbleResult: QueryResult = {
+      columns: [
+        { name: 'x', type: 'number' },
+        { name: 'y', type: 'number' },
+        { name: 'size', type: 'number' },
+      ],
+      rows: [[1, 10, 3], [2, 20, 9]],
+      rowCount: 2,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(bubbleResult, 'scatter', {
+      variant: 'bubble',
+      scatter: { bubbleField: 'size', symbolSize: 16 },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect(series).toHaveLength(1);
+    expect(series[0].name).toBe('y');
+    expect(series[0].symbolSize).toBeUndefined();
+    expect(series[0].data).toEqual([
+      { value: [1, 10, 3], symbolSize: 6 },
+      { value: [2, 20, 9], symbolSize: 28 },
+    ]);
+    expect(option.__chartsdkAutoColorMap).toEqual({ y: '#88CCEE' });
+  });
+
   it('지도 지역 하나만 visualMap 위에 areaColor를 지정한다', () => {
     const mapResult: QueryResult = {
       columns: [{ name: 'region', type: 'text' }, { name: 'value', type: 'number' }],
@@ -702,5 +841,36 @@ describe('개별 데이터 색상 계약', () => {
     expect(data[0].itemStyle).toBeUndefined();
     expect(data[1].itemStyle.areaColor).toBe('#FFB000');
     expect(option.visualMap).toBeDefined();
+  });
+
+  it('포인트 지도는 테마 첫 색을 전체 점에 쓰고 특정 점 덮어쓰기를 별도로 유지한다', () => {
+    const pointResult: QueryResult = {
+      columns: [{ name: 'lng', type: 'number' }, { name: 'lat', type: 'number' }],
+      rows: [[126.978, 37.5665], [129.0756, 35.1796]],
+      rowCount: 2,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(pointResult, 'geoscatter', {
+      palette: ['#123456', '#654321'],
+      itemColorOverrides: [{
+        kind: 'geoscatter',
+        seriesName: '__geoscatter__',
+        dimensions: [129.0756, 35.1796],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const series = (option.series as Array<Record<string, any>>)[0];
+
+    expect(series.itemStyle.color).toBe('#123456');
+    expect(series.data[0]).toEqual([126.978, 37.5665]);
+    expect(series.data[1]).toEqual({
+      value: [129.0756, 35.1796],
+      itemStyle: { color: '#FFB000' },
+    });
+    const geo = option.geo as Record<string, any>;
+    expect(geo.itemStyle).toBeUndefined();
+    expect(geo.emphasis).toEqual({ disabled: true });
   });
 });

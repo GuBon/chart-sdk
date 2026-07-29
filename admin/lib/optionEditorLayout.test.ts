@@ -54,6 +54,43 @@ describe('차트 옵션 편집 정보 구조', () => {
     expect(visibleSections('geoscatter', 'series')).toEqual([]);
   });
 
+  it('원형 라벨 위치는 전용 키 하나만 사용하고 라벨을 켰을 때만 노출한다', () => {
+    const hiddenKeys = visibleDefs('pie', defaultsFor('pie'))
+      .filter((definition) => definition.echarts === 'series.label.position')
+      .map((definition) => definition.key);
+    const enabled = { ...defaultsFor('pie'), dataLabel: true };
+    const visibleKeys = visibleDefs('pie', enabled)
+      .filter((definition) => definition.echarts === 'series.label.position')
+      .map((definition) => definition.key);
+
+    expect(hiddenKeys).toEqual([]);
+    expect(visibleKeys).toEqual(['pie.labelPosition']);
+    expect(defaultsFor('pie').labelPosition).toBeUndefined();
+    expect(defaultsFor('pie').pie.labelPosition).toBe('outside');
+    const position = visibleDefs('pie', enabled).find((definition) => definition.key === 'pie.labelPosition');
+    expect(position && optionEditorTabOf(position)).toBe('series');
+    expect(position && optionEditorSectionOf(position)).toBe('라벨 · 정렬');
+  });
+
+  it('산점도 전용 숫자축 옵션에는 현재 차트 종류를 showIf 문맥으로 전달한다', () => {
+    const keys = visibleDefs('scatter', defaultsFor('scatter')).map((definition) => definition.key);
+
+    expect(keys).toContain('xAxis.scale');
+    expect(keys).toContain('xAxis.min');
+    expect(keys).toContain('xAxis.max');
+  });
+
+  it('선택지가 하나뿐인 차트는 의미 없는 중분류 컨트롤을 숨긴다', () => {
+    for (const chartType of ['boxplot', 'heatmap', 'map', 'geoscatter'] as const) {
+      const keys = visibleDefs(chartType, defaultsFor(chartType)).map((definition) => definition.key);
+      expect(keys).not.toContain('variant');
+    }
+    for (const chartType of ['bar', 'line', 'pie', 'scatter'] as const) {
+      const keys = visibleDefs(chartType, defaultsFor(chartType)).map((definition) => definition.key);
+      expect(keys).toContain('variant');
+    }
+  });
+
   it('스타일 탭은 테마 명칭을 유지하며 색상과 차트 고유 외형을 함께 제공한다', () => {
     expect(visibleSections('bar', 'style')).toEqual(['색상', '막대', '크기', '글꼴']);
     expect(visibleSections('pie', 'style')).toEqual(['색상', '원형', '크기', '글꼴']);
@@ -68,6 +105,49 @@ describe('차트 옵션 편집 정보 구조', () => {
   it('지도 영역과 상호작용의 고급 모양 설정을 별도 섹션으로 분리한다', () => {
     expect(visibleSections('map', 'area')).toEqual(['표시 영역']);
     expect(visibleSections('bar', 'interaction')).toEqual(['툴팁', '툴팁 모양', '강조']);
+    expect(visibleSections('pie', 'interaction')).toEqual(['툴팁', '툴팁 모양', '강조']);
+
+    const areaKeys = visibleDefs('map', defaultsFor('map'))
+      .filter((definition) => optionEditorTabOf(definition) === 'area')
+      .map((definition) => definition.key);
+    expect(areaKeys).toEqual(['map.name', 'map.viewport', 'map.roam']);
+  });
+
+  it('요소별 글꼴·글자 크기는 그 요소를 편집하는 섹션에 있고 스타일에는 전체 크기만 남는다', () => {
+    const sectionOfKey = (chartType: MajorType, key: string) => {
+      const definition = visibleDefs(chartType, { ...defaultsFor(chartType), dataLabel: true })
+        .find((candidate) => candidate.key === key);
+      return definition && `${optionEditorTabOf(definition)}/${optionEditorSectionOf(definition)}`;
+    };
+
+    expect(sectionOfKey('bar', 'typography.titleFontSize')).toBe('basic/기본');
+    expect(sectionOfKey('bar', 'typography.titleFontFamily')).toBe('basic/기본');
+    expect(sectionOfKey('bar', 'typography.legendFontSize')).toBe('series/범례');
+    expect(sectionOfKey('bar', 'typography.legendFontFamily')).toBe('series/범례');
+    expect(sectionOfKey('bar', 'typography.dataLabelFontSize')).toBe('series/라벨 · 정렬');
+    expect(sectionOfKey('bar', 'typography.dataLabelFontFamily')).toBe('series/라벨 · 정렬');
+    expect(sectionOfKey('bar', 'typography.axisFontSize')).toBe('axis/축 글자');
+    expect(sectionOfKey('bar', 'typography.axisFontFamily')).toBe('axis/축 글자');
+    expect(sectionOfKey('bar', 'typography.tooltipFontSize')).toBe('interaction/툴팁 모양');
+    expect(sectionOfKey('bar', 'typography.tooltipFontFamily')).toBe('interaction/툴팁 모양');
+
+    const styleFontKeys = visibleDefs('bar', defaultsFor('bar'))
+      .filter((definition) => optionEditorSectionOf(definition) === '글꼴')
+      .map((definition) => definition.key);
+    expect(styleFontKeys).toEqual(['typography.scale']);
+
+    expect(visibleSections('bar', 'axis')).toEqual(['축 글자', '여백', 'X축', 'Y축']);
+  });
+
+  it('요소별 글꼴은 기본, 글자 크기는 자동(null)이며 폐기된 키는 남지 않는다', () => {
+    for (const chartType of MAJOR_TYPES) {
+      const typography = defaultsFor(chartType).typography as Record<string, unknown>;
+      expect(typography.mode).toBeUndefined();
+      expect(typography.fontFamily).toBeUndefined();
+      expect(typography.scale).toBe(100);
+      expect(typography.titleFontFamily).toBe('default');
+      expect(typography.titleFontSize).toBeNull();
+    }
   });
 });
 

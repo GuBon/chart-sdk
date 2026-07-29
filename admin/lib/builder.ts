@@ -212,20 +212,18 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     return {
       ...cfg,
       xAxisBucket: null,
-      sample: null,
       yAxis: cfg.yAxis.map((y) => ({ ...y, agg: 'none' })),
     };
   }
-  // 상자수염: 카테고리별 원본값 분포 → 집계 없음·표본 금지·버킷 금지·단일 값 컬럼.
+  // 상자수염: 카테고리별 원본값 분포 → 집계 없음·버킷 금지·단일 값 컬럼.
   if (chartType === 'boxplot') {
     return {
       ...cfg,
       xAxisBucket: null,
-      sample: null,
       yAxis: cfg.yAxis.slice(0, 1).map((y) => ({ ...y, agg: 'none' })),
     };
   }
-  // 지도 포인트: X=경도, Y1=위도(+선택 Y2=크기값) 원본 좌표 → 집계 없음·표본/버킷 금지·최대 2컬럼.
+  // 지도 포인트: X=경도, Y1=위도(+선택 Y2=크기값) 원본 좌표 → 집계 없음·버킷 금지·최대 2컬럼.
   if (chartType === 'geoscatter') {
     const mode = cfg.geoPoint?.mode ?? 'columns';
     if (mode === 'spatial') {
@@ -247,7 +245,6 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     return {
       ...cfg,
       xAxisBucket: null,
-      sample: null,
       yAxis: cfg.yAxis.slice(0, 2).map((y) => ({ ...y, agg: 'none' })),
       geoPoint: { mode: 'columns' },
       geoArea: undefined,
@@ -275,7 +272,6 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     return {
       ...cfg,
       yAxis: cfg.yAxis.slice(0, 1),
-      sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
       geoPoint: undefined,
       geoArea: { mode: 'regions' },
     };
@@ -286,7 +282,6 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     seriesBy: supportsSeriesBy ? cfg.seriesBy ?? null : null,
     seriesOrder: supportsSeriesBy ? cfg.seriesOrder ?? 'asc' : 'asc',
     yAxis: chartType === 'pie' || ((chartType === 'bar' || chartType === 'line') && cfg.seriesBy) ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
-    sample: cfg.yAxis.some((y) => y.agg === 'none') ? null : cfg.sample,
     geoPoint: undefined,
     geoArea: undefined,
   };
@@ -423,7 +418,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
   if (rawSeriesCount > 0 && rawSeriesCount !== cfg.yAxis.length) {
     return '원본값은 집계값과 섞을 수 없습니다. 모든 Y축을 원본값으로 선택하세요.';
   }
-  if (rawSeriesCount > 0 && cfg.sample) return '원본값 모드에서는 표본 추출을 사용할 수 없습니다.';
   return null;
 }
 

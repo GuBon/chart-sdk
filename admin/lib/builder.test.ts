@@ -253,20 +253,20 @@ describe('columnType', () => {
 });
 
 describe('normalizeBuilderForChartType', () => {
-  it('분포 전환은 집계를 none 으로·버킷과 표본을 해제한다', () => {
+  it('분포 전환은 집계를 none 으로·버킷을 해제하고 행 표본 설정은 유지한다', () => {
     const src = bar({ xAxisBucket: 'month', sample: { rate: 10 }, yAxis: [{ column: 'amount', agg: 'sum' }] });
     const out = normalizeBuilderForChartType(src, 'scatter');
     expect(out.xAxisBucket).toBeNull();
-    expect(out.sample).toBeNull();
+    expect(out.sample).toEqual({ rate: 10 });
     expect(out.yAxis.every((y) => y.agg === 'none')).toBe(true);
   });
   it('원형 전환은 시리즈를 1개로 자른다', () => {
     const src = bar({ yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }] });
     expect(normalizeBuilderForChartType(src, 'pie').yAxis).toHaveLength(1);
   });
-  it('원본값 시리즈가 있으면 표본을 해제한다', () => {
+  it('원본값 시리즈에서도 행 표본 설정을 유지한다', () => {
     const src = bar({ yAxis: [{ column: 'amount', agg: 'none' }], sample: { rate: 20 } });
-    expect(normalizeBuilderForChartType(src, 'line').sample).toBeNull();
+    expect(normalizeBuilderForChartType(src, 'line').sample).toEqual({ rate: 20 });
   });
 });
 
@@ -305,6 +305,14 @@ describe('builderValidationIssue', () => {
   it('원본값과 집계값 혼용을 거부한다', () => {
     const cfg = bar({ yAxis: [{ column: 'amount', agg: 'none' }, { column: 'id', agg: 'sum' }] });
     expect(builderValidationIssue(cfg, 'bar', TABLES)).toBe('원본값은 집계값과 섞을 수 없습니다. 모든 Y축을 원본값으로 선택하세요.');
+  });
+  it('원본값 행 표본을 허용한다', () => {
+    const cfg = bar({
+      yAxis: [{ column: 'amount', agg: 'none' }],
+      sample: { mode: 'manual', size: 10_000, seed: 77 },
+    });
+    expect(builderValidationIssue(cfg, 'bar', TABLES)).toBeNull();
+    expect(builderValidationIssue(cfg, 'map', TABLES)).toBeNull();
   });
   it('조인 시 non-qualified 컬럼을 거부한다', () => {
     const cfg = crossJoin();
@@ -389,11 +397,11 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     expect(choices[0].value).toBe('none');
   });
 
-  it('normalize(boxplot) 은 집계 none·표본/버킷 null·값 컬럼 1개로 정규화한다', () => {
+  it('normalize(boxplot) 은 집계 none·버킷 null·값 컬럼 1개로 만들고 행 표본은 유지한다', () => {
     const src = bar({ xAxisBucket: 'month', sample: { rate: 20 }, yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'avg' }] });
     const out = normalizeBuilderForChartType(src, 'boxplot');
     expect(out.xAxisBucket).toBeNull();
-    expect(out.sample).toBeNull();
+    expect(out.sample).toEqual({ rate: 20 });
     expect(out.yAxis).toHaveLength(1);
     expect(out.yAxis[0].agg).toBe('none');
   });
@@ -428,7 +436,7 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     const src = bar({ xAxisBucket: 'month', sample: { rate: 20 }, yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'avg' }, { column: 'customer_id', agg: 'count' }] });
     const out = normalizeBuilderForChartType(src, 'geoscatter');
     expect(out.xAxisBucket).toBeNull();
-    expect(out.sample).toBeNull();
+    expect(out.sample).toEqual({ rate: 20 });
     expect(out.yAxis).toHaveLength(2);
     expect(out.yAxis.every((y) => y.agg === 'none')).toBe(true);
     expect(out.geoPoint).toEqual({ mode: 'columns' });
