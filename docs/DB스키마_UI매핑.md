@@ -41,7 +41,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | `mc_user_token` | 사용자 귀속 임베드 토큰(1인 1활성) | id(=JWT jti), user_id, token(원문), expires_at, is_active, **revoked_at/revoked_reason** |
 | `mc_datasource` | 개인 사용자별 PostgreSQL 연결 | owner_id, name, host, port, database_name, db_user, db_password_enc, max_pool_size, **last_tested_at/last_test_ok** |
 | `mc_chart` | 개인 사용자별 차트 정의 | owner_id, name, description, datasource_id, define_mode, sql_query, **builder_config**(🧩), chart_type, **options**(🧩), refresh_mode, cache_ttl_seconds |
-| `mc_chart_cache` | 결과 캐시(대용량 대응) | chart_id(PK), result, computed_at, elapsed_ms, row_count, **thumbnail**, last_error/at |
+| `mc_chart_cache` | 결과 캐시(대용량 대응) | chart_id(PK), result?, computed_at?, elapsed_ms, row_count, definition_version, **thumbnail**, last_error/at. 최초 계산 실패는 result/computed_at NULL인 error-only 행 |
 
 **v4 신규(굵게)**: `mc_datasource.last_tested_at/last_test_ok`(S5 상태 점 영속), `mc_chart_cache.thumbnail`(S1 썸네일), `chart_type` CHECK 4종(bar/line/pie/scatter), 목록 정렬·검색 인덱스.
 **v4.1(2026-06-19)**: 1인 1활성 토큰 모델 확정 — `mc_user_token.label` 제거(다중 토큰 식별 불필요), 활성 토큰 부분 유니크 인덱스(`user_id WHERE is_active`).
@@ -109,7 +109,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
-| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`과 동시 저장/실행만 금지하며 JOIN과는 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
+| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`도 `ROW_SAMPLE`로 함께 저장·실행하며 JOIN과도 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
 | 포인트 지도 좌표 방식 | 🧩 | `builder_config.geoPoint={mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. 공간 타입은 pg_catalog에서 파생하고 좌표값은 실행 시 변환하므로 별도 DB 컬럼·마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
 | [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v6(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
@@ -126,13 +126,13 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 공통 | 대분류 | 📦 | `mc_chart.chart_type` |
 | 공통 | 중분류(variant) | 🧩 | `options.variant` |
 | 공통 | 제목·가로/세로 위치 | 🧩 | `options.title`·`titleH`·`titleV` |
-| 공통 | 논리 설계 크기 | 🧩 | `options.display.{preset,width,height}`. preset은 small/standard/large/hd/fhd/custom이며 실제 임베드 DOM 크기를 강제하지 않음 |
+| 공통 | 논리 설계 크기 | 🧩 | `options.display.{preset,width,height}`. preset은 가로 small/standard/large/hd/fhd, 대응 세로 smallPortrait/standardPortrait/largePortrait/hdPortrait/fhdPortrait, custom이며 실제 임베드 DOM 크기를 강제하지 않음 |
 | 공통 | 글꼴 모드·배율·요소별 크기 | 🧩 | `options.typography.{mode,scale,titleFontSize,legendFontSize,axisFontSize,dataLabelFontSize,tooltipFontSize}` |
 | 공통 | 설명 | 📦 | `mc_chart.description` (option 미반영) |
 | 공통 | 색 모드·팔레트·개별색 | 🧩 | `options.colorMode`·`palette`·`colorMap` |
 | 공통 | 범례 표시·위치·스크롤 | 🧩 | `options.legend.{show,position,scroll}` (`scroll`은 좌·우 전용, 상·하는 변환기가 한 줄 scroll 자동 적용) |
 | 공통 | 툴팁 트리거·값포맷·축지시선 | 🧩 | `options.tooltip.{trigger,valueFormat,axisPointer}` |
-| 공통 | 데이터 라벨·라벨위치·정렬 | 🧩 | `options.dataLabel`·`labelPosition`·`sortOrder` |
+| 공통 | 데이터 라벨·라벨위치·정렬 | 🧩 | `options.dataLabel`·`labelPosition`(막대·선)·`pie.labelPosition`(원형)·`sortOrder` |
 | 공통 | 갱신 모드 | 📦 | `mc_chart.refresh_mode` |
 | 공통 | 캐시 유효 시간(TTL) | 📦 | `mc_chart.cache_ttl_seconds` |
 | 공통 | 지금 갱신 | ⚙️ | `POST /charts/{id}/refresh` → 캐시 갱신 |
@@ -216,7 +216,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 JSONB라도 키는 코드 레지스트리로 고정된다 — 임의 키가 아니다.
 - `mc_chart.options` ↔ `chart-options/optionRegistry.ts` (`OptionDef.key`) ↔ PRD 9.2. 변환 규칙은 `docs/변환기_매핑스펙_차트옵션.md`.
 - `mc_chart.builder_config` ↔ `docs/노코드_SQL생성규칙.md` 2장 스키마. 검증은 생성규칙 9장.
-- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `agg="none" + sample`, `agg="none" + 집계 혼합` 금지는 DB CHECK가 아니라 애플리케이션 계층 책임(JSONB라 DB CHECK 부적합). `joins[] + sample`은 sampling v6 RESULT_RANDOM의 정상 조합이다.
+- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `agg="none" + 집계 혼합` 금지는 애플리케이션 계층 책임이다. `agg="none" + sample`은 `ROW_SAMPLE`, `joins[] + sample`은 sampling v6 RESULT_RANDOM의 정상 조합이다.
 
 ## 5. 인덱스 (실제 쿼리 패턴 기준)
 

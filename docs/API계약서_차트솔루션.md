@@ -58,9 +58,11 @@ Authorization: Bearer {임베드 토큰(JWT)}
 3. 페이로드의 `jti`(= mc_user_token.id)로 PK 단건 조회 → is_active 및 mc_user.is_active 확인 → 401 TOKEN_REVOKED
 4. 토큰의 `userId`를 차트 조회 소유자 범위로 사용한다. 차트별 권한 체크는 없지만, 조회 범위는 해당 사용자 소유 차트로 제한한다.
 5. mc_chart에서 `owner_id + chartId`로 sql_query + datasource_id + refresh_mode 조회 → 없으면 404
-6. **캐시 확인 (PRD 7.7)**: `live`면 항상 실행 / `ttl`이면 `mc_chart_cache.computed_at + ttl` 이내일 때 캐시를 사용하고 만료 시 stale-while-revalidate(single-flight) / `manual`이면 저장된 캐시 사용
+6. **캐시 확인 (PRD 7.7)**: `live`면 항상 실행 / `ttl`이면 `mc_chart_cache.computed_at + ttl` 이내일 때 캐시를 사용하고 만료 후 첫 요청이 transaction advisory lock 안에서 동기 재계산하며 경쟁 요청만 정의 버전이 같은 stale을 반환 / `manual`이면 저장된 캐시 사용(단일 소스 누락·손상 시 self-heal)
 7. (캐시 미스 시) 해당 데이터소스의 커넥션 풀에서 읽기 전용 실행 (타임아웃·행 제한) 후 캐시 갱신
 8. 결과 + chart_type + options를 ECharts option JSON으로 조립해 반환 (방식 A) — `computedAt` 포함
+
+모든 `/api/**` 응답은 `Cache-Control: no-store`다. 브라우저 HTTP 캐시가 `live/ttl/manual` 정책을 우회하지 않으며 서버의 `mc_chart_cache`가 결과 캐시의 단일 진실원이다.
 
 JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } — 차트 정보 없음(jti = mc_user_token.id). TOKEN_CHART_MISMATCH 에러 코드는 폐기.
 
@@ -161,10 +163,10 @@ POST /api/v1/query/run-builder
 
 `builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample`을 함께 지정하면 JOIN과 WHERE를 적용한 행 집합을 모집단 CTE로 만들고, 그 결과에서 `RESULT_RANDOM` 표본을 뽑은 뒤 집계한다. 앱은 이 기능을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
-`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 산점도는 `[x,y]`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)를 섞을 수 없고, `sample`과도 함께 사용할 수 없다.
+`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 산점도는 `[x,y]`, 기본 영역 지도는 `region,value`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)는 섞을 수 없다. `sample`을 지정하면 집계 대신 선택된 원본 행만 반환하고 sampling v6의 처리 방식은 `ROW_SAMPLE`이다.
 
 `mode` (선택, 기본 `"aggregate"`):
-- `"aggregate"` — 집계 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보내며 표본은 **aggregate에서만** 적용한다.
+- `"aggregate"` — 차트 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환하고, `agg:"none"`은 선택된 원본 행을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보낸다.
 - `"rows"` — 집계·GROUP BY 없이 `SELECT * + JOIN + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. [실행] 때 중복 호출하지 않고 사용자가 탭을 처음 열 때 지연 호출한다. 표본 추출은 무시한다.
 
 `chartType:"geoscatter"`의 `mode:"aggregate"`는 이름과 달리 원본 좌표 튜플을 반환하는 전용 경로다. `geoPoint` 미지정 또는 `{mode:"columns"}`이면 기존 `xAxis=경도`, `yAxis[0]=위도`, 선택 `yAxis[1]=크기`를 사용한다. `{mode:"spatial",spatialColumn:"location",sizeColumn?:"weight"}`이면 카탈로그가 확인한 SRID 지정 `geometry/geography(Point, SRID)`를 WGS84로 변환해 내부 열 `__chartsdk_longitude`, `__chartsdk_latitude`, 선택 `__chartsdk_size`로 반환한다. 공간 모드는 단일 데이터소스(같은 소스 내 JOIN 가능) 전용이며 표본 추출을 함께 쓰지 않는다.

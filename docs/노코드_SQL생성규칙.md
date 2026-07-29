@@ -47,7 +47,7 @@
 | where | — | 조건 배열. 전부 AND 결합 (MVP: OR 미지원) |
 | orderBy | — | target: "x" 또는 "y{인덱스}". 미지정 시 ORDER BY 없음 |
 | limit | — | 미지정 시 시스템 기본(1000) 강제 |
-| sample | — | `{ mode:"auto"\|"manual", size?, method?:"auto"\|"system", rate?, seed }`. 표본은 **갯수(size, 1,000~50,000행)** 기반 — auto는 서버가 방식(INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN)·크기를 결정하고 manual은 size를 지정한다. VIEW·조인은 조회 결과에서 RESULT_RANDOM을 사용한다. `rate`(0.1~100%)·`method:"system"`은 물리 관계의 레거시 SYSTEM 핀 전용. **집계 모드 전용**이며 `agg:"none"`과는 동시 사용 불가 (3C·11.4장) |
+| sample | — | `{ mode:"auto"\|"manual", size?, method?:"auto"\|"system", rate?, seed }`. 표본은 **갯수(size, 1,000~50,000행)** 기반 — auto는 서버가 방식(INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN)·크기를 결정하고 manual은 size를 지정한다. VIEW·조인은 조회 결과에서 RESULT_RANDOM을 사용한다. `rate`(0.1~100%)·`method:"system"`은 물리 관계의 레거시 SYSTEM 핀 전용. 집계와 `agg:"none"` 원본 행 모드 모두에서 사용할 수 있다 (3C·11.4장) |
 | geoPoint | 포인트 지도 공간 모드만 | `{mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. columns는 xAxis/yAxis 좌표, spatial은 SRID 지정 PostGIS Point 컬럼을 사용한다. spatial에서는 xAxis/yAxis/orderBy/sample을 사용하지 않는다. |
 
 ## 3. 집계(agg) 템플릿
@@ -66,7 +66,7 @@
 
 - `none`은 모든 차트 타입에서 사용할 수 있다. 막대/선은 X/Y 원본 튜플, 원형은 name/value 원본 튜플, 산점도는 `[x,y]` 원본 점으로 해석한다.
 - 한 builderConfig 안에서 `none`과 집계(`sum`/`avg`/`count` 등)는 섞을 수 없다. 모든 yAxis가 `none`이거나 모두 집계여야 한다.
-- `none` 원본값 모드는 `GROUP BY`를 만들지 않고, `sample`과 함께 사용할 수 없다.
+- `none` 원본값 모드는 `GROUP BY`를 만들지 않는다. `sample`이 있으면 표본으로 선택된 원본 행만 반환하며 집계용 숨은 COUNT·신뢰구간 컬럼을 추가하지 않는다.
 - scatter는 여전히 모든 yAxis가 `none`이어야 하며 X축은 숫자 타입이어야 한다.
 
 - 컬럼 타입은 information_schema.columns의 data_type으로 판정한다. 타입 불일치(문자 컬럼에 sum 등)는 생성 단계에서 400 거부 — 실행까지 가지 않는다.
@@ -126,30 +126,31 @@ GROUP BY "category"
 
 - **방식 결정(서버):** `SamplingPlanner`가 관계 종류와 조인 유무를 먼저 보고, 물리 테이블일 때만 PK·행수(reltuples)·키 밀도를 카탈로그 쿼리로 조사한다.
   - **INDEX_RANDOM(기본):** 단일 정수형 PK가 있고 키가 촘촘하면(밀도 ≥ 0.5), seed 기반 RNG로 `[min_pk,max_pk]` 무작위 좌표를 뽑아 `unnest(?) JOIN base ON base.pk = 좌표` **등가 조인**으로 행을 집는다. 존재하지 않는 키는 미스일 뿐이라 **모든 행이 균일 확률(무편향)**. 밀도만큼 오버샘플(K′=⌈K/밀도⌉)해 목표 표본수 K를 채우고, 뽑힌 행만 인덱스로 읽어 **전체 스캔을 회피**한다. 실측 표본수는 결과 설명과 통계 추정 구간의 유효 표본 수에 사용한다.
-  - **RESULT_RANDOM(VIEW·JOIN):** 먼저 SELECT 투영 대상과 `FROM + JOIN + WHERE`를 `__chartsdk_population` CTE로 만든다. PostgreSQL 단일 소스는 `setseed(?)`와 `ORDER BY random() LIMIT K`, DuckDB 다중 소스는 `USING SAMPLE reservoir(K ROWS) REPEATABLE(seed)`로 결과 행 K개를 뽑아 `__chartsdk_sample` CTE를 만들고, **그 뒤** GROUP BY·집계를 적용한다. 따라서 base 행을 먼저 표본화해 조인 비율을 왜곡하지 않는다. 조인으로 중복된 행도 조회 결과의 서로 다른 모집단 행으로 취급한다. PostgreSQL의 random top-K는 INDEX_RANDOM처럼 인덱스만 읽는 경로는 아니므로, 목적은 결과 행 수와 후속 집계량을 제한하는 데 있다.
+  - **RESULT_RANDOM(VIEW·JOIN):** 먼저 SELECT 투영 대상과 `FROM + JOIN + WHERE`를 `__chartsdk_population` CTE로 만든다. PostgreSQL 단일 소스는 `setseed(?)`와 `ORDER BY random() LIMIT K`, DuckDB 다중 소스는 `USING SAMPLE reservoir(K ROWS) REPEATABLE(seed)`로 결과 행 K개를 뽑아 `__chartsdk_sample` CTE를 만든다. 집계 모드는 그 뒤 GROUP BY·집계를 적용하고, 원본값 모드는 표본 행을 그대로 반환한다. 따라서 base 행을 먼저 표본화해 조인 비율을 왜곡하지 않는다. 조인으로 중복된 행도 조회 결과의 서로 다른 모집단 행으로 취급한다. PostgreSQL의 random top-K는 INDEX_RANDOM처럼 인덱스만 읽는 경로는 아니므로, 목적은 결과 행 수와 후속 계산량을 제한하는 데 있다.
   - **SYSTEM(폴백):** 정수형 PK 없음·통계 없음·키 희소(밀도 < 0.5)·프로브 예산 초과 시 기존 `TABLESAMPLE SYSTEM (rate) REPEATABLE (seed)`(디스크 블록 랜덤)로 폴백. 군집 편향 위험이 있어 `BLOCK_SAMPLE_CLUSTERING` 경고를 붙인다. `sample.method:"system"`으로 강제 핀 가능.
   - **FULL_SCAN(작은 테이블):** 추정 행수 ≤ 100,000이면 표본이 무의미하므로 전량 정확 계산. `rate=100`도 동일하게 정확 실행이다.
   - 행 단위 균일 표본(BERNOULLI)은 전체를 읽어야 해 "적게 읽기" 목적과 충돌하므로 제공하지 않는다. INDEX_RANDOM은 무편향과 스캔 절감을 동시에 만족하는 유일한 경로다.
 - **100%·FULL_SCAN은 표본이 아니다.** `TABLESAMPLE`·표본 CTE·숨은 표본 열을 모두 생략하고 `sampling.approximate=false`, `method="FULL_SCAN"`, `valueMode="exact"`로 반환한다.
 - **seed 고정(결정성):** INDEX_RANDOM 좌표, SYSTEM `REPEATABLE(seed)`, RESULT_RANDOM의 PostgreSQL `setseed`/DuckDB `REPEATABLE`은 seed에서 결정적으로 재생성된다. 동일 데이터·동일 seed는 같은 실행 환경에서 같은 표본을 재사용한다. Admin의 [다시 뽑기]는 새 seed를 만들고, seed는 `builder_config.sample`과 캐시 판정에 보존된다.
 - **크기 = 절대 갯수(size).** 무편향 표본의 정확도는 `±z·s/√n`으로 **표본 갯수 n**이 결정하지 전체의 몇 %인지와 무관하다. 따라서 수동 지정은 **갯수(`size`, 1,000~50,000행)**로 받고, 자동 모드는 서버가 적정 갯수(기본 10,000행)를 정한다. 레거시 `rate`(%)는 SYSTEM 핀 전용으로만 유지한다.
-- **집계 모드 전용.** rows(3B)·schema preview·원본값 튜플 모드(`agg:"none"`)에는 적용하지 않는다.
+- **차트 결과 전용.** 집계 모드와 원본값 튜플 모드(`agg:"none"`)에 적용한다. rows(3B)·schema preview에는 적용하지 않는다.
 - **VIEW·JOIN 지원.** 기존 VIEW는 일반 관계처럼 선택할 수 있고, JOIN은 실행 시 구성 그대로 사용한다. 두 경우 모두 조회 결과를 모집단으로 삼아 RESULT_RANDOM을 적용한다. 앱은 이를 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하거나 갱신하지 않는다. 갱신되지 않은 MATERIALIZED VIEW(`relispopulated=false`)는 실행 전에 차단한다.
 - **집계별 계산·표시 계약:** 아래 표는 “값을 어떻게 계산하는가”와 “사용자에게 무엇이라고 부르는가”를 함께 고정한다.
 
 | 집계 | 100% 미만 계산 | treatment | 사용자 안내 |
 |---|---|---|---|
+| 원본값(`none`) | 선택된 원본 행을 그대로 반환 | `ROW_SAMPLE` | 표본 원본값; 기본 영역 지도는 선택되지 않은 영역이 비어 보일 수 있음 |
 | SUM·COUNT | 선택된 표본의 집계값 그대로(외삽 없음) | `SAMPLE_AGGREGATE` | 각각 `표본 합계`·`표본 개수`; 전체값이 아님을 경고 |
 | AVG·STDDEV·VARIANCE | 표본 통계량을 모집단 통계의 추정값으로 사용 | `SAMPLE_ESTIMATE` | INDEX_RANDOM이면 가능한 그룹에 95% 추정 구간 표시 |
 | MIN·MAX | 표본에서 관측된 극값 그대로 | `OBSERVED_EXTREME` | 전체의 진짜 극값을 보장하지 않는다는 경고 |
 | COUNT DISTINCT | 표본 고유 개수 그대로(단순 외삽 금지) | `OBSERVED_DISTINCT` | 전체 고유 개수보다 작을 수 있다는 경고 |
 
-- **실제 표본 수:** 집계 SQL 끝에 그룹 행 수 `__chartsdk_sample_count`, 전체 실측 표본수 `__chartsdk_sample_total`을 붙인다. INDEX_RANDOM은 여기에 시리즈별 비NULL 수 `__chartsdk_sample_n_{i}`와 필요한 평균·표본표준편차를 숨은 열로 추가한다. 실행 라우터는 숨은 열을 차트 rows에서 제거하고 메타데이터로 옮긴다. 신뢰구간의 `n`은 그룹 전체 행 수가 아니라 **해당 시리즈의 비NULL 유효 표본 수**다.
+- **실제 표본 수:** 집계 SQL 끝에 그룹 행 수 `__chartsdk_sample_count`, 전체 실측 표본수 `__chartsdk_sample_total`을 붙인다. INDEX_RANDOM은 여기에 시리즈별 비NULL 수 `__chartsdk_sample_n_{i}`와 필요한 평균·표본표준편차를 숨은 열로 추가한다. 실행 라우터는 숨은 열을 차트 rows에서 제거하고 메타데이터로 옮긴다. 신뢰구간의 `n`은 그룹 전체 행 수가 아니라 **해당 시리즈의 비NULL 유효 표본 수**다. `agg:"none"`은 숨은 집계 열 없이 결과 행 수를 `sampledRowCount`로 기록한다.
 - **응답 계약 v6(스펙/실행 분리):** `sampling`은 **스펙 필드**(캐시 판정 대상 — `mode, requestedMethod, rate?, sizeTarget?, seed?`)와 **실행 필드**(표시용 — `approximate, method(INDEX_RANDOM|RESULT_RANDOM|SYSTEM|FULL_SCAN), valueMode, populationEstimate?, sampleSize?, sampledRowCount?, confidenceLevel?, groups?, estimates?, warnings?`)를 함께 가진다. 표본 실행의 `valueMode`는 `sample`이며, SUM·COUNT는 `SAMPLE_AGGREGATE`와 `SAMPLE_AGGREGATE_ONLY` 경고를 사용한다. `estimates[].intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 형태의 그룹별 구간이다. warnings에는 `INDEX_RANDOM_SAMPLE`/`RESULT_RANDOM_SAMPLE`/`BLOCK_SAMPLE_CLUSTERING`, `SAMPLE_AGGREGATE_ONLY`, `SMALL_SAMPLE_GROUPS`, `STDDEV_CI_NORMALITY_ASSUMED`, MIN/MAX·COUNT DISTINCT 경고가 들어간다. `approximate`·`sampleRate`는 하위 호환 별칭이다. 저장 차트는 실행 결과 전체를 캐시·미리보기·임베드 API·SDK까지 전달한다.
 - **기존 캐시 호환:** builder 차트 재계산은 저장 문자열 SQL이 아니라 `builder_config`로 현재 생성기를 다시 실행한다. `matchesDefinition`은 **스펙 필드만** 비교하므로 auto 해석이 INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN 중 무엇으로 갈려도 캐시가 영구 미스되지 않는다. v5 이하 캐시는 미스로 처리해 v6 실행 통계를 다시 만든다.
 - **95% 추정 구간(독립행 무작위 표본):** INDEX_RANDOM·RESULT_RANDOM의 AVG는 `z·s/√n`의 대칭 구간을 사용한다. STDDEV·VARIANCE는 각 그룹 값이 정규분포에 가깝다는 가정 아래 자유도 `n−1`의 카이제곱 분포로 비대칭 `[lower95, upper95]`를 계산해 `estimates[].intervals[]`에 싣고 `STDDEV_CI_NORMALITY_ASSUMED`를 표시한다. 시리즈 배지의 ±X%는 그룹별 상대오차 최댓값을 보수적으로 사용한다. 유효 `n<30` 그룹은 구간을 생략하되 다른 유효 그룹의 구간은 유지하고 `SMALL_SAMPLE_GROUPS`를 함께 붙인다. SUM·COUNT는 표본값 자체이므로 모집단 추정 구간을 제공하지 않고, MIN/MAX/COUNT DISTINCT도 오차범위를 제공하지 않는다. **SYSTEM 폴백**은 블록 내 상관 때문에 독립행 공식을 적용하지 않는다.
 - **전체 구성 비율:** SUM·COUNT로 전체의 구성만 비교할 때는 절대값 외삽 대신 명시적인 `% 점유율` 표시 모드를 사용한다. 현재 버전은 이를 자동 적용하지 않으며, 향후 `전체 추정값 보기` 옵션을 켠 경우에만 외삽과 그에 맞는 오차구간을 별도 계약으로 제공한다.
-- 검증: `rate`가 있으면 0.1~100(소수 한 자리), `size`가 있으면 1,000~50,000 정수, `method`는 auto/system, `mode`는 auto/manual, `seed`는 0~2147483647 정수만 허용하며 벗어나면 400 INVALID_REQUEST. `agg:"none"`과 `sample`이 함께 들어오면 SQL 생성 전에 차단한다. JOIN과 sample은 허용하며 RESULT_RANDOM으로 계획한다.
+- 검증: `rate`가 있으면 0.1~100(소수 한 자리), `size`가 있으면 1,000~50,000 정수, `method`는 auto/system, `mode`는 auto/manual, `seed`는 0~2147483647 정수만 허용하며 벗어나면 400 INVALID_REQUEST. `agg:"none"`과 `sample`은 함께 허용하며 원본 행 표본으로 실행한다. JOIN과 sample은 RESULT_RANDOM으로 계획한다.
 
 ## 4. WHERE 연산자(op) 목록
 
@@ -194,7 +195,6 @@ generate(config, datasourceId, chartType, rawMode):
   allNone = every y.agg == "none"
   anyNone = any y.agg == "none"
   if anyNone and !allNone: reject AGG_TYPE_MISMATCH
-  if allNone and config.sample: reject INVALID_REQUEST
   if chartType == "scatter": assert allNone + numeric xAxis
 
   xCol = config.xAxisBucket
@@ -207,7 +207,7 @@ generate(config, datasourceId, chartType, rawMode):
 
   sql = "SELECT " + join(select)
       + " FROM " + qualify(table)   # "schema"."table" (스키마 미지정 → public). 예시는 public 생략 표기
-      + (!allNone && config.sample?.rate < 100
+      + (config.sample?.rate < 100
           ? " TABLESAMPLE SYSTEM (" + config.sample.rate + ") REPEATABLE (" + config.sample.seed + ")"
           : "")  # 100은 정확 전체 실행(3C)
       + (whereSql ? " WHERE " + whereSql : "")
@@ -351,7 +351,7 @@ WHERE "public"."stores"."region_code" = ?
 | scatter xAxis 숫자 타입 아님 | 400 AGG_TYPE_MISMATCH |
 | scatter에서 agg가 none 아님 | 400 AGG_TYPE_MISMATCH |
 | none과 집계가 한 builderConfig 안에 섞임 | 400 AGG_TYPE_MISMATCH |
-| none 원본값 튜플 모드에서 sample 지정 | 400 INVALID_REQUEST |
+| 공간 Point/Polygon 컬럼 모드에서 sample 지정 | 400 INVALID_REQUEST |
 | 표본 설정 오류(rate 0.1~100 밖·소수 2자리 이상, mode/seed 오류) | 400 INVALID_REQUEST (서버는 조용히 클램프하지 않음) |
 
 모두 SQL 생성 전에 차단한다. 노코드 사용자는 DB 에러를 보지 않는 것이 목표다(SQL 모드는 반대로 DB 에러를 그대로 노출 — 사용자층이 다르다).

@@ -34,7 +34,7 @@
 npm install                 # 워크스페이스 의존성
 npm run gen:defaults        # chart-options/defaults.json 생성 (server가 로드)
 npm run dev                 # sdk.js 빌드·공개 경로 복사 후 admin (Next) 개발 서버
-npm run build:sdk           # SDK 번들만 생성(sdk/dist/sdk.js)
+npm run build:sdk           # SDK 번들 + 버전형 웹폰트 생성(sdk/dist/sdk.js, sdk/dist/fonts/v1/)
 npm run build               # SDK를 admin/public/sdk.js에 포함한 전체 프론트 production build
 
 # server (별도 빌드)
@@ -45,9 +45,10 @@ cd server && ./gradlew bootRun   # Windows PowerShell: .\gradlew.bat bootRun
 
 ```bash
 npm run test:unit             # 워크스페이스 단위 테스트(admin + sdk)
+cd server && ./gradlew test   # 서버 단위(DB 불요)
+cd .. && npm run test:parity  # Java/TS 8종 전체 option snapshot을 새로 생성해 비교
 npm run test:e2e              # 프론트 E2E (Playwright + MSW, 자체 dev 서버 :3100)
 npm run test:e2e:real         # Admin→Spring→PostGIS→JWT→SDK 실백엔드 E2E
-cd server && ./gradlew test              # 서버 단위(DB 불요)
 cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 ```
 
@@ -101,7 +102,7 @@ NEXT_PUBLIC_API_BASE=http://localhost:8080
 NEXT_PUBLIC_ENABLE_MSW=false
 ```
 
-S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들을 `/sdk.js`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
 
 ### 임베드 코드를 직접 붙여 확인하기
 

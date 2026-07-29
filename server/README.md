@@ -21,7 +21,7 @@ com.chartsdk
 ## 현재 구현 메모
 
 - builder 저장은 클라이언트 `sqlQuery`를 신뢰하지 않고 서버가 `builderConfig`에서 SQL을 재생성·검증·리터럴화해 저장한다.
-- 노코드 `agg:"none"` 원본값 튜플 모드는 bar/line/pie/scatter 모두에서 동작한다. 이 모드는 GROUP BY와 sample을 사용하지 않는다.
+- 노코드 `agg:"none"` 원본값 튜플 모드는 bar/line/pie/scatter/map에서 동작한다. 이 모드는 GROUP BY를 사용하지 않으며, sample을 켜면 선택된 원본 행만 반환한다.
 - 막대·선의 `builderConfig.seriesBy`는 두 번째 그룹 차원으로 SQL을 만들고 `SeriesPivot`에서 다중 시리즈로 전개한다.
 - PostGIS Polygon/Point와 geometry/geography SRID 변환, 저장 cache preview, SWR/single-flight TTL과 수동 refresh가 구현돼 있다.
 - 임베드 토큰 검증은 `EmbedTokenInterceptor`에서 끝내고, `EmbedController`는 검증된 principal만 사용한다.

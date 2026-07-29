@@ -253,10 +253,10 @@ The SDK renders directly into the host page's DOM (no iframe). The chart body is
 Geo charts need a GeoJSON registered with `echarts.registerMap(name, geoJson)` before render. The SDK does this automatically:
 
 1. After fetching the chart option, the SDK scans it for map names — both `series[].map` (choropleth `type:'map'`) and `option.geo.map` (geo-scatter point charts).
-2. For each not-yet-registered name it fetches `GET {apiBase}/maps/{name}.json` **once** (cached module-side; re-renders do not re-fetch), then calls `registerMap`.
+2. For each not-yet-registered name it fetches `GET {apiBase}/maps/{name}.json?v={assetVersion}` **once** (cached module-side; re-renders do not re-fetch), then calls `registerMap`.
 3. `apiBase` is resolved with the same priority as chart data (`window.CHARTSDK_API_BASE` → `script[data-api-base]` → `sdk.js` origin → host origin).
 
-The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). Bundled maps use the official SGIS boundaries and MOIS administrative codes; the exact sources, effective dates, and 2026 boundary derivation are documented in `chart-options/maps/LICENSE.md`.
+The `/maps/**` path is a **public static asset** (no token), served by the backend from `classpath:/static/maps/` and CORS-enabled for embedding hosts (same allow-list as `/api/**`). A versioned request receives a one-year `immutable` cache policy; an unversioned direct request must revalidate after one hour. Bundled maps use the official SGIS boundaries and MOIS administrative codes; the exact sources, effective dates, and 2026 boundary derivation are documented in `chart-options/maps/LICENSE.md`.
 
 | Asset | Regions | Region name format in chart data |
 |---|---|---|

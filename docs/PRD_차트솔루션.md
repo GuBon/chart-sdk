@@ -98,8 +98,8 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 - Backend는 chartId에 매핑된 SQL을 실행하고 ECharts option JSON을 반환한다.
 - SDK는 `echarts.init()` 후 `setOption()`으로 div에 직접 렌더한다.
 - SDK는 컨테이너 div의 크기 변화를 추종한다(ResizeObserver → `chart.resize()`). 실제 임베드 크기·반응형은 호스트 페이지의 CSS 책임이고, SDK는 따라가기만 한다.
-- 저장된 `options.display`는 자동 글꼴과 Admin 검수 캔버스의 **논리 설계 크기**다. SDK가 호스트 DOM을 1920×1080처럼 강제하는 값이 아니며, 임베드에서는 동일 option을 현재 컨테이너에 반응형으로 렌더한다.
-- 글자 크기 계약은 세 경우로 고정한다. 논리 설계 크기를 바꾸면 `typography.mode=auto`의 px를 다시 계산하고, `custom`은 사용자가 저장한 요소별 px를 유지하며, 호스트 CSS로 임베드 영역만 리사이즈할 때는 어느 모드든 fontSize를 다시 계산하지 않는다.
+- 저장된 `options.display`는 자동 글꼴과 Admin 검수 캔버스의 **논리 설계 크기**다. Admin 미리보기에서 가로·세로 프리셋을 고르거나 너비·높이를 직접 편집하며, 숫자를 직접 바꾸면 `custom`으로 저장한다. SDK가 호스트 DOM을 1920×1080처럼 강제하는 값은 아니며, 임베드에서는 동일 option을 현재 컨테이너에 반응형으로 렌더한다.
+- 글자 크기 계약은 세 경우로 고정한다. 논리 설계 크기를 바꾸면 **자동(px 미지정)인 요소만** 다시 계산하고, 사용자가 px를 지정한 요소는 그 값을 유지하며, 호스트 CSS로 임베드 영역만 리사이즈할 때는 어느 요소든 fontSize를 다시 계산하지 않는다.
 
 ### 7.2 시각화 옵션 (핵심 기능, 지속 확장)
 
@@ -112,7 +112,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
   - 크기: 작은 카드 360×240 / 표준 640×360 / 대형 960×540 / HD 1280×720 / FHD 1920×1080 / 사용자 지정 240~3840×180~2160. Admin은 이 논리 크기로 렌더한 뒤 화면에 맞게 축소한다
   - 글꼴: 자동(설계 크기별 기본값 + 80~150% 배율, custom 논리 크기는 가로·세로 면적을 함께 반영) 또는 직접 지정(제목·범례·축·데이터 라벨·툴팁의 고정 px). 제목·범례·visualMap 여백은 최종 글꼴 px에서 동적으로 계산한다
   - 색상: 색 모드(팔레트/개별 지정), 팔레트 프리셋, 항목별·시리즈별 개별 색 — 모든 대분류 공통(막대=항목/시리즈, 선=시리즈, 원형=조각)
-  - 축(X·Y 그룹 구조): 그룹별 제목·단위 표기·범위(자동/수동 min·max)·스케일(선형/로그). X축의 범위·스케일은 X가 숫자일 때만 활성(산점도 — `appliesTo`로 제어), 카테고리 X축은 제목·라벨 회전만
+  - 축(X·Y 그룹 구조): 그룹별 제목·단위 표기·범위(자동/수동 min·max)·스케일(선형/로그)과 X·Y 라벨 세로쓰기. 세로쓰기는 grapheme 단위 줄바꿈으로 위에서 아래로 쌓으며, 별도 라벨 회전값이 있으면 쌓인 라벨 전체에 함께 적용한다. X축의 범위·스케일은 X가 숫자일 때만 활성(산점도 — `appliesTo`로 제어), 카테고리 X축은 제목·라벨 회전도 제공
   - 계열: 데이터 라벨 표시, 정렬(원본/오름/내림)
   - 분석 표시: 기준선·기준 범위·목표값, 박스 플롯 1.5×IQR 이상치 표시·색상, 날짜·시간 X축 선 차트의 적용 계열별 단순 이동평균(SMA)·기간·범례 포함 여부
   - 범례: 표시 여부, 위치(상/하/좌/우). 상·하는 한 줄 scroll을 자동 적용하고, 좌·우는 scroll 토글을 제공
@@ -135,7 +135,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 차트 정의는 두 모드를 제공한다. 노코드가 옵션 1(기본 경로), SQL이 옵션 2(고급 경로)다. MVP에서는 노코드만 구현하며, SQL 직접 작성 UI는 2차에서 추가한다. 새 차트는 항상 노코드에서 시작한다. 탭 자리는 화면에 미리 두되 SQL 탭은 2차까지 비활성("준비 중") 표시한다.
 
 - 노코드 모드(옵션 1, 기본): 기존 DB의 TABLE·VIEW·MATERIALIZED VIEW 중 원본 선택 → X축 컬럼 [+ 날짜 타입이면 묶기(일/주/월, 기본 월) — DATE_TRUNC, MVP 포함] → Y축 컬럼 + 집계(합계/평균/표준편차/분산/개수/고유 개수/최소/최대/원본값) → 조건(WHERE: 컬럼·연산자·값 행 추가식) → 정렬. 원본·조인 관계는 중앙 드롭다운과 좌측 목록으로 이중 제공하지 않고, 중앙의 대상 칸을 누른 뒤 검색 가능한 좌측 카탈로그에서 고르는 단일 흐름으로 제공한다. 내부적으로 SQL을 생성하여 기존 실행 파이프라인을 그대로 사용한다(노코드 = SQL 생성기). 고객 DB의 관계를 생성·수정·갱신하지 않는다.
-- `원본값(agg:"none")`은 모든 차트 타입에서 지원한다. 막대/선은 X/Y 튜플, 원형은 name/value 튜플, 산점도는 `[x,y]` 점을 그대로 그린다. 원본값 모드는 집계와 섞을 수 없고 `GROUP BY`를 만들지 않으며 표본 추출을 사용할 수 없다.
+- `원본값(agg:"none")`은 모든 차트 타입에서 지원한다. 막대/선은 X/Y 튜플, 원형은 name/value 튜플, 산점도는 `[x,y]`, 기본 영역 지도는 region/value 행을 그대로 그린다. 원본값 모드는 집계와 섞을 수 없고 `GROUP BY`를 만들지 않는다. 표본 추출을 켜면 선택된 원본 행만 표시한다.
 - 모든 실제 차트 실행은 고정 행 제한 없이 조건과 집계 결과 전체를 반환한다. 성능을 위해 결과를 줄일지는 사용자가 `sample`로 선택하며, 표본을 지정하지 않은 차트를 시스템이 임의로 자르지 않는다. [원본 데이터]와 관계 미리보기는 조회 도구이므로 최대 1,000행 제한을 유지한다.
 - 포인트 지도(`geoscatter`)는 ① 숫자 경도·위도 컬럼과 ② SRID가 지정된 PostGIS `geometry/geography(Point, SRID)` 공간 컬럼을 모두 지원한다. 공간 컬럼은 서버가 `ST_Transform(...,4326)` 후 `ST_X/ST_Y`로 같은 `[경도,위도,(크기)]` 행 계약에 투영한다.
 - 결과 영역은 [실행 결과](집계)/[원본 데이터](조건 적용 raw, 최대 1,000행 스크롤) 탭으로 구성한다. 기준 관계를 선택한 직후에는 관계 preview를 표시한다. JOIN·WHERE 등 구성이 바뀐 원본 행은 [실행]과 함께 중복 요청하지 않고 [원본 데이터] 탭을 처음 열 때 지연 조회한다. 집계는 명시적 [실행]만 수행한다. 저장된 차트로 진입할 때는 쿼리를 자동 실행하지 않고 마지막 저장 캐시의 집계 rows와 option을 복원한다.
@@ -182,16 +182,17 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 | 모드 | 동작 | 용도 |
 |---|---|---|
 | `live` | 매 요청 실행 | 소규모 테이블, 최신성 필수 |
-| `ttl` (기본, 1시간) | 캐시 반환, 만료 시 재계산 | 대부분의 기업 차트 |
-| `manual` | 저장/[지금 갱신] 시에만 계산 — 완전 정적 | 무거운 통계, 일·주 단위 리포트 |
+| `ttl` (기본, 1시간) | 유효 캐시 반환, 만료 후 첫 요청이 재계산 | 대부분의 기업 차트 |
+| `manual` | 저장/[지금 갱신] 결과 유지. 단일 소스의 누락·손상 캐시는 self-heal | 무거운 통계, 일·주 단위 리포트 |
 
 - 캐시 저장소: 메타 DB `mc_chart_cache` (JSONB). 차트 결과 전체를 보존하므로 결과 크기는 차트 정의에 따라 커질 수 있다. 운영자가 큰 차트에 표본·조건·집계 뷰를 적용할 수 있도록 안내하되 시스템이 결과를 임의 절단하지 않는다.
-- 동작 규칙: ① S2 저장 시 실행 결과를 캐시에 시드(첫 임베드도 즉시 응답) ② TTL 만료 시 **stale-while-revalidate** — 일단 캐시를 반환하고 백그라운드 재계산 ③ 같은 차트의 재계산이 진행 중이면 중복 실행하지 않음(thundering herd 방지).
+- 동작 규칙: ① S2 저장 검증에서 얻은 실행 결과를 재조회 없이 캐시에 시드(첫 임베드도 즉시 응답) ② TTL 만료 후 락을 얻은 첫 요청은 동기 재계산하고, 같은 시각의 경쟁 요청은 정의 버전이 같은 stale 결과를 즉시 반환 ③ 별도 Spring 빈의 PostgreSQL transaction advisory lock으로 같은 차트의 중복 실행을 방지한다. 현재는 예약 작업·백그라운드 큐가 아니다.
+- 캐시 실패 상태: 성공 결과는 유지하면서 `last_error/last_error_at`만 갱신한다. 성공 결과가 한 번도 없는 최초 시드 실패는 `result/computed_at`이 NULL인 error-only 행으로 기록한다. 차트 정의 버전이 다른 결과는 TTL stale로 간주하지 않고 절대 서빙하지 않는다.
 - 임베드 응답에 `computedAt` 포함 — S4 차트 하단에 "데이터 기준 {시각}" 캡션(옵션, 기본 켬)으로 정적 데이터임을 표시.
 - 무거운 쿼리의 근본 해결은 고객 DB 측 집계 테이블/뷰(ETL)이며, S5 등록 화면 안내문으로 가이드한다.
 - **표본 추출(보완 수단, MVP 포함):** 자동 또는 1,000~50,000행 직접 지정으로 시작한다. 단일 물리 테이블은 정수 PK·키 밀도 조건을 만족하면 INDEX_RANDOM 등가 조인으로 행을 균일하게 뽑고, 불가능하면 SYSTEM 블록 표본으로 폴백하며, 작은 테이블은 FULL_SCAN한다. VIEW와 JOIN+WHERE 행 집합은 그 조회 결과를 모집단으로 삼아 RESULT_RANDOM으로 뽑은 뒤 집계한다. SUM·COUNT는 외삽하지 않은 표본 합계·표본 개수, AVG·STDDEV·VARIANCE는 모집단 통계의 표본 추정값, MIN·MAX는 관측 극값, COUNT DISTINCT는 관측 고유 개수로 구분한다. 실행 메타데이터는 sampling v6로 캐시·Admin·임베드·SDK까지 전달한다. 원본값 튜플 모드에서는 사용할 수 없다.
 - **통계적 표현 원칙:** 독립행 무작위 표본인 INDEX_RANDOM·RESULT_RANDOM에 95% 구간을 제공한다. 조인에서는 JOIN+WHERE 결과의 각 행이 표본 단위이며, 1:N 조인으로 증식한 행도 서로 다른 모집단 행이다. STDDEV·VARIANCE는 그룹별 비NULL 표본 수와 카이제곱 분포를 사용하고 정규성 가정을 반드시 표시한다. SYSTEM은 물리적 정렬·군집으로 오차가 커질 수 있어 같은 공식을 붙이지 않고 블록 표본 경고를 표시한다.
-- 구현 단계: 현재 = 갱신 모드 3종 + 저장 시 seed + SWR/single-flight TTL 캐시 + 수동 [지금 갱신] + `computedAt` 캡션 + 갯수 기반 표본 + sampling v6 + INDEX_RANDOM/RESULT_RANDOM의 AVG 오차 요약 및 STDDEV/VARIANCE 그룹별 구간. 후속 = 명시적인 `% 점유율` 표시, `전체 추정값 보기` 옵션(그때만 SUM·COUNT 외삽과 오차구간 적용), 블록 구조를 고려한 SYSTEM 분산 추정/반복 표본, 스케줄 갱신(매일 06:00 등).
+- 구현 단계: 현재 = 갱신 모드 3종 + 저장 결과 재사용 seed + transaction advisory-lock single-flight TTL 캐시 + 수동 [지금 갱신] + 실패 상태 기록 + `computedAt` 캡션 + 갯수 기반 표본 + sampling v6 + INDEX_RANDOM/RESULT_RANDOM의 AVG 오차 요약 및 STDDEV/VARIANCE 그룹별 구간. 후속 = 명시적인 `% 점유율` 표시, `전체 추정값 보기` 옵션(그때만 SUM·COUNT 외삽과 오차구간 적용), 블록 구조를 고려한 SYSTEM 분산 추정/반복 표본, 진짜 비동기·스케줄 갱신(매일 06:00 등).
 
 ## 8. 비기능 요구사항 / 보안
 
@@ -229,7 +230,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 | mc_user_token | user_id FK, token(원문), expires_at(필수), is_active | 사용자 귀속 임베드 토큰(1인 1활성 토큰 — 본인 것만). id=JWT jti. 회수=is_active false |
 | mc_datasource | owner_id, name, host, port, database_name, db_user, db_password_enc, max_pool_size, last_tested_at, last_test_ok | 개인 사용자가 등록한 업무 DB 연결. 비밀번호 AES-GCM 암호화. 데이터소스명은 사용자별 유니크 |
 | mc_chart | owner_id, name, description(nullable), datasource_id FK, define_mode, sql_query, builder_config JSONB, chart_type, options JSONB, refresh_mode, cache_ttl_seconds | 개인 사용자 소유 차트. chart_type=대분류 8종(bar/line/pie/scatter/boxplot/heatmap/map/geoscatter), 소분류·외형은 options. builder_config는 노코드 복원용 |
-| mc_chart_cache | chart_id PK·FK, result JSONB, computed_at, elapsed_ms, row_count, thumbnail, last_error, last_error_at | 차트 결과 캐시 (7.7). result는 항상 "마지막 성공" — 재계산 실패 시 에러만 기록하고 임베드는 성공 캐시로 계속 동작. thumbnail=S1 카드(후속). 차트 삭제 시 CASCADE |
+| mc_chart_cache | chart_id PK·FK, result JSONB?, computed_at?, elapsed_ms, row_count, thumbnail, last_error, last_error_at, definition_version | 차트 결과 캐시 (7.7). 성공 행의 result는 "마지막 성공", 최초 실패만 있는 행은 result/computed_at NULL. 재계산 실패 시 성공 결과를 유지하고 에러만 기록한다. 차트 삭제 시 CASCADE |
 
 ### 9.2 mc_chart.options JSONB 키 명세 (구현 기준)
 
@@ -238,13 +239,13 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 ```json
 {
   "variant": "stacked",
-  "title": "월별 매출", "titleH": "center", "titleV": "top",
+  "title": "월별 매출", "titleH": "center", "titleV": "top", "titleDirection": "horizontal",
   "display": { "preset": "fhd", "width": 1920, "height": 1080 },
-  "typography": { "mode": "auto", "scale": 100, "titleFontSize": 18, "legendFontSize": 12, "axisFontSize": 12, "dataLabelFontSize": 12, "tooltipFontSize": 12 },
+  "typography": { "scale": 100, "titleFontFamily": "default", "legendFontFamily": "default", "axisFontFamily": "default", "dataLabelFontFamily": "default", "tooltipFontFamily": "default", "titleFontSize": null, "legendFontSize": null, "axisFontSize": null, "dataLabelFontSize": null, "tooltipFontSize": null },
   "colorMode": "palette", "palette": ["#5470C6", "…"], "colorMap": { "의류": "#FF0000" },
   "legend": { "show": true, "position": "bottom", "scroll": false },
   "tooltip": { "trigger": "axis", "valueFormat": "comma", "axisPointer": "line" },
-  "dataLabel": false, "labelPosition": "top", "sortOrder": "desc",
+  "dataLabel": false, "labelPosition": "top", "labelRotate": 0, "sortOrder": "desc",
   "analysis": {
     "annotations": {
       "lines": [{ "id": "line-1", "name": "기준", "seriesIndex": 0, "value": 400, "color": "#E53935", "showLabel": true, "lineType": "dashed", "lineWidth": 2 }],
@@ -265,9 +266,12 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 }
 ```
 
-- **Zone1(공통)**: `variant`·`title*`·`display`·`typography`·`color*`·`legend`·`tooltip`·`dataLabel`·`labelPosition`·`sortOrder`·`analysis.{annotations,boxplotOutliers,movingAverage}`·`showComputedAt`. 대분류 전환 시 유지. 분석 표시는 지원하는 직교 차트에서만 노출하고 다른 유형으로 전환해도 보존한다. `display.width/height`는 custom에서만 사용하고 preset에서는 정해진 크기를 사용한다.
-- **Zone2(축, 직교 전용)**: `grid`·`xAxis`·`yAxis`. 막대·선·산점도에만 적용, 원형 전환 시 숨김+보존. `xAxis.min/max/scale`은 숫자 X축(산점도)에서만 유효 — 카테고리 X축에선 무시. `yAxis.format`+`yAxis.unit`이 합쳐져 `axisLabel.formatter`가 된다. `yAxis.secondAxis=true`면 이중축(시리즈별 `yAxisIndex` 부여).
-- **Zone3(대분류 전용)**: `bar`·`line`·`pie`·`scatter`. 해당 대분류일 때만 존재, 대분류 전환 시 초기화. 위 예시는 키를 한눈에 보이려 전부 나열했으나 실제로는 현재 대분류 객체 1개만 저장된다.
+- **Zone1(공통)**: `variant`·`title*`·`display`·`typography`·`color*`·`legend`·`tooltip`·`dataLabel`·`labelPosition`(막대·선)·`labelRotate`·`sortOrder`·`analysis.{annotations,boxplotOutliers,movingAverage}`·`showComputedAt`. 대분류 전환 시 유지. 원형 라벨 위치는 중복된 공통 키를 만들지 않고 Zone3의 `pie.labelPosition`만 사용한다. 분석 표시는 지원하는 직교 차트에서만 노출하고 다른 유형으로 전환해도 보존한다. `display.width/height`는 custom에서만 해석하고 preset에서는 정해진 크기를 사용한다. 가로 5종(`small|standard|large|hd|fhd`)과 대응 세로 5종(`smallPortrait|standardPortrait|largePortrait|hdPortrait|fhdPortrait`)을 제공한다.
+- `typography.*FontSize`와 `typography.*FontFamily`는 **요소별 독립**이다. 크기가 숫자면 그 요소만 직접 지정, `null`이면 논리 설계 크기 기본값 × `typography.scale`이다. 글꼴은 제목·범례·축·데이터 라벨·툴팁별로 `기본|Pretendard|Noto Sans KR`를 고른다. `기본`은 ECharts 시스템 글꼴을 유지하고 나머지 두 글꼴은 SDK 정적 자산으로 함께 배포해 Admin 미리보기와 임베드의 외형을 맞춘다. 폐기된 `typography.mode`와 전역 `typography.fontFamily`는 저장분을 읽을 때 변환기·편집기 양쪽이 요소별 계약으로 정규화한다.
+- `titleDirection`(`horizontal`·`vertical`)과 `labelRotate`(0·90)는 텍스트 방향이다. ECharts `title`은 회전을 지원하지 않으므로 세로쓰기는 변환기가 코드포인트마다 줄바꿈을 넣어 쌓고, 예약 높이(`titleHeight`)를 줄 수만큼 늘린다. `labelRotate`는 데이터 라벨을 지원하는 막대·선·원형·산점도·행렬 히트맵·영역 지도의 `series.label.rotate`로 직접 매핑한다.
+- 직교 5종(막대·선·산점도·박스 플롯·행렬 히트맵)의 휠 확대·축소는 Admin 미리보기와 SDK 임베드에서 항상 활성화된다. 저장 옵션 없이 `dataZoom:[{type:'inside'}]`를 붙이고, 가로 막대는 Y축, 산점도·히트맵은 양축, 나머지는 X축을 자동 선택한다. 과거 저장분의 `dataZoom.axis`가 유효하면 호환을 위해 그 축을 우선하되 `enabled` 값은 무시한다. 예약 높이가 0이라 레이아웃 수식에는 영향이 없다.
+- **Zone2(축, 직교 전용)**: `grid`·`xAxis`·`yAxis`·`typography.axisFontFamily`·`typography.axisFontSize`. 막대·선·산점도·박스 플롯·히트맵에 적용하고, 축이 없는 원형·지도에서는 숨김+보존한다. `xAxis.verticalLabels`·`yAxis.verticalLabels`는 실제 세로쓰기 formatter를 렌더 직전에 복원한다. `xAxis.min/max/scale`은 숫자 X축(산점도)에서만 유효 — 카테고리 X축에선 무시. `yAxis.format`+`yAxis.unit`이 합쳐져 `axisLabel.formatter`가 된다. `yAxis.secondAxis=true`면 이중축(시리즈별 `yAxisIndex` 부여).
+- **Zone3(대분류 전용)**: `bar`·`line`·`pie`·`scatter`. 해당 대분류일 때만 존재, 대분류 전환 시 초기화. 원형의 `pie.labelPosition`은 `dataLabel=true`일 때 계열 탭의 라벨·정렬 섹션에 한 번만 노출된다. 위 예시는 키를 한눈에 보이려 전부 나열했으나 실제로는 현재 대분류 객체 1개만 저장된다.
 - `sortOrder`는 서버에서 rows 정렬(원본 'none' / 'asc' / 'desc'). 단, 날짜·시간 선 차트에서 이동평균이 활성화되면 SMA의 시간 의미를 보장하기 위해 결과 전체를 시간 오름차순으로 정렬한다.
 - `showComputedAt`: S4 "데이터 기준 {시각}" 캡션 표시 여부(기본 true, 캐시 모드일 때만).
 - 각 옵션의 컨트롤·기본값·`showIf`·`echarts` 경로·`tier`(T1~T3)는 레지스트리가 보유한다. ECharts 조립 규칙은 별도 문서 "변환기 매핑 스펙(차트 옵션)" 참조.
@@ -290,7 +294,7 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 **MVP**
 1. 코어 파이프라인: SQL 실행 엔진(검증·읽기전용·타임아웃·행제한) + chartId로 실행 → ECharts JSON → SDK가 div 렌더 (토큰 검증 스텁)
 2. 사용자 토큰: mc_user 수동 생성 + 토큰 발급/검증/만료/회수 (단일 검증 필터)
-3. 시각화 옵션: 막대/선/원형/산점도/상자수염/행렬 히트맵/영역 지도/포인트 지도(8종), 색(팔레트/개별), 축, 정렬, 라벨, 범례, 논리 크기·글꼴 + 크기별 미리보기
+3. 시각화 옵션: 막대/선/원형/산점도/상자수염/행렬 히트맵/영역 지도/포인트 지도(8종), 색(테마 선택/선택 대상에 테마색 적용/직접 지정/차트 요소 선택 삭제·모두 삭제), 축, 정렬, 라벨, 범례, 논리 크기·글꼴 + 크기별 미리보기
 4. Admin: 목록(S1) + 노코드 빌더(S2, SQL 생성기) + 임베드 코드(S3) + 데이터소스 관리(S5) + 토큰 관리(S7)
 5. 다중 데이터소스: 동적 커넥션 풀 + 자격증명 암호화
 6. 결과 캐싱: 갱신 모드 3종(live/ttl/manual) + 저장 시 시드 + SWR/single-flight TTL 캐시 + [지금 갱신] + 마지막 계산 시각 (7.7 — 대용량 대응 코어)
