@@ -29,6 +29,11 @@ async function openOptionSection(page: Page, name: string) {
   await expect(button).toHaveAttribute('aria-expanded', 'true');
 }
 
+async function selectTheme(page: Page, label: string) {
+  await page.getByRole('combobox', { name: '테마', exact: true }).click();
+  await page.getByRole('option', { name: label, exact: true }).click();
+}
+
 async function useSumValue(page: Page, column = 'amount') {
   await page.locator('#builder-y-column-0').selectOption(column);
   await page.getByRole('combobox', { name: 'Y축 1 값 방식' }).selectOption('sum');
@@ -104,8 +109,12 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
   test('저장된 차트 편집 진입은 실행 없이 캐시 결과와 차트 미리보기를 복원한다', async ({ page }) => {
     let builderRuns = 0;
+    const echartsErrors: string[] = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder') builderRuns += 1;
+    });
+    page.on('console', (message) => {
+      if (message.type() === 'error' && message.text().includes('[ECharts]')) echartsErrors.push(message.text());
     });
 
     await page.goto('/charts/12');
@@ -118,6 +127,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByText('실행하면 미리보기가 표시됩니다.')).not.toBeVisible();
     await page.waitForTimeout(300);
     expect(builderRuns).toBe(0);
+    expect(echartsErrors).toEqual([]);
   });
 
   test('데이터소스 선택 → 테이블/컬럼 트리가 동작한다', async ({ page }) => {
@@ -173,11 +183,19 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByTestId('table-selection-banner')).toHaveCount(0);
   });
 
-  test('빌더 폼: 테이블·X축·Y축 구성 시 실행이 활성화되고 SQL 보기가 토글된다', async ({ page }) => {
+  test('빌더 폼: 테이블·X축·Y축 구성만으로 실행하지 않고 원본 데이터를 유지한다', async ({ page }) => {
+    let aggregateRuns = 0;
+    page.on('request', (request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/query/run-builder') return;
+      if ((request.postDataJSON() as { mode?: string }).mode === 'aggregate') aggregateRuns += 1;
+    });
+
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
 
     await selectBase(page, 'sales public');
+    await expect(page.getByRole('button', { name: '원본 데이터', exact: true })).toHaveClass(/bg-bg-panel/);
+    await expect(page.getByRole('columnheader', { name: 'category' })).toBeVisible();
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
 
     // Y축 없으면 실행 비활성
@@ -187,6 +205,10 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByRole('button', { name: '실행', exact: true })).toBeEnabled();
     await expect(page.getByRole('combobox', { name: 'Y축 1 값 방식' })).toHaveValue('none');
     await expect(page.getByText('원본값이 기본이며, 집계를 선택하면 X축과 계열 기준으로 그룹화합니다.')).toBeVisible();
+    await page.waitForTimeout(500);
+    expect(aggregateRuns).toBe(0);
+    await expect(page.getByRole('button', { name: '원본 데이터', exact: true })).toHaveClass(/bg-bg-panel/);
+    await expect(page.getByRole('columnheader', { name: 'category' })).toBeVisible();
 
     // 생성된 SQL 보기 토글
     await page.getByText('생성된 SQL 보기').click();
@@ -275,17 +297,48 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByTestId('visual-editor-workspace')).toHaveAttribute('data-option-dock', 'bottom');
   });
 
-  test('논리 크기별 미리보기와 패널별 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
+  test('가로·세로 프리셋과 직접 크기 편집, 패널별 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
     await page.goto('/charts/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
     const designCanvas = page.getByTestId('chart-design-canvas');
+    const sizePreset = page.getByRole('combobox', { name: '미리보기 설계 크기' });
+    const chartWidth = page.getByRole('spinbutton', { name: '차트 너비' });
+    const chartHeight = page.getByRole('spinbutton', { name: '차트 높이' });
     await expect(designCanvas).toHaveAttribute('data-design-width', '640');
     await expect(designCanvas).toHaveAttribute('data-design-height', '360');
+    await expect(chartWidth).toHaveValue('640');
+    await expect(chartHeight).toHaveValue('360');
 
-    await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('fhd');
+    await sizePreset.selectOption('fhd');
     await expect(designCanvas).toHaveAttribute('data-design-width', '1920');
     await expect(designCanvas).toHaveAttribute('data-design-height', '1080');
+    await expect(chartWidth).toHaveValue('1920');
+    await expect(chartHeight).toHaveValue('1080');
+
+    // 사용자 지정으로 전환해도 과거 기본값(640×360)으로 튀지 않고 현재 프리셋에서 시작한다.
+    await sizePreset.selectOption('custom');
+    await expect(sizePreset).toHaveValue('custom');
+    await expect(designCanvas).toHaveAttribute('data-design-width', '1920');
+    await expect(designCanvas).toHaveAttribute('data-design-height', '1080');
+
+    await sizePreset.selectOption('standardPortrait');
+    await expect(designCanvas).toHaveAttribute('data-design-width', '360');
+    await expect(designCanvas).toHaveAttribute('data-design-height', '640');
+    await expect(chartWidth).toHaveValue('360');
+    await expect(chartHeight).toHaveValue('640');
+
+    const customPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      const display = request.postDataJSON().options?.display;
+      return display?.preset === 'custom' && display.width === 500 && display.height === 900;
+    });
+    await chartWidth.fill('500');
+    await chartHeight.fill('900');
+    await customPreview;
+    await expect(sizePreset).toHaveValue('custom');
+    await expect(designCanvas).toHaveAttribute('data-design-width', '500');
+    await expect(designCanvas).toHaveAttribute('data-design-height', '900');
 
     await expect(page.getByRole('button', { name: /영역 확대/ })).toHaveCount(0);
 
@@ -317,7 +370,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(dialog).toBeVisible();
     const closeFocusPreview = dialog.getByRole('button', { name: '집중 미리보기 닫기' });
     await expect(closeFocusPreview).toBeFocused();
-    await expect(dialog.getByTestId('chart-design-canvas')).toHaveAttribute('data-design-width', '1920');
+    await expect(dialog.getByTestId('chart-design-canvas')).toHaveAttribute('data-design-width', '500');
+    await expect(dialog.getByTestId('chart-design-canvas')).toHaveAttribute('data-design-height', '900');
     await dialog.getByRole('button', { name: '100%' }).click();
     await expect(dialog.getByTestId('chart-focus-viewport')).toHaveAttribute('data-fit-mode', 'actual');
     await closeFocusPreview.click();
@@ -338,7 +392,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
   });
 
-  test('실행 없이 자동 글자는 논리 크기에 반응하고 직접 지정 px는 크기를 바꿔도 유지된다', async ({ page }) => {
+  test('실행 없이 요소별 글꼴·글자 크기를 각 요소 편집 위치에서 지정한다', async ({ page }) => {
     let builderRuns = 0;
     page.on('request', (request) => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder') builderRuns += 1;
@@ -346,33 +400,108 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     await page.goto('/charts/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    // 저장 차트 재진입 시 정의 복원에 필요한 초기 조회는 이 테스트의 편집 동작과 무관하다.
+    builderRuns = 0;
 
+    // 스타일 탭에는 자동 상태 요소에 적용되는 전체 배율만 남는다.
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '글꼴');
     const fontSection = page.locator('section').filter({ has: page.getByText('글꼴', { exact: true }) });
     const policy = fontSection.getByTestId('typography-policy');
-    await expect(policy).toContainText('자동: 논리 차트 크기를 바꾸면 다시 계산합니다.');
+    await expect(policy).toContainText('요소별 글꼴과 글자 크기는 제목·범례·축 글자·라벨·툴팁 모양 섹션에서 각각 지정합니다.');
     await expect(policy).toContainText('현재 제목 18px · 범례 12px · 축 12px · 라벨 12px · 툴팁 12px');
-    await expect(policy).toContainText('임베드 영역만 CSS로 리사이즈하면 위 px 값은 유지됩니다.');
+    await expect(fontSection.locator('input[type="range"][aria-label="전체 글자 크기"]')).toHaveValue('100');
+    await expect(fontSection.locator('input[type="range"][aria-label="제목 글자 크기"]')).toHaveCount(0);
+    await expect(fontSection.getByRole('combobox')).toHaveCount(0);
 
+    // 자동은 논리 크기를 따라 다시 계산된다.
     await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('fhd');
     await expect(policy).toContainText('현재 제목 26px · 범례 16px · 축 16px · 라벨 16px · 툴팁 16px');
 
-    await fontSection.getByRole('button', { name: '직접 지정', exact: true }).click();
-    const titleFont = fontSection.locator('input[type="range"][aria-label="제목"]');
-    await titleFont.fill('31');
-    await expect(policy).toContainText('직접 지정: 저장한 px 값을 그대로 사용합니다.');
-    await expect(policy).toContainText('현재 제목 31px');
+    // 제목 크기는 제목을 편집하는 기본 탭에서 지정한다.
+    await openOptionTab(page, '기본');
+    await page.locator('#option-title').fill('월별 매출');
+    const pretendardPreview = page.waitForResponse((response) => {
+      if (response.request().method() !== 'POST'
+        || new URL(response.url()).pathname !== '/api/v1/charts/preview'
+        || !response.ok()) return false;
+      const options = response.request().postDataJSON().options ?? {};
+      return options.typography?.titleFontFamily === 'pretendard';
+    });
+    await page.getByRole('combobox', { name: '제목 글꼴' }).selectOption('pretendard');
+    await expect(page.getByRole('combobox', { name: '제목 글꼴' })).toHaveValue('pretendard');
+    const pretendardOption = (await pretendardPreview).json();
+    await expect(pretendardOption).resolves.toMatchObject({
+      option: { title: { textStyle: { fontFamily: "'ChartSDK Pretendard',sans-serif" } } },
+    });
+    await expect(page.locator('link[data-chartsdk-fonts]')).toHaveAttribute(
+      'href',
+      /\/fonts\/v1\/chartsdk-fonts\.css$/,
+    );
+    await expect.poll(() => page.evaluate(() =>
+      performance.getEntriesByType('resource').some((entry) =>
+        entry.name.includes('/fonts/v1/pretendard/') && entry.name.endsWith('.woff2')))).toBe(true);
+    const titleFontRow = page.getByTestId('option-slider-typography_titleFontSize');
+    await expect(titleFontRow).toContainText('자동 26px');
+    await titleFontRow.locator('input[type="range"]').fill('31');
+    await expect(titleFontRow).toContainText('31px');
 
+    // 직접 지정한 요소는 논리 크기를 바꿔도 유지되고, 자동인 요소만 따라 내려간다.
     await page.getByRole('combobox', { name: '미리보기 설계 크기' }).selectOption('small');
-    await expect(policy).toContainText('현재 제목 31px');
+    await openOptionTab(page, '스타일');
+    await expect(policy).toContainText('현재 제목 31px · 범례 10px · 축 10px · 라벨 10px · 툴팁 10px');
 
-    await fontSection.getByRole('button', { name: '자동', exact: true }).click();
+    // '자동' 버튼으로 되돌린다.
+    await openOptionTab(page, '기본');
+    await titleFontRow.getByRole('button', { name: '자동', exact: true }).click();
+    await expect(titleFontRow).toContainText('자동 14px');
+    await openOptionTab(page, '스타일');
     await expect(policy).toContainText('현재 제목 14px · 범례 10px · 축 10px · 라벨 10px · 툴팁 10px');
     expect(builderRuns).toBe(0);
   });
 
-  test('시리즈 칩에 테마 색상을 적용하고 직접 지정 버튼으로 색을 바꾼다', async ({ page }) => {
+  test('제목 세로쓰기와 저장 없는 미리보기 휠 줌을 제공한다', async ({ page }) => {
+    const previewOptionsFor = (match: (options: Record<string, any>) => boolean) =>
+      page.waitForRequest((request) => {
+        if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+        return match(request.postDataJSON().options ?? {});
+      });
+
+    await page.goto('/charts/12');
+    const preview = page.getByTestId('chart-preview');
+    await expect(preview.locator('canvas')).toBeVisible();
+
+    // 편집 미리보기의 휠 줌은 저장 옵션을 켜지 않아도 동작하고 dirty 상태를 만들지 않는다.
+    await expect(preview).toHaveAttribute('data-preview-data-zoom', 'true');
+    await expect(preview).toHaveAttribute('data-preview-data-zoomed', 'false');
+    await preview.hover();
+    await page.mouse.wheel(0, -600);
+    await expect(preview).toHaveAttribute('data-preview-data-zoomed', 'true');
+    await expect(page.locator('header').getByRole('button', { name: '초기화', exact: true })).toBeDisabled();
+    await preview.dblclick();
+    await expect(preview).toHaveAttribute('data-preview-data-zoomed', 'false');
+
+    await openOptionTab(page, '기본');
+    await page.locator('#option-title').fill('매출추이');
+
+    const verticalTitle = previewOptionsFor((options) => options.titleDirection === 'vertical');
+    await page.getByRole('tabpanel').getByRole('button', { name: '세로', exact: true }).click();
+    expect((await verticalTitle).postDataJSON().options.title).toBe('매출추이');
+
+    // 숫자 선택지는 문자열 "90"이 아니라 ECharts가 해석하는 숫자 90으로 저장한다.
+    await openOptionTab(page, '계열');
+    await openOptionSection(page, '라벨 · 정렬');
+    const labelsEnabled = previewOptionsFor((options) => options.dataLabel === true);
+    const dataLabelSwitch = page.getByRole('switch', { name: '데이터 라벨 표시' });
+    await expect(dataLabelSwitch).toHaveAttribute('aria-checked', 'false');
+    await dataLabelSwitch.click();
+    await labelsEnabled;
+    const verticalLabels = previewOptionsFor((options) => options.labelRotate === 90);
+    await page.getByRole('tabpanel').getByRole('button', { name: '세로', exact: true }).click();
+    expect((await verticalLabels).postDataJSON().options.labelRotate).toBe(90);
+  });
+
+  test('테마 팔레트와 직접 지정으로 시리즈 색상을 바꾸고 지정 해제 시 현재 테마로 복귀한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
@@ -386,6 +515,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     const seriesChip = page.locator('[data-testid^="series-color-chip-"]').first();
     const seriesSwatch = seriesChip.locator('[data-testid^="series-color-swatch-"]');
     await seriesChip.click();
+
+    // 테마 색상 팔레트는 현재 선택한 시리즈에 해당 색을 지정한다.
     await page.getByTestId('palette-swatch-1').click();
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(204, 102, 119)');
 
@@ -401,12 +532,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     const colorPicker = page.locator('#option-series-color-picker');
     const directColorButton = page.getByTestId('series-color-edit');
-    const label = page.getByText('시리즈 색상', { exact: true });
-    const editBox = await directColorButton.boundingBox();
-    const labelBox = await label.boundingBox();
-    expect(editBox).not.toBeNull();
-    expect(labelBox).not.toBeNull();
-    expect(Math.abs((editBox!.y + editBox!.height / 2) - (labelBox!.y + labelBox!.height / 2))).toBeLessThan(4);
+    await expect(page.getByTestId('selected-color-target')).toContainText('선택:');
     await colorPicker.evaluate((input) => {
       const picker = input as HTMLInputElement & { dataset: DOMStringMap };
       picker.showPicker = () => { picker.dataset.opened = 'true'; };
@@ -419,7 +545,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
     await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(204, 102, 119)');
 
-    await page.locator('#option-palettePreset').selectOption('bold');
+    await selectTheme(page, 'Bold');
     await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(127, 60, 141)');
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
     await page.getByRole('button', { name: '지정 해제', exact: true }).click();
@@ -427,7 +553,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
-  test('차트에서 막대 하나를 선택해 색상을 적용하고 지정 해제한다', async ({ page }) => {
+  test('차트에서 고른 요소를 칩으로 관리하고 선택 삭제·모두 삭제한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
@@ -485,6 +611,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     ]);
     await expect(selectedItem.locator('span').last()).toHaveCSS('background-color', 'rgb(221, 204, 119)');
 
+    // 지정 해제는 현재 항목 칩을 유지한 채 현재 테마색으로만 되돌린다.
     const clearRequest = page.waitForRequest((request) => {
       if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
       return Array.isArray(request.postDataJSON().options.itemColorOverrides)
@@ -492,8 +619,43 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     });
     await page.getByRole('button', { name: '지정 해제', exact: true }).click();
     expect((await clearRequest).postDataJSON().options.itemColorOverrides).toEqual([]);
+    await expect(selectedItem).toBeVisible();
 
-    await page.getByTestId('series-color-grid').locator('button').first().click();
+    // 선택 삭제는 선택된 차트 요소의 지정색과 칩을 함께 제거한다.
+    const reapplyRequest = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options.itemColorOverrides?.length === 1;
+    });
+    await page.getByTestId('palette-swatch-2').click();
+    await reapplyRequest;
+    const deleteRequest = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return Array.isArray(request.postDataJSON().options.itemColorOverrides)
+        && request.postDataJSON().options.itemColorOverrides.length === 0;
+    });
+    await page.getByRole('button', { name: '선택 삭제', exact: true }).click();
+    await deleteRequest;
+    await expect(selectedItem).toHaveCount(0);
+
+    // 모두 삭제는 차트에서 선택해 저장한 모든 단일 요소 지정색을 비운다.
+    await page.mouse.click(
+      bounds!.x + bounds!.width * colorPoint!.x,
+      bounds!.y + bounds!.height * colorPoint!.y,
+    );
+    await expect(selectedItem).toBeVisible();
+    const applyForAllDelete = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options.itemColorOverrides?.length === 1;
+    });
+    await page.getByTestId('palette-swatch-1').click();
+    await applyForAllDelete;
+    const clearAllRequest = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return Array.isArray(request.postDataJSON().options.itemColorOverrides)
+        && request.postDataJSON().options.itemColorOverrides.length === 0;
+    });
+    await page.getByRole('button', { name: '모두 삭제', exact: true }).click();
+    await clearAllRequest;
     await expect(preview).toHaveAttribute('data-color-picking', 'false');
     await expect(selectedItem).toHaveCount(0);
   });
@@ -517,12 +679,55 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.locator('#option-xAxis_labelEvery').fill('3');
 
     const ySection = page.locator('section').filter({ has: page.getByText('Y축', { exact: true }) });
+    const xVerticalPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options?.xAxis?.verticalLabels === true;
+    });
+    await xSection.getByRole('switch', { name: '라벨 세로쓰기' }).click();
+    expect((await xVerticalPreview).postDataJSON().options.xAxis.verticalLabels).toBe(true);
+    await expect(page.locator('#option-xAxis_rotate')).toBeVisible();
+
+    const yVerticalPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options?.yAxis?.verticalLabels === true;
+    });
+    await ySection.getByRole('switch', { name: '라벨 세로쓰기' }).click();
+    expect((await yVerticalPreview).postDataJSON().options.yAxis.verticalLabels).toBe(true);
+
     const yTickRow = ySection.getByText('눈금 방식', { exact: true }).locator('..');
     await expect(yTickRow.getByRole('button', { name: '자동', exact: true })).toHaveClass(/bg-bg-panel/);
     await yTickRow.getByRole('button', { name: '고정 간격', exact: true }).click();
     await expect(page.locator('#option-yAxis_interval')).toBeVisible();
     await page.locator('#option-yAxis_interval').fill('20');
 
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('산점도 전환 시 숫자 X축 스케일 설정이 노출되고 미리보기에 반영된다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await selectBase(page, 'sales public');
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('id');
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await page.getByRole('button', { name: '산점도', exact: true }).click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await openOptionTab(page, '축');
+    await openOptionSection(page, 'X축');
+
+    const xSection = page.locator('section').filter({
+      has: page.getByRole('button', { name: 'X축', exact: true }),
+    });
+    const scaleRow = xSection.getByText('스케일', { exact: true }).locator('..');
+    await expect(scaleRow.getByRole('button', { name: '선형', exact: true })).toBeVisible();
+
+    const logPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options?.xAxis?.scale === 'log';
+    });
+    await scaleRow.getByRole('button', { name: '로그', exact: true }).click();
+    await logPreview;
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
@@ -989,7 +1194,7 @@ test.describe('S2 차트 유형 제약', () => {
     await expect(page.getByRole('button', { name: '+ 값 추가' })).toBeDisabled();
   });
 
-  test('분포로 전환하면 집계는 원본값뿐이고 표본·날짜 묶기 컨트롤이 사라진다', async ({ page }) => {
+  test('분포로 전환하면 집계는 원본값뿐이고 날짜 묶기는 숨지만 행 표본은 사용할 수 있다', async ({ page }) => {
     await newSalesBase(page);
     await page.getByRole('combobox', { name: 'X축' }).selectOption('date');
     await page.getByRole('button', { name: '+ 값 추가' }).click();
@@ -999,9 +1204,32 @@ test.describe('S2 차트 유형 제약', () => {
     // 분포 전환
     await page.getByRole('button', { name: '산점도', exact: true }).click();
     await expect(page.getByRole('combobox', { name: 'X축 묶기' })).toHaveCount(0);
-    await expect(page.getByRole('switch', { name: '표본 추출' })).toHaveCount(0);
+    const sampleSwitch = page.getByRole('switch', { name: '표본 추출' });
+    await expect(sampleSwitch).toBeVisible();
+    await expect(sampleSwitch).toBeEnabled();
+    await sampleSwitch.click();
+    await expect(sampleSwitch).toBeChecked();
     // 집계 셀렉트는 원본값 1개뿐
     await expect(page.locator('#builder-y-agg-0 option')).toHaveCount(1);
+  });
+
+  test('영역 지도 원본값에서도 행 표본을 실행하고 처리 방식을 표시한다', async ({ page }) => {
+    await newSalesBase(page);
+    await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
+    await page.getByRole('button', { name: '+ 값 추가' }).click();
+    await page.getByRole('button', { name: '영역 지도', exact: true }).click();
+    await page.locator('#builder-y-column-0').selectOption('amount');
+    await expect(page.getByRole('combobox', { name: 'Y축 1 값 방식' })).toHaveValue('none');
+
+    const sampleSwitch = page.getByRole('switch', { name: '표본 추출' });
+    await expect(sampleSwitch).toBeVisible();
+    await expect(sampleSwitch).toBeEnabled();
+    await sampleSwitch.click();
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.getByTestId('sample-badge')).toContainText('표본 결과');
+    await expect(page.getByText('amount: 표본 원본값')).toBeVisible();
   });
 
   test('원본값 결과에서 분포 전환은 호환 결과와 저장 안내 버튼을 유지한다', async ({ page }) => {
@@ -1194,26 +1422,36 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     });
   }
 
-  test('지도는 순차형 테마 19개와 그라데이션 방향 반전을 제공한다', async ({ page }) => {
+  test('모든 차트가 같은 25개 테마를 공유하고 지도는 순차형 테마를 먼저 제공한다', async ({ page }) => {
     await runBar(page);
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
     const theme = page.locator('#option-palettePreset');
-    await expect(theme.locator('option')).toHaveCount(6);
+    await expect(theme.locator('option')).toHaveCount(25);
+    await expect(theme.locator('option').first()).toHaveText('Safe');
+    await page.getByRole('combobox', { name: '테마', exact: true }).click();
+    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option')).toHaveCount(25);
+    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option').first()).toHaveText('Safe');
+    await page.keyboard.press('Escape');
     await page.getByPlaceholder('차트 이름').fill('색상 테마 초기화 테스트');
     await page.locator('header').getByRole('button', { name: '저장', exact: true }).click();
     await expect(page.getByText('저장되었습니다')).toBeVisible();
 
     await openOptionTab(page, '기본');
-    await page.getByRole('button', { name: '지도', exact: true }).click();
+    await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
 
     await expect(theme).toHaveValue('teal');
-    await expect(theme.locator('option')).toHaveCount(19);
+    await expect(theme.locator('option')).toHaveCount(25);
+    await expect(theme.locator('option').first()).toHaveText('Burg');
+    await page.getByRole('combobox', { name: '테마', exact: true }).click();
+    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option')).toHaveCount(25);
+    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option').first()).toHaveText('Burg');
+    await page.keyboard.press('Escape');
     await expect(page.getByTestId('palette-gradient')).toBeVisible();
-    await theme.selectOption('burg');
+    await selectTheme(page, 'Burg');
     await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(255, 198, 196)');
 
     await page.getByRole('switch', { name: '색상 방향 반전' }).click();
@@ -1224,7 +1462,8 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
     await expect(theme).toHaveValue('safe');
-    await expect(theme.locator('option')).toHaveCount(6);
+    await expect(theme.locator('option')).toHaveCount(25);
+    await expect(theme.locator('option').first()).toHaveText('Safe');
   });
 
   test('표본 추출 실행 결과에 방식·집계 주의문구가 표시된다', async ({ page }) => {
@@ -1415,9 +1654,36 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await expect(sql).toContainText('ST_X(ST_Transform');
     await expect(sql).toContainText('ST_Y(ST_Transform');
     await expect(sql).not.toContainText('LIMIT 1000');
+
+    // 영역 지도와 마찬가지로 포인트 지도에서도 시·도/시·군·구 표시 영역을 선택할 수 있다.
+    await openOptionTab(page, '영역');
+    await openOptionSection(page, '표시 영역');
+    const viewport = page.getByTestId('map-viewport-control');
+    const regionMode = viewport.getByRole('radio', { name: '지역 선택' });
+    await expect(regionMode).toBeVisible();
+    await regionMode.click();
+    await expect(viewport.getByRole('combobox', { name: '시/도', exact: true })).toBeVisible();
+    await expect(viewport.getByRole('combobox', { name: '구', exact: true })).toBeVisible();
+
+    // 테마 변경은 전체 점 기본색을 바꾸며, 배경 지역 강조는 항상 꺼진다.
+    await openOptionTab(page, '스타일');
+    await openOptionSection(page, '색상');
+    await expect(page.getByText('차트 요소 색상', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '선택 삭제', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '모두 삭제', exact: true })).toBeVisible();
+    const themeColorPreview = page.waitForResponse(async (response) => {
+      if (response.request().method() !== 'POST'
+        || new URL(response.url()).pathname !== '/api/v1/charts/preview'
+        || !response.ok()) return false;
+      return response.request().postDataJSON().options?.palette?.[0] === '#7F3C8D';
+    });
+    await selectTheme(page, 'Bold');
+    const payload = await (await themeColorPreview).json();
+    expect(payload.option.series[0].itemStyle.color).toBe('#7F3C8D');
+    expect(payload.option.geo.emphasis).toEqual({ disabled: true });
   });
 
-  test('지도 유형에서 지도 단위 전환 UI를 노출하지 않는다', async ({ page }) => {
+  test('지도 영역 탭에서 시도·시군구 행정 경계를 선택해 미리보기에 반영한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
@@ -1428,12 +1694,21 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
 
     // 지리 계열은 GEO 그룹 헤더 아래에 노출 (화면설계 S2 옵션 패널)
     await expect(page.getByText('GEO', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '지도', exact: true }).click();
+    await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
-    await expect(page.getByText('지도 단위', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '시도', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '시군구', exact: true })).toHaveCount(0);
+    await openOptionTab(page, '영역');
+    await openOptionSection(page, '표시 영역');
+    const boundaryRow = page.getByText('행정 경계', { exact: true }).locator('..');
+    await expect(boundaryRow.getByRole('button', { name: '시·도', exact: true })).toBeVisible();
+    await expect(boundaryRow.getByRole('button', { name: '시·군·구', exact: true })).toBeVisible();
+
+    const sigunguPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options?.map?.name === 'kr-sigungu';
+    });
+    await boundaryRow.getByRole('button', { name: '시·군·구', exact: true }).click();
+    await sigunguPreview;
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
@@ -1445,7 +1720,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.getByRole('button', { name: '+ 값 추가' }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
-    await page.getByRole('button', { name: '지도', exact: true }).click();
+    await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('combobox', { name: '지도 경계 방식' }).selectOption('spatial');
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();

@@ -39,7 +39,7 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
     .getByRole('button', { name: /korea_sigungu_statistics.*geometry_demo/ })
     .click();
 
-  await page.getByRole('button', { name: '지도', exact: true }).click();
+  await page.getByRole('button', { name: '영역 지도', exact: true }).click();
   await page.getByRole('combobox', { name: '지도 경계 방식' }).selectOption('spatial');
   await page.getByRole('combobox', { name: '공간 Polygon 컬럼' }).selectOption('boundary');
   await page.getByRole('combobox', { name: '영역 이름 컬럼' }).selectOption('region_name');

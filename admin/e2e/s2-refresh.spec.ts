@@ -19,6 +19,7 @@ test.describe('S2 저장 차트 캐시 갱신', () => {
   test('지금 갱신은 캐시 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {
     await page.goto('/charts/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.getByTestId('chart-design-canvas').getByText(/데이터 기준/)).toBeVisible();
     const action = await openDataRefresh(page);
     await expect(action).toContainText('마지막 계산');
 
@@ -34,6 +35,24 @@ test.describe('S2 저장 차트 캐시 갱신', () => {
     await expect(page.getByText('데이터를 갱신했습니다')).toBeVisible();
     await expect(action).toContainText('마지막 계산');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+  });
+
+  test('데이터 기준 시각 토글은 편집기 미리보기 캡션을 실제로 숨긴다', async ({ page }) => {
+    await page.goto('/charts/12');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    const canvas = page.getByTestId('chart-design-canvas');
+    await expect(canvas.getByText(/데이터 기준/)).toBeVisible();
+    await openDataRefresh(page);
+
+    const toggle = page.getByRole('switch', { name: '데이터 기준 시각 표시' });
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    const hiddenCaptionPreview = page.waitForRequest((request) => {
+      if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
+      return request.postDataJSON().options?.showComputedAt === false;
+    });
+    await toggle.click();
+    await hiddenCaptionPreview;
+    await expect(canvas.getByText(/데이터 기준/)).toHaveCount(0);
   });
 
   test('갱신 결과에 새 자동 계열 색상이 생겨도 편집기를 미저장 상태로 만들지 않는다', async ({ page }) => {
