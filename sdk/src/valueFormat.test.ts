@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
+import { hydrateValueFormat, verticalizeAxisLabel } from '@chartsdk/chart-options/valueFormat';
 
 describe('공통 툴팁 hydration', () => {
   it('지도 템플릿의 필드를 값 포맷과 함께 안전한 HTML로 복원한다', () => {
@@ -98,5 +98,53 @@ describe('공통 툴팁 hydration', () => {
       name: 'A',
       value: ['A', 1000],
     })).toBe('A<br/>이상치: 1,000');
+  });
+});
+
+describe('축 라벨 실제 세로쓰기 hydration', () => {
+  it('한글·결합문자·이모지 묶음을 회전하지 않고 grapheme 단위로 쌓는다', () => {
+    expect(verticalizeAxisLabel('서울특별시')).toBe('서\n울\n특\n별\n시');
+    expect(verticalizeAxisLabel(`가족👨‍👩‍👧‍👦e\u0301`)).toBe(`가\n족\n👨‍👩‍👧‍👦\ne\u0301`);
+  });
+
+  it('가로 막대에서도 논리 X·Y축 역할에 맞춰 원문과 숫자 포맷을 세로로 쌓는다', () => {
+    const option: Record<string, any> = {
+      __chartsdkValueFormat: { tooltip: 'raw', yAxis: 'comma', unit: '원' },
+      // 가로 막대: 논리 Y 값축은 실제 X축, 논리 X 범주축은 실제 Y축이다.
+      xAxis: {
+        type: 'value',
+        __chartsdkVerticalLabel: 'y',
+        axisLabel: { formatter: '{value}원' },
+      },
+      yAxis: {
+        type: 'category',
+        __chartsdkVerticalLabel: 'x',
+        axisLabel: { rotate: 30 },
+      },
+    };
+
+    hydrateValueFormat(option);
+
+    expect(option.xAxis.__chartsdkVerticalLabel).toBeUndefined();
+    expect(option.yAxis.__chartsdkVerticalLabel).toBeUndefined();
+    expect(option.xAxis.axisLabel.rotate).toBeUndefined();
+    expect(option.yAxis.axisLabel.rotate).toBe(30);
+    expect(option.xAxis.axisLabel.formatter(1234)).toBe('1\n,\n2\n3\n4\n원');
+    expect(option.yAxis.axisLabel.formatter('서울')).toBe('서\n울');
+  });
+
+  it('히트맵의 범주형 Y축은 단위 포맷 없이 계열명을 그대로 세로쓰기한다', () => {
+    const option: Record<string, any> = {
+      __chartsdkValueFormat: { tooltip: 'raw', yAxis: 'comma', unit: '원' },
+      yAxis: {
+        type: 'category',
+        __chartsdkVerticalLabel: 'y',
+        axisLabel: {},
+      },
+    };
+
+    hydrateValueFormat(option);
+
+    expect(option.yAxis.axisLabel.formatter('매출액')).toBe('매\n출\n액');
   });
 });

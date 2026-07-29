@@ -2,6 +2,7 @@ import { fetchChartOption } from './api';
 import { renderChart, renderError } from './chart';
 import { ensureMapsRegistered } from './geo';
 import { normalizeSampling } from '@chartsdk/chart-options/sampling';
+import { ensureChartWebFonts } from '@chartsdk/chart-options/webFonts';
 
 const ATTR_ID = 'data-chart-id';
 const ATTR_TOKEN = 'data-auth-token';
@@ -15,17 +16,24 @@ declare global {
   }
 }
 
+const sdkScript = document.currentScript as HTMLScriptElement | null;
+
 // API 베이스 우선순위: 전역 명시 설정 > script[data-api-base] > sdk.js 출처 > 현재 페이지 출처.
 // SDK 자산과 API 서버가 서로 다른 출처여도 복사한 스니펫만으로 동작하도록 script 속성을 정식 계약으로 둔다.
 function resolveApiBase(): string {
   if (window.CHARTSDK_API_BASE) return window.CHARTSDK_API_BASE;
-  const script = document.currentScript as HTMLScriptElement | null;
-  if (script?.dataset.apiBase) return script.dataset.apiBase.replace(/\/+$/, '');
-  if (script?.src) return new URL(script.src).origin;
+  if (sdkScript?.dataset.apiBase) return sdkScript.dataset.apiBase.replace(/\/+$/, '');
+  if (sdkScript?.src) return new URL(sdkScript.src).origin;
   return window.location.origin;
 }
 
+function resolveAssetBase(): string {
+  if (sdkScript?.src) return new URL('.', sdkScript.src).href;
+  return `${window.location.origin}/`;
+}
+
 const apiBase = resolveApiBase();
+const assetBase = resolveAssetBase();
 
 function cleanupActiveChart(el: HTMLElement): void {
   const cleanup = activeCharts.get(el);
@@ -54,6 +62,8 @@ export async function render(el: HTMLElement, opts: { chartId: string; token: st
     if (renderVersions.get(el) !== version) return;
     // 지도 차트면 GeoJSON 을 먼저 등록(1회 캐시). 비-지도 차트는 즉시 통과.
     await ensureMapsRegistered(apiBase, option);
+    if (renderVersions.get(el) !== version) return;
+    await ensureChartWebFonts(option, assetBase);
     if (renderVersions.get(el) !== version) return;
     const cleanup = renderChart(el, option, computedAt, sampling);
     activeCharts.set(el, cleanup);

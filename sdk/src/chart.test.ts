@@ -7,7 +7,15 @@ const ec = vi.hoisted(() => {
 });
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: ec.init }));
 vi.mock('echarts/charts', () => ({ BarChart: {}, LineChart: {}, PieChart: {}, ScatterChart: {}, BoxplotChart: {}, HeatmapChart: {}, MapChart: {} }));
-vi.mock('echarts/components', () => ({ GeoComponent: {}, GridComponent: {}, TooltipComponent: {}, LegendComponent: {}, TitleComponent: {}, VisualMapComponent: {} }));
+vi.mock('echarts/components', () => ({
+  DataZoomComponent: {},
+  GeoComponent: {},
+  GridComponent: {},
+  TooltipComponent: {},
+  LegendComponent: {},
+  TitleComponent: {},
+  VisualMapComponent: {},
+}));
 vi.mock('echarts/features', () => ({ LabelLayout: {} }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
@@ -46,6 +54,17 @@ describe('renderChart', () => {
     const cap = el.querySelector('[data-chart-caption]');
     expect(cap?.textContent).toMatch(/데이터 기준 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     expect(cap?.classList.contains('chartsdk-caption')).toBe(true); // 공식 오버라이드 훅
+  });
+
+  it('showComputedAt=false면 기준 시각을 숨기고 내부 메타데이터를 ECharts에 넘기지 않는다', () => {
+    const el = document.createElement('div');
+    renderChart(el, {
+      __chartsdkShowComputedAt: false,
+      series: [{ type: 'bar' }],
+    }, '2026-07-06T12:00:00Z');
+
+    expect(el.querySelector('[data-chart-caption]')).toBeNull();
+    expect(ec.instance.setOption).toHaveBeenCalledWith({ series: [{ type: 'bar' }] });
   });
 
   it('SYSTEM 표본 메타데이터는 방식 라벨과 실제 표본수를 캡션에 표시한다', () => {

@@ -14,6 +14,7 @@ describe('fetchChartOption', () => {
     expect(out).toEqual(json);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://api.test/api/v1/charts/data?chartId=12');
+    expect(init.cache).toBe('no-store');
     expect(init.headers.Authorization).toBe('Bearer TKN');
   });
 

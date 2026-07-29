@@ -3,6 +3,7 @@
 // `${apiBase}/maps/{name}.json` 에서 1회 fetch 해 echarts.registerMap 한다(방식 A: SDK 는 데이터만 가져와 등록).
 // 이미 등록됐거나 진행 중이면 재요청하지 않는다(모듈 캐시).
 import * as echarts from 'echarts/core';
+import { versionedAssetUrl } from '@chartsdk/chart-options/assets';
 import { applyMapViewport, takeEmbeddedMaps } from '@chartsdk/chart-options/geo';
 
 const inFlight = new Map<string, Promise<void>>();
@@ -34,7 +35,7 @@ function registerOne(apiBase: string, name: string): Promise<void> {
   let p = inFlight.get(name);
   if (!p) {
     p = (async () => {
-      const res = await fetch(`${apiBase}/maps/${encodeURIComponent(name)}.json`);
+      const res = await fetch(versionedAssetUrl(`${apiBase}/maps/${encodeURIComponent(name)}.json`));
       if (!res.ok) throw new Error(`map ${name} 로드 실패: ${res.status}`);
       echarts.registerMap(name, await res.json());
     })().catch((e) => {

@@ -12,7 +12,11 @@
       color: #171717;
       font: 14px/1.6 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-    main { width: min(960px, calc(100% - 32px)); margin: 40px auto; }
+    /*
+     * 차트를 호스트 페이지 폭에 맞춰 축소하지 않는다.
+     * 저장한 설계 크기가 브라우저보다 크면 페이지 스크롤로 전체 크기를 확인한다.
+     */
+    main { margin: 40px; }
     .guide {
       margin-bottom: 20px;
       padding: 18px 20px;
@@ -24,13 +28,38 @@
     p { margin: 0; color: #5f6875; }
     code { color: #364152; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
     .embed-area {
-      overflow: hidden;
-      min-height: 420px;
+      width: max-content;
+      min-width: 100%;
+      overflow: visible;
       border: 1px dashed #b8c0cc;
       border-radius: 12px;
       background: #fff;
     }
-    [data-chart-id] { width: 100%; height: 420px; }
+
+    /*
+     * [선택 사항 1] 저장된 설계 크기 대신 원하는 고정 크기를 쓰려면 아래 주석을
+     * 해제하고 width와 height를 수정한다. JavaScript가 지정한 인라인 크기보다
+     * 우선하도록 이 선택 규칙에만 !important를 사용한다.
+     *
+     * [data-chart-id] {
+     *   width: 1280px !important;
+     *   height: 720px !important;
+     * }
+     */
+
+    /*
+     * [선택 사항 2] 화면 폭에 맞춰 반응형으로 축소하려면 아래 주석을 해제한다.
+     * aspect-ratio는 원래 16:9 비율을 유지하고 height:auto가 높이를 계산한다.
+     *
+     * .embed-area {
+     *   width: 100%;
+     * }
+     * [data-chart-id] {
+     *   width: 100% !important;
+     *   height: auto !important;
+     *   aspect-ratio: 16 / 9;
+     * }
+     */
   </style>
 </head>
 <body>
@@ -38,6 +67,7 @@
     <section class="guide">
       <h1>수동 임베드 확인 페이지</h1>
       <p>Admin의 임베드 코드 모달에서 복사한 HTML을 아래 표시 위치에 직접 붙여 넣고 저장한 뒤 브라우저를 새로고침하세요.</p>
+      <p>각 차트의 저장된 설계 크기(프리셋 또는 사용자 지정)를 자동으로 읽어 축소하지 않고 표시합니다. 크기를 덮어쓰거나 반응형으로 표시하려면 위 CSS의 ‘선택 사항’ 주석을 참고하세요.</p>
     </section>
 
     <section class="embed-area">
@@ -46,5 +76,80 @@
       <!-- 임베드 코드 붙여넣기 끝 -->
     </section>
   </main>
+
+  <script>
+    /*
+     * 이 수동 확인 페이지는 SDK를 로드하기 전에 차트 정의의 options.display를 읽는다.
+     * 그래야 SDK의 0px 높이 방어값보다 먼저 차트마다 저장된 실제 설계 크기를 적용할 수 있다.
+     *
+     * 운영용 임베드 코드의 SDK/API 주소가 바뀌면 아래 두 값만 변경한다.
+     */
+    const CHARTSDK_SRC = 'http://localhost:3000/sdk.js';
+    const CHARTSDK_API_BASE = 'http://localhost:8080';
+
+    const CHART_SIZE_PRESETS = {
+      small: [360, 240],
+      standard: [640, 360],
+      large: [960, 540],
+      hd: [1280, 720],
+      fhd: [1920, 1080],
+      smallPortrait: [240, 360],
+      standardPortrait: [360, 640],
+      largePortrait: [540, 960],
+      hdPortrait: [720, 1280],
+      fhdPortrait: [1080, 1920],
+    };
+
+    function clamp(value, min, max, fallback) {
+      const number = Number(value);
+      return Number.isFinite(number)
+        ? Math.min(max, Math.max(min, Math.round(number)))
+        : fallback;
+    }
+
+    function savedChartSize(chart) {
+      const display = chart?.options?.display ?? {};
+      if (display.preset === 'custom') {
+        return [
+          clamp(display.width, 240, 3840, 640),
+          clamp(display.height, 180, 2160, 360),
+        ];
+      }
+      return CHART_SIZE_PRESETS[display.preset] ?? CHART_SIZE_PRESETS.standard;
+    }
+
+    async function applySavedChartSizes() {
+      const charts = [...document.querySelectorAll('[data-chart-id]')];
+      await Promise.all(charts.map(async (element) => {
+        const chartId = element.dataset.chartId;
+        const response = await fetch(`${CHARTSDK_API_BASE}/api/v1/charts/${encodeURIComponent(chartId)}`);
+        if (!response.ok) throw new Error(`차트 #${chartId} 정의 조회 실패`);
+
+        const chart = await response.json();
+        const [width, height] = savedChartSize(chart);
+        element.style.width = `${width}px`;
+        element.style.height = `${height}px`;
+        element.dataset.chartDesignSize = `${width}x${height}`;
+      }));
+    }
+
+    function loadChartSdk() {
+      const script = document.createElement('script');
+      script.src = CHARTSDK_SRC;
+      script.dataset.apiBase = CHARTSDK_API_BASE;
+      document.body.appendChild(script);
+    }
+
+    applySavedChartSizes()
+      .catch((error) => {
+        console.error(error);
+        // 정의 조회가 실패해도 SDK 자체 오류 UI는 확인할 수 있도록 기본 크기로 계속 렌더한다.
+        document.querySelectorAll('[data-chart-id]').forEach((element) => {
+          element.style.width ||= '640px';
+          element.style.height ||= '360px';
+        });
+      })
+      .finally(loadChartSdk);
+  </script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 // ECharts core + 필요한 차트/컴포넌트/렌더러만 등록(임베드 SDK 번들 최소화).
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart } from 'echarts/charts';
-import { GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent } from 'echarts/components';
+import { DataZoomComponent, GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent } from 'echarts/components';
 import { LabelLayout } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
-import { hasChartTitle, responsiveTitlePatch, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
+import { responsiveTitlePatch, usesResponsiveTitle, withResponsiveTitle } from '@chartsdk/chart-options/renderLayout';
 import { confidenceBadgeText, samplingMethodLabel, samplingWarningMessage, type SamplingMetadata } from '@chartsdk/chart-options/sampling';
 import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
 
@@ -12,7 +12,7 @@ import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
 // (map 시리즈 단독은 MapChart 의 installGeo 로 충분하지만, option.geo 컴포넌트는 별도 등록 필요)
 echarts.use([
   BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart,
-  GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent,
+  DataZoomComponent, GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent,
   LabelLayout,
   CanvasRenderer,
 ]);
@@ -75,13 +75,17 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
   });
   // 배경 오버라이드: 컨테이너에 data-chart-background 가 있으면 그 값으로(예: 다크 사이트 'transparent').
   const bg = el.getAttribute('data-chart-background');
-  const { __chartsdkAutoColorMap: _autoColorMap, ...publicOptionSource } = option;
+  const {
+    __chartsdkAutoColorMap: _autoColorMap,
+    __chartsdkShowComputedAt: showComputedAt,
+    ...publicOptionSource
+  } = option;
   const publicOption = hydrateValueFormat(structuredClone(publicOptionSource));
   const baseOption = bg ? { ...publicOption, backgroundColor: bg } : publicOption;
 
   // 긴 제목이 컨테이너 밖으로 잘리지 않도록 말줄임(…). title.textStyle.width 는 컨테이너 크기 의존이라
   // 크기를 모르는 서버가 아니라 렌더러가 주입한다("크기·반응형은 렌더 측 책임" 원칙). resize 마다 갱신.
-  const hasTitle = hasChartTitle(baseOption);
+  const hasTitle = usesResponsiveTitle(baseOption);
   chart.setOption(withResponsiveTitle(baseOption, host.clientWidth));
 
   const observer = new ResizeObserver(() => {
@@ -91,7 +95,8 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
   });
   observer.observe(host);
 
-  if (computedAt || sampling) {
+  const displayedComputedAt = showComputedAt !== false ? computedAt : undefined;
+  if (displayedComputedAt || sampling) {
     const cap = document.createElement('div');
     cap.className = 'chartsdk-caption';
     cap.setAttribute('data-chart-caption', '');
@@ -105,7 +110,7 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
            '표본 결과', confidence].filter(Boolean).join(' · ')
         : '전체 데이터 · 정확한 결과');
     }
-    if (computedAt) captionParts.push(`데이터 기준 ${formatTime(computedAt)}`);
+    if (displayedComputedAt) captionParts.push(`데이터 기준 ${formatTime(displayedComputedAt)}`);
     cap.textContent = captionParts.join(' · ');
     // font/color 외에 border·margin·background·letter-spacing 도 명시 — 전역 div 규칙의 유탄을 전부 차단.
     cap.style.cssText =

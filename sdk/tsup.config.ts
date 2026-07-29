@@ -10,6 +10,7 @@ export default defineConfig({
   clean: true,
   minify: true,
   sourcemap: true,
+  onSuccess: 'node scripts/copy-font-assets.mjs',
   // IIFE 기본 출력명(sdk.global.js) 대신 임베드 스니펫과 동일한 sdk.js 로
   outExtension: () => ({ js: '.js' }),
 });

@@ -31,7 +31,7 @@ describe('ensureMapsRegistered', () => {
   it('map 시리즈의 GeoJSON 을 fetch 해 registerMap 한다', async () => {
     const { ensureMapsRegistered } = await import('./geo');
     await ensureMapsRegistered('http://api', { series: [{ type: 'map', map: 'kr-sido' }] });
-    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sido.json');
+    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sido.json?v=v1');
     expect(ec.registerMap).toHaveBeenCalledWith('kr-sido', GEO);
   });
 
@@ -41,7 +41,7 @@ describe('ensureMapsRegistered', () => {
       geo: { map: 'kr-sigungu' },
       series: [{ type: 'scatter', coordinateSystem: 'geo' }],
     });
-    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sigungu.json');
+    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sigungu.json?v=v1');
     expect(ec.registerMap).toHaveBeenCalledWith('kr-sigungu', GEO);
   });
 

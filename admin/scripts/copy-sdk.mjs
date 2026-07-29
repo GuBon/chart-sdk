@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, cp, mkdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,4 +22,11 @@ for (const asset of assets) {
   }
 }
 
-console.log('SDK embed assets copied to admin/public.');
+const publicFontsDir = resolve(publicDir, 'fonts');
+await rm(publicFontsDir, { recursive: true, force: true });
+await cp(resolve(sdkDist, 'fonts'), publicFontsDir, {
+  recursive: true,
+  force: true,
+});
+
+console.log('SDK embed script and webfont assets copied to admin/public.');

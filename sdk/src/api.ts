@@ -19,7 +19,10 @@ export async function fetchChartOption(
   token: string,
 ): Promise<ChartDataResponse> {
   const url = `${apiBase}/api/v1/charts/data?chartId=${encodeURIComponent(chartId)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(url, {
+    cache: 'no-store',
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) throw new Error(`chart ${chartId} 요청 실패: ${res.status}`);
   return (await res.json()) as ChartDataResponse;
 }
