@@ -10,6 +10,7 @@ admin/out/
 sdk/dist/
 admin/public/sdk.js
 admin/public/sdk.js.map
+admin/public/fonts/
 
 # generated SSOT artifact (run `npm run gen:defaults`)
 chart-options/defaults.json
@@ -43,3 +44,6 @@ sdk/test-results/
 # playwright real-run screenshots (스크립트 .cjs/.ps1 는 보존)
 output/**/*.png
 output/playwright/
+
+# Large local public-data imports
+/AL_D010_*/

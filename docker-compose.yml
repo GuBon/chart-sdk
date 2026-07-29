@@ -31,12 +31,11 @@ services:
     ports:
       - "55433:5432"
     volumes:
+      - chartsdk_postgis_data:/var/lib/postgresql/data
       - ./docker/postgis/init/01-geometry-chart-data.sql:/docker-entrypoint-initdb.d/01-geometry-chart-data.sql:ro
       - ./docker/postgis/init/02-korea-map-data.sql:/docker-entrypoint-initdb.d/02-korea-map-data.sql:ro
       - ./docker/postgis/init/03-korea-statistics-years.sql:/docker-entrypoint-initdb.d/03-korea-statistics-years.sql:ro
       - ./chart-options/maps/kr-sigungu.json:/docker-entrypoint-initdb.d/kr-sigungu.json:ro
-    tmpfs:
-      - /var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d chartsdk_spatial_test"]
       interval: 3s
@@ -69,3 +68,4 @@ services:
 
 volumes:
   chartsol_pgdata:
+  chartsdk_postgis_data:
