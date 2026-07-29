@@ -96,7 +96,7 @@ export interface BuilderConfig {
   where: WhereCond[];
   orderBy: OrderBy | null;
   limit?: number;
-  sample?: SampleConfig | null; // 집계 모드 전용. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
+  sample?: SampleConfig | null; // 집계·원본값 공용 행 표본. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
   geoPoint?: GeoPointConfig; // geoscatter 전용. 미지정은 레거시 경도(X)+위도(Y) 방식.
   geoArea?: GeoAreaConfig; // map 전용. 미지정/regions는 내장 행정구역 방식.
 }

@@ -25,6 +25,7 @@ export type SamplingWarningCode =
   | 'OBSERVED_EXTREME_ONLY'
   | 'DISTINCT_COUNT_NOT_EXTRAPOLATED';
 export type SamplingTreatment =
+  | 'ROW_SAMPLE'
   | 'SAMPLE_AGGREGATE'
   | 'EXTRAPOLATED_TOTAL'
   | 'SAMPLE_ESTIMATE'
@@ -102,6 +103,7 @@ export function isFullScanTable(estimatedRowCount?: number | null): boolean {
 
 export function samplingTreatment(aggregate: string, approximate: boolean): SamplingTreatment {
   if (!approximate) return 'EXACT';
+  if (aggregate === 'none') return 'ROW_SAMPLE';
   if (aggregate === 'sum' || aggregate === 'count') return 'SAMPLE_AGGREGATE';
   if (aggregate === 'min' || aggregate === 'max') return 'OBSERVED_EXTREME';
   if (aggregate === 'count_distinct') return 'OBSERVED_DISTINCT';

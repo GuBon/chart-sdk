@@ -35,6 +35,7 @@ public class ChartOptionConverter {
     private static final String EMBEDDED_MAPS_KEY = "__chartsdkMaps";
     private static final String MAP_VIEWPORT_KEY = "__chartsdkMapViewport";
     private static final String TOOLTIP_METADATA_KEY = "__chartsdkTooltip";
+    private static final String SHOW_COMPUTED_AT_KEY = "__chartsdkShowComputedAt";
     private static final String BOXPLOT_OUTLIER_SERIES_ID = "__chartsdk_boxplot_outliers";
     private static final String MOVING_AVERAGE_SERIES_ID = "__chartsdk_moving_average";
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
@@ -72,13 +73,42 @@ public class ChartOptionConverter {
         return hasTitle(opt) && "bottom".equals(string(opt.get("titleV"), "top"));
     }
 
+    private static boolean verticalTitle(Map<String, Object> opt) {
+        return "vertical".equals(string(opt.get("titleDirection"), "horizontal"));
+    }
+
+    /**
+     * 제목 텍스트 방향 → ECharts title.text (chart-options/display.ts 미러).
+     * ECharts title 은 회전을 지원하지 않으므로 세로쓰기는 글자마다 줄바꿈을 넣어 쌓는다.
+     * 코드포인트 단위로 끊어 서로게이트 쌍(이모지 등)이 쪼개지지 않게 한다.
+     */
+    private static String titleText(Map<String, Object> opt) {
+        String title = string(opt.get("title"), "");
+        if (!verticalTitle(opt) || title.isEmpty()) return title;
+        StringBuilder stacked = new StringBuilder(title.length() * 2);
+        title.codePoints().forEach(codePoint -> {
+            if (stacked.length() > 0) stacked.append('\n');
+            stacked.appendCodePoint(codePoint);
+        });
+        return stacked.toString();
+    }
+
+    /** 세로쓰기 제목이 차지하는 줄 수. 예약 높이 수식이 mock 과 같아야 범례·grid 가 어긋나지 않는다. */
+    private static int titleLineCount(Map<String, Object> opt) {
+        if (!verticalTitle(opt)) return 1;
+        return Math.max(1, (int) string(opt.get("title"), "").codePoints().count());
+    }
+
     public Map<String, Object> convert(QueryRows rows, String chartType, Map<String, Object> options) {
+        Map<String, Object> storedOptions = options == null ? Map.of() : options;
         Map<String, Object> normalizedOptions = migrateLegacyInteractionOptions(
-                options == null ? Map.of() : options,
+                storedOptions,
                 chartType
         );
         Map<String, Object> opt = deepMerge(defaults.forType(chartType), normalizedOptions);
-        boolean legacyColorTheme = !normalizedOptions.isEmpty()
+        // 마이그레이션은 빈 옵션에도 내부 메타데이터/빈 map 객체를 추가할 수 있다.
+        // 레거시 여부는 변환 후 객체가 아니라 실제 저장 입력의 존재 여부로 판정해야 새 지도·히트맵 기본 테마가 보존된다.
+        boolean legacyColorTheme = !storedOptions.isEmpty()
                 && number(map(normalizedOptions.get("colorTheme")).get("version"), 0) != 2;
         if (legacyColorTheme) {
             // colorTheme 도입 전 저장된 지도/히트맵은 종전 Safe + 2색 visualMap 결과를 유지한다.
@@ -102,11 +132,19 @@ public class ChartOptionConverter {
         List<Object> categories = new ArrayList<>();
         for (List<Object> r : dataRows) categories.add(r.isEmpty() ? null : r.get(0));
 
+        int scatterBubbleIndex = -1;
+        if ("scatter".equals(chartType) && "bubble".equals(variant)) {
+            int candidate = columnIndex(columns, string(map(opt.get("scatter")).get("bubbleField"), null));
+            // 0열=X, 1열=필수 Y이므로 크기 컬럼은 세 번째 이후 결과 컬럼만 허용한다.
+            if (candidate > 1) scatterBubbleIndex = candidate;
+        }
         List<String> colorNames = new ArrayList<>();
         if ("pie".equals(chartType)) {
             categories.forEach(category -> colorNames.add(String.valueOf(category)));
         } else {
-            for (int c = 1; c < columns.size(); c++) colorNames.add(string(columns.get(c).get("name"), ""));
+            for (int c = 1; c < columns.size(); c++) {
+                if (c != scatterBubbleIndex) colorNames.add(string(columns.get(c).get("name"), ""));
+            }
         }
         Map<String, Object> autoColorMap = ColorResolver.resolveSeriesColors(opt, colorNames);
         opt.put("autoColorMap", autoColorMap);
@@ -114,6 +152,7 @@ public class ChartOptionConverter {
 
         Map<String, Object> o = new LinkedHashMap<>();
         o.put("__chartsdkAutoColorMap", autoColorMap);
+        o.put(SHOW_COMPUTED_AT_KEY, !Boolean.FALSE.equals(opt.get("showComputedAt")));
         o.put("__chartsdkValueFormat", Map.of(
                 "tooltip", string(map(opt.get("tooltip")).get("valueFormat"), "raw"),
                 "yAxis", string(map(opt.get("yAxis")).get("format"), "raw"),
@@ -126,6 +165,7 @@ public class ChartOptionConverter {
         applyColor(o, opt);
         applyLegend(o, opt);
         applyTooltip(o, opt, chartType);
+        applyDataZoom(o, opt, chartType);
 
         // 신규 유형은 직교 폴스루를 타지 않고 전용 조립(축·시리즈 형태가 다르다).
         if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows, itemColors); return o; }
@@ -169,10 +209,10 @@ public class ChartOptionConverter {
         String title = string(opt.get("title"), "");
         if (title.isEmpty()) return;
         Map<String, Object> t = new LinkedHashMap<>();
-        t.put("text", title);
+        t.put("text", titleText(opt));
         t.put("left", string(opt.get("titleH"), "center"));
         t.put("top", string(opt.get("titleV"), "top"));
-        t.put("textStyle", Map.of("fontSize", typography(opt).title()));
+        t.put("textStyle", textStyle(typography(opt).title(), fontFamilyStack(opt, "title")));
         o.put("title", t);
     }
 
@@ -190,7 +230,7 @@ public class ChartOptionConverter {
         l.put("show", legend.getOrDefault("show", true));
         String position = string(legend.get("position"), "bottom");
         Typography typography = typography(opt);
-        LayoutMetrics metrics = layoutMetrics(typography);
+        LayoutMetrics metrics = layoutMetrics(typography, opt);
         // 제목이 같은 모서리(상/하)에 있으면 범례를 제목 다음 줄로 밀어 겹침 방지(규칙 1). 좌/우 범례는 제목과 축이 달라 무관.
         boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
         boolean titleBottom = titleAtBottom(opt);
@@ -200,12 +240,42 @@ public class ChartOptionConverter {
             case "right" -> { l.put("right", 0); l.put("orient", "vertical"); }
             default -> { l.put("bottom", titleBottom ? metrics.titleHeight() : 0); l.put("orient", "horizontal"); }
         }
-        l.put("textStyle", Map.of("fontSize", typography.legend()));
+        l.put("textStyle", textStyle(typography.legend(), fontFamilyStack(opt, "legend")));
         // 상·하 범례는 항상 scroll로 단일행을 보장해야 계산한 범례 블록 높이와 실제 레이아웃이 일치한다.
         // 좌·우는 기존 T2 토글을 존중한다.
         boolean horizontal = "top".equals(position) || "bottom".equals(position);
         if (horizontal || Boolean.TRUE.equals(legend.get("scroll"))) l.put("type", "scroll");
         o.put("legend", l);
+    }
+
+    private static final List<String> DATA_ZOOM_CHART_TYPES = List.of("bar", "line", "scatter", "boxplot", "heatmap");
+
+    /**
+     * 항상 활성화되는 휠 확대·축소(ECharts dataZoom type='inside').
+     * 안쪽 방식이라 예약 높이가 0이고 제목·범례·grid 수식에 영향을 주지 않는다.
+     * 과거 저장 축 설정은 보존하고, 설정이 없으면 차트 형태에 맞는 축을 자동 선택한다.
+     */
+    private void applyDataZoom(Map<String, Object> o, Map<String, Object> opt, String chartType) {
+        if (!DATA_ZOOM_CHART_TYPES.contains(chartType)) return;
+        String storedAxis = string(map(opt.get("dataZoom")).get("axis"), null);
+        String axis = switch (storedAxis == null ? "" : storedAxis) {
+            case "x", "y", "both" -> storedAxis;
+            default -> switch (chartType) {
+                case "scatter", "heatmap" -> "both";
+                case "bar" -> "horizontal".equals(string(opt.get("variant"), "basic")) ? "y" : "x";
+                default -> "x";
+            };
+        };
+        Map<String, Object> inside = new LinkedHashMap<>();
+        inside.put("type", "inside");
+        if (!"y".equals(axis)) inside.put("xAxisIndex", List.of(0));
+        if (!"x".equals(axis)) {
+            inside.put("yAxisIndex", Boolean.TRUE.equals(map(opt.get("yAxis")).get("secondAxis"))
+                    ? List.of(0, 1)
+                    : List.of(0));
+        }
+        inside.put("filterMode", "filter");
+        o.put("dataZoom", List.of(inside));
     }
 
     private void applyTooltip(Map<String, Object> o, Map<String, Object> opt, String chartType) {
@@ -229,6 +299,8 @@ public class ChartOptionConverter {
         if (tooltip.get("padding") instanceof Number padding) t.put("padding", padding);
         Map<String, Object> textStyle = new LinkedHashMap<>();
         textStyle.put("fontSize", typography(opt).tooltip());
+        // 툴팁은 캔버스가 아니라 HTML 로 그려져 루트 textStyle 을 상속하지 않는다.
+        putIfNotNull(textStyle, "fontFamily", fontFamilyStack(opt, "tooltip"));
         putIfNotNull(textStyle, "color", tooltip.get("textColor"));
         t.put("textStyle", textStyle);
         o.put("tooltip", t);
@@ -348,14 +420,15 @@ public class ChartOptionConverter {
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
         int axisFontSize = typography(opt).axis();
+        String axisFontFamily = fontFamilyStack(opt, "axis");
         Map<String, Object> xAxis = new LinkedHashMap<>();
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("boundaryGap", true);
-        decorateAxis(xAxis, xCfg, true, true, true, axisFontSize);
+        decorateAxis(xAxis, xCfg, true, true, true, axisFontSize, axisFontFamily);
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "log".equals(string(yCfg.get("scale"), "value")) ? "log" : "value");
-        decorateAxis(yAxis, yCfg, false, false, false, axisFontSize);
+        decorateAxis(yAxis, yCfg, false, false, false, axisFontSize, axisFontFamily);
 
         applyGrid(o, opt, false);
         o.put("xAxis", xAxis);
@@ -426,17 +499,18 @@ public class ChartOptionConverter {
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
         Typography typography = typography(opt);
-        LayoutMetrics metrics = layoutMetrics(typography);
+        String axisFontFamily = fontFamilyStack(opt, "axis");
+        LayoutMetrics metrics = layoutMetrics(typography, opt);
         Map<String, Object> xAxis = new LinkedHashMap<>();
         xAxis.put("type", "category");
         xAxis.put("data", cats);
         xAxis.put("splitArea", Map.of("show", true));
-        decorateAxis(xAxis, xCfg, true, true, true, typography.axis());
+        decorateAxis(xAxis, xCfg, true, true, true, typography.axis(), axisFontFamily);
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "category");
         yAxis.put("data", yNames);
         yAxis.put("splitArea", Map.of("show", true));
-        decorateAxis(yAxis, yCfg, false, false, false, typography.axis());
+        decorateAxis(yAxis, yCfg, false, false, false, typography.axis(), axisFontFamily);
 
         Map<String, Object> grid = new LinkedHashMap<>(presetGrid(string(map(opt.get("grid")).get("preset"), "normal")));
         grid.put("containLabel", map(opt.get("grid")).getOrDefault("containLabel", true));
@@ -453,7 +527,11 @@ public class ChartOptionConverter {
         s.put("type", "heatmap");
         s.put("name", "값");
         s.put("data", data);
-        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography.dataLabel()));
+        Map<String, Object> label = textStyle(typography.dataLabel(), fontFamilyStack(opt, "dataLabel"));
+        boolean labelShown = Boolean.TRUE.equals(opt.get("dataLabel"));
+        label.put("show", labelShown);
+        if (labelShown) putLabelRotation(label, opt);
+        s.put("label", label);
         applySeriesEmphasis(s, opt, "heatmap");
         o.put("series", List.of(s));
     }
@@ -518,9 +596,14 @@ public class ChartOptionConverter {
         s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "값") : "값");
         s.put("map", selectedMap);
         s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
-        s.put("label", Map.of("show", Boolean.TRUE.equals(opt.get("dataLabel")), "fontSize", typography(opt).dataLabel()));
+        Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
+        boolean labelShown = Boolean.TRUE.equals(opt.get("dataLabel"));
+        label.put("show", labelShown);
+        if (labelShown) putLabelRotation(label, opt);
+        s.put("label", label);
         applyLabelLayout(s, opt);
         applySeriesEmphasis(s, opt, "map");
+        s.putAll(nonCartesianInsets(opt, false, true));
         s.put("data", data);
         o.put("series", List.of(s));
         applyMapViewportMetadata(o, opt);
@@ -590,9 +673,10 @@ public class ChartOptionConverter {
         Map<String, Object> geo = new LinkedHashMap<>();
         geo.put("map", mapName(opt));
         geo.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
+        geo.putAll(nonCartesianInsets(opt, false, false));
         geo.put("label", Map.of("show", false));
-        geo.put("itemStyle", Map.of("areaColor", "#f3f4f6", "borderColor", "#d1d5db"));
-        applyGeoEmphasis(geo, opt);
+        // 포인트 지도에서 강조 대상은 scatter 점뿐이다. 배경 행정구역 hover 강조는 항상 차단한다.
+        geo.put("emphasis", Map.of("disabled", true));
         o.put("geo", geo);
 
         Map<String, Object> s = new LinkedHashMap<>();
@@ -626,7 +710,7 @@ public class ChartOptionConverter {
         Object top = palette.isEmpty() ? null : palette.get(0);
         boolean continuousPalette = number(map(opt.get("colorTheme")).get("version"), 0) == 2;
         Typography typography = typography(opt);
-        LayoutMetrics metrics = layoutMetrics(typography);
+        LayoutMetrics metrics = layoutMetrics(typography, opt);
         Map<String, Object> vm = new LinkedHashMap<>();
         vm.put("min", min);
         vm.put("max", max);
@@ -635,7 +719,7 @@ public class ChartOptionConverter {
         vm.put("left", "center");
         // 제목이 하단이면 visualMap 을 제목 위로 올려 겹침 방지(규칙 1의 map/heatmap 변형).
         vm.put("bottom", titleAtBottom(opt) ? metrics.titleHeight() : 0);
-        vm.put("textStyle", Map.of("fontSize", typography.legend()));
+        vm.put("textStyle", textStyle(typography.legend(), fontFamilyStack(opt, "legend")));
         vm.put("inRange", Map.of(
                 "color",
                 continuousPalette && !palette.isEmpty()
@@ -704,7 +788,7 @@ public class ChartOptionConverter {
         int top = ((Number) g.get("top")).intValue();
         int bottom = ((Number) g.get("bottom")).intValue();
         Typography typography = typography(opt);
-        LayoutMetrics metrics = layoutMetrics(typography);
+        LayoutMetrics metrics = layoutMetrics(typography, opt);
         boolean titleTop = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"));
         if (titleTop) top += metrics.titleHeight();
         if (titleAtBottom(opt)) bottom += metrics.titleHeight();
@@ -747,10 +831,35 @@ public class ChartOptionConverter {
         g.put("bottom", bottom);
     }
 
+    /** grid가 없는 원형·지도 계열도 제목·범례·색상 범례가 플롯을 가리지 않도록 박스 여백을 준다. */
+    private Map<String, Object> nonCartesianInsets(
+            Map<String, Object> opt,
+            boolean includeLegend,
+            boolean includeVisualMap) {
+        LayoutMetrics metrics = layoutMetrics(typography(opt), opt);
+        int top = hasTitle(opt) && "top".equals(string(opt.get("titleV"), "top"))
+                ? metrics.titleHeight()
+                : 0;
+        int bottom = titleAtBottom(opt) ? metrics.titleHeight() : 0;
+        if (includeLegend) {
+            Map<String, Object> legend = map(opt.get("legend"));
+            boolean shown = !legend.isEmpty() && !Boolean.FALSE.equals(legend.get("show"));
+            String position = string(legend.get("position"), "bottom");
+            if (shown && "top".equals(position)) top += metrics.legendHeight();
+            if (shown && "bottom".equals(position)) bottom += metrics.legendHeight();
+        }
+        if (includeVisualMap) bottom += metrics.visualMapHeight();
+        Map<String, Object> insets = new LinkedHashMap<>();
+        insets.put("top", top);
+        insets.put("bottom", bottom);
+        return insets;
+    }
+
     private void applyAxes(Map<String, Object> o, Map<String, Object> opt, boolean scatter, boolean horizontal, List<Object> categories) {
         Map<String, Object> xCfg = map(opt.get("xAxis"));
         Map<String, Object> yCfg = map(opt.get("yAxis"));
         int axisFontSize = typography(opt).axis();
+        String axisFontFamily = fontFamilyStack(opt, "axis");
 
         Map<String, Object> categoryAxis = new LinkedHashMap<>();
         categoryAxis.put("type", "category");
@@ -763,16 +872,16 @@ public class ChartOptionConverter {
             // 분포: X·Y 모두 수치축, data 없음. (데이터는 [x,y] 쌍)
             Map<String, Object> x = new LinkedHashMap<>();
             x.put("type", "log".equals(string(xCfg.get("scale"), "value")) ? "log" : "value");
-            decorateAxis(x, xCfg, true, true, true, axisFontSize);
-            decorateAxis(valueAxis, yCfg, false, false, false, axisFontSize);
+            decorateAxis(x, xCfg, true, true, true, axisFontSize, axisFontFamily);
+            decorateAxis(valueAxis, yCfg, false, false, false, axisFontSize, axisFontFamily);
             o.put("xAxis", x);
             o.put("yAxis", valueAxis);
             return;
         }
 
         // 가로 막대에서는 범주축이 실제 Y축이므로 라벨을 기울이지 않는다.
-        decorateAxis(categoryAxis, xCfg, !horizontal, true, !horizontal, axisFontSize);
-        decorateAxis(valueAxis, yCfg, false, false, horizontal, axisFontSize);
+        decorateAxis(categoryAxis, xCfg, !horizontal, true, !horizontal, axisFontSize, axisFontFamily);
+        decorateAxis(valueAxis, yCfg, false, false, horizontal, axisFontSize, axisFontFamily);
 
         if (horizontal) {
             o.put("xAxis", valueAxis);
@@ -790,9 +899,10 @@ public class ChartOptionConverter {
         }
     }
 
-    /** 축 공통 장식: 제목·물리적 위치, rotate(카테고리), splitLine, min/max(수동), 단위 포맷터. */
+    /** 축 공통 장식: 제목·물리적 위치, 세로쓰기/rotate(카테고리), splitLine, min/max(수동), 단위 포맷터. */
     private void decorateAxis(Map<String, Object> axis, Map<String, Object> cfg,
-                              boolean rulesAsX, boolean logicalIsX, boolean physicalIsX, int fontSize) {
+                              boolean rulesAsX, boolean logicalIsX, boolean physicalIsX,
+                              int fontSize, String fontFamily) {
         String title = string(cfg.get("title"), "");
         if (!title.isEmpty()) {
             axis.put("name", title);
@@ -805,7 +915,12 @@ public class ChartOptionConverter {
         }
         axis.put("position", axisPosition(cfg, logicalIsX, physicalIsX));
         if (cfg.containsKey("splitLine")) axis.put("splitLine", Map.of("show", Boolean.TRUE.equals(cfg.get("splitLine"))));
-        if (rulesAsX && cfg.get("rotate") instanceof Number rotate && rotate.intValue() != 0) {
+        if (Boolean.TRUE.equals(cfg.get("verticalLabels"))) {
+            // JSON에는 formatter 함수를 담을 수 없으므로 논리 축 역할만 전달하고,
+            // Admin/SDK가 렌더 직전에 글자 단위 줄바꿈 formatter로 복원한다.
+            axis.put("__chartsdkVerticalLabel", logicalIsX ? "x" : "y");
+        }
+        if (logicalIsX && cfg.get("rotate") instanceof Number rotate && rotate.intValue() != 0) {
             axis.put("axisLabel", new LinkedHashMap<>(Map.of("rotate", rotate)));
         }
         if (!rulesAsX && "manual".equals(string(cfg.get("rangeMode"), "auto"))) {
@@ -831,7 +946,7 @@ public class ChartOptionConverter {
         } else {
             applyNumericAxisTicks(axis, cfg, logicalIsX);
         }
-        applyAxisTypography(axis, fontSize);
+        applyAxisTypography(axis, fontSize, fontFamily);
     }
 
     private void applyCategoryLabelDensity(Map<String, Object> label, Map<String, Object> cfg, boolean logicalIsX) {
@@ -939,11 +1054,12 @@ public class ChartOptionConverter {
         return Math.ceil(units * fontSize);
     }
 
-    private void applyAxisTypography(Map<String, Object> axis, int fontSize) {
+    private void applyAxisTypography(Map<String, Object> axis, int fontSize, String fontFamily) {
         Map<String, Object> label = new LinkedHashMap<>(map(axis.get("axisLabel")));
         label.put("fontSize", fontSize);
+        putIfNotNull(label, "fontFamily", fontFamily);
         axis.put("axisLabel", label);
-        axis.put("nameTextStyle", Map.of("fontSize", fontSize));
+        axis.put("nameTextStyle", textStyle(fontSize, fontFamily));
     }
 
     // ── 시리즈 (직교) ────────────────────────────────────
@@ -957,13 +1073,28 @@ public class ChartOptionConverter {
         Map<String, Object> seriesTypes = map(opt.get("seriesTypes")); // 혼합(combo): 시리즈명 → "bar"/"line"
         boolean stacked = "stacked".equals(variant) || "stackedArea".equals(variant);
         boolean secondAxis = !horizontal && !scatter && Boolean.TRUE.equals(map(opt.get("yAxis")).get("secondAxis"));
-        int bubbleIdx = scatter && "bubble".equals(variant) ? columnIndex(columns, string(scatterCfg.get("bubbleField"), null)) : -1;
+        int bubbleCandidate = scatter && "bubble".equals(variant)
+                ? columnIndex(columns, string(scatterCfg.get("bubbleField"), null))
+                : -1;
+        int bubbleIdx = bubbleCandidate > 1 ? bubbleCandidate : -1;
+        int bubbleBaseSize = scatterCfg.get("symbolSize") instanceof Number n ? n.intValue() : 10;
+        double bubbleMin = Double.POSITIVE_INFINITY;
+        double bubbleMax = Double.NEGATIVE_INFINITY;
+        if (bubbleIdx >= 0) {
+            for (List<Object> row : dataRows) {
+                Double size = row.size() > bubbleIdx ? finiteDouble(row.get(bubbleIdx)) : null;
+                if (size == null) continue;
+                bubbleMin = Math.min(bubbleMin, size);
+                bubbleMax = Math.max(bubbleMax, size);
+            }
+        }
 
         // 100% 정규화(누적 막대): 카테고리(행)별 합으로 나눠 각 카테고리 스택이 100%가 되게 한다.
         double[] catTotals = (stacked && Boolean.TRUE.equals(barCfg.get("normalize"))) ? rowTotals(columns, dataRows) : null;
 
         List<Map<String, Object>> series = new ArrayList<>();
         for (int c = 1; c < columns.size(); c++) {
+            if (c == bubbleIdx) continue;
             int col = c;
             Map<String, Object> s = new LinkedHashMap<>();
             String colName = string(columns.get(c).get("name"), "");
@@ -986,9 +1117,17 @@ public class ChartOptionConverter {
                 String itemKind;
                 if (scatter) {
                     Object x = r.isEmpty() ? null : r.get(0);
-                    itemValue = bubbleIdx >= 0 && r.size() > bubbleIdx
-                            ? java.util.Arrays.asList(x, y, r.get(bubbleIdx))
-                            : java.util.Arrays.asList(x, y);
+                    if (bubbleIdx >= 0) {
+                        Object size = r.size() > bubbleIdx ? r.get(bubbleIdx) : null;
+                        Map<String, Object> bubblePoint = new LinkedHashMap<>();
+                        bubblePoint.put("value", java.util.Arrays.asList(x, y, size));
+                        bubblePoint.put("symbolSize", scaledBubbleSize(
+                                size, bubbleMin, bubbleMax, bubbleBaseSize
+                        ));
+                        itemValue = bubblePoint;
+                    } else {
+                        itemValue = java.util.Arrays.asList(x, y);
+                    }
                     dimensions = java.util.Arrays.asList(x, y);
                     itemKind = "scatter";
                 } else if (catTotals != null && y instanceof Number n && catTotals[ri] != 0) {
@@ -1007,8 +1146,8 @@ public class ChartOptionConverter {
             s.put("data", data);
 
             if (stacked) s.put("stack", "total");
-            applyVariantDelta(s, variant, lineCfg);
-            applyLabel(s, opt);
+            if ("line".equals(seriesType)) applyVariantDelta(s, variant, lineCfg);
+            applyLabel(s, opt, true);
             if ("bar".equals(seriesType)) applyBar(s, barCfg);
             if ("line".equals(seriesType)) applyLine(s, lineCfg);
             if (scatter && bubbleIdx < 0 && scatterCfg.get("symbolSize") != null) s.put("symbolSize", scatterCfg.get("symbolSize"));
@@ -1019,6 +1158,13 @@ public class ChartOptionConverter {
             series.add(s);
         }
         return series;
+    }
+
+    private int scaledBubbleSize(Object value, double min, double max, int fallback) {
+        Double numeric = finiteDouble(value);
+        if (numeric == null || !Double.isFinite(min) || !Double.isFinite(max) || max == min) return fallback;
+        double ratio = Math.max(0, Math.min(1, (numeric - min) / (max - min)));
+        return (int) Math.round(6 + 22 * Math.sqrt(ratio));
     }
 
     private boolean movingAverageEnabled(Map<String, Object> opt) {
@@ -1358,15 +1504,23 @@ public class ChartOptionConverter {
         }
     }
 
-    private void applyLabel(Map<String, Object> s, Map<String, Object> opt) {
-        if (Boolean.TRUE.equals(opt.get("dataLabel"))) {
-            Map<String, Object> label = new LinkedHashMap<>();
-            label.put("show", true);
-            label.put("fontSize", typography(opt).dataLabel());
+    private void applyLabel(Map<String, Object> s, Map<String, Object> opt, boolean allowRotate) {
+        boolean shown = Boolean.TRUE.equals(opt.get("dataLabel"));
+        Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
+        label.put("show", shown);
+        if (shown) {
             String position = string(opt.get("labelPosition"), null);
             if (position != null) label.put("position", position);
-            s.put("label", label);
+            if (allowRotate) putLabelRotation(label, opt);
             applyLabelLayout(s, opt);
+        }
+        s.put("label", label);
+    }
+
+    /** 0°는 ECharts 기본값이므로 저장 계약에는 있어도 렌더 옵션에서는 생략한다. */
+    private void putLabelRotation(Map<String, Object> label, Map<String, Object> opt) {
+        if (opt.get("labelRotate") instanceof Number rotate && rotate.doubleValue() != 0) {
+            label.put("rotate", rotate);
         }
     }
 
@@ -1403,6 +1557,7 @@ public class ChartOptionConverter {
         Map<String, Object> pieCfg = map(opt.get("pie"));
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("type", "pie");
+        s.putAll(nonCartesianInsets(opt, true, false));
 
         List<Object> data = new ArrayList<>();
         ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
@@ -1428,9 +1583,12 @@ public class ChartOptionConverter {
         }
         if ("rose".equals(variant)) s.put("roseType", "radius");
 
-        Map<String, Object> label = new LinkedHashMap<>();
-        label.put("show", Boolean.TRUE.equals(opt.get("dataLabel")) || !"basic".equals(variant) || pieCfg.get("labelPosition") != null);
-        label.put("fontSize", typography(opt).dataLabel());
+        Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
+        // ECharts 원형 시리즈는 라벨 기본값이 true이므로, 꺼진 상태도 반드시 false로 명시한다.
+        // variant와 위치는 라벨의 모양만 정하며 표시 여부를 암묵적으로 켜면 안 된다.
+        boolean labelShown = Boolean.TRUE.equals(opt.get("dataLabel"));
+        label.put("show", labelShown);
+        if (labelShown) putLabelRotation(label, opt);
         putIfNotNull(label, "position", pieCfg.get("labelPosition"));
         s.put("label", label);
         putIfNotNull(s, "startAngle", pieCfg.get("startAngle"));
@@ -1484,30 +1642,25 @@ public class ChartOptionConverter {
     }
 
     // ── 논리 크기·글꼴·레이아웃 ────────────────────────────
-    /** chart-options/display.ts와 같은 계약. 자동 모드는 논리 캔버스 프리셋에 맞추고, 직접 지정은 요소별 px 값을 사용한다. */
+    /**
+     * chart-options/display.ts와 같은 계약. 요소별로 독립 판정한다 —
+     * 저장된 px가 숫자면 그 요소만 직접 지정이고, 없으면 논리 캔버스 기본값 × 전체 배율을 쓴다.
+     */
     private Typography typography(Map<String, Object> opt) {
         Map<String, Object> display = map(opt.get("display"));
         Map<String, Object> typography = map(opt.get("typography"));
         String preset = string(display.get("preset"), "standard");
-        String mode = string(typography.get("mode"), "auto");
         int scale = clampInt(number(typography.get("scale"), 100), 80, 150);
-
-        if ("custom".equals(mode)) {
-            return new Typography(
-                    clampInt(number(typography.get("titleFontSize"), 18), 10, 48),
-                    clampInt(number(typography.get("legendFontSize"), 12), 8, 32),
-                    clampInt(number(typography.get("axisFontSize"), 12), 8, 32),
-                    clampInt(number(typography.get("dataLabelFontSize"), 12), 8, 32),
-                    clampInt(number(typography.get("tooltipFontSize"), 12), 8, 32));
-        }
 
         int titleBase;
         int bodyBase;
         switch (preset) {
-            case "small" -> { titleBase = 14; bodyBase = 10; }
-            case "large" -> { titleBase = 22; bodyBase = 14; }
-            case "hd" -> { titleBase = 24; bodyBase = 15; }
-            case "fhd" -> { titleBase = 26; bodyBase = 16; }
+            // 세로 프리셋은 대응하는 가로 프리셋과 면적이 같으므로 같은 자동 글꼴 단계를 쓴다.
+            case "small", "smallPortrait" -> { titleBase = 14; bodyBase = 10; }
+            case "large", "largePortrait" -> { titleBase = 22; bodyBase = 14; }
+            case "hd", "hdPortrait" -> { titleBase = 24; bodyBase = 15; }
+            case "fhd", "fhdPortrait" -> { titleBase = 26; bodyBase = 16; }
+            case "standardPortrait" -> { titleBase = 18; bodyBase = 12; }
             case "custom" -> {
                 int width = clampInt(number(display.get("width"), 640), 240, 3840);
                 int height = clampInt(number(display.get("height"), 360), 180, 2160);
@@ -1519,14 +1672,47 @@ public class ChartOptionConverter {
             }
             default -> { titleBase = 18; bodyBase = 12; }
         }
-        int title = scaledFont(titleBase, scale, 10, 48);
-        int body = scaledFont(bodyBase, scale, 8, 32);
-        return new Typography(title, body, body, body, body);
+        return new Typography(
+                elementFont(typography.get("titleFontSize"), titleBase, scale, 10, 48),
+                elementFont(typography.get("legendFontSize"), bodyBase, scale, 8, 32),
+                elementFont(typography.get("axisFontSize"), bodyBase, scale, 8, 32),
+                elementFont(typography.get("dataLabelFontSize"), bodyBase, scale, 8, 32),
+                elementFont(typography.get("tooltipFontSize"), bodyBase, scale, 8, 32));
     }
 
-    /** 기본 640×360, 100%에서 26/24/36px가 되어 기존 차트 외형을 유지한다. */
-    private LayoutMetrics layoutMetrics(Typography typography) {
-        int titleHeight = (int) Math.ceil(typography.title() * 1.2) + 4;
+    private int elementFont(Object stored, int autoBase, int scale, int min, int max) {
+        if (stored instanceof Number n && Double.isFinite(n.doubleValue())) {
+            return clampInt((int) Math.round(n.doubleValue()), min, max);
+        }
+        return scaledFont(autoBase, scale, min, max);
+    }
+
+    /**
+     * 글꼴(패밀리) 선택 → CSS font-family 스택. chart-options/display.ts의 FONT_FAMILY_STACKS와 같은 문자열이다.
+     * 기본은 null 을 반환해 아무 것도 내보내지 않는다 — 기존 차트의 렌더 결과를 그대로 유지하기 위함이다.
+     */
+    private String fontFamilyStack(Map<String, Object> opt, String element) {
+        Map<String, Object> typography = map(opt.get("typography"));
+        Object family = typography.containsKey(element + "FontFamily")
+                ? typography.get(element + "FontFamily")
+                : typography.get("fontFamily");
+        return switch (string(family, "default")) {
+            case "pretendard" -> "'ChartSDK Pretendard',sans-serif";
+            case "notoSansKr" -> "'ChartSDK Noto Sans KR',sans-serif";
+            default -> null;
+        };
+    }
+
+    private Map<String, Object> textStyle(int fontSize, String fontFamily) {
+        Map<String, Object> style = new LinkedHashMap<>();
+        style.put("fontSize", fontSize);
+        putIfNotNull(style, "fontFamily", fontFamily);
+        return style;
+    }
+
+    /** 기본 640×360, 100%, 가로 제목에서 26/24/36px가 되어 기존 차트 외형을 유지한다. */
+    private LayoutMetrics layoutMetrics(Typography typography, Map<String, Object> opt) {
+        int titleHeight = (int) Math.ceil(typography.title() * 1.2) * titleLineCount(opt) + 4;
         int legendHeight = (int) Math.ceil(typography.legend() * 1.25) + 9;
         return new LayoutMetrics(titleHeight, legendHeight, legendHeight + 12);
     }
@@ -1544,8 +1730,47 @@ public class ChartOptionConverter {
     }
 
     // ── deep merge & 헬퍼 ────────────────────────────────
+    private static final List<String> TYPOGRAPHY_ELEMENT_SIZE_KEYS = List.of(
+            "titleFontSize", "legendFontSize", "axisFontSize", "dataLabelFontSize", "tooltipFontSize");
+    private static final List<String> TYPOGRAPHY_ELEMENT_FAMILY_KEYS = List.of(
+            "titleFontFamily", "legendFontFamily", "axisFontFamily", "dataLabelFontFamily", "tooltipFontFamily");
+
+    /**
+     * 폐기된 typography.mode 일괄 게이트를 요소별 auto/px 계약으로 옮긴다(chart-options 미러).
+     * 구 UX 는 '자동'으로 되돌려도 직전 px 를 남겼으므로 mode=auto 저장분의 잔존 px 는 사용자 의도가 아니다.
+     */
+    private void migrateLegacyTypographyMode(Map<String, Object> next) {
+        if (!(next.get("typography") instanceof Map<?, ?>)) return;
+        Map<String, Object> typography = new LinkedHashMap<>(map(next.get("typography")));
+        if (!typography.containsKey("mode")) return;
+        if (!"custom".equals(typography.get("mode"))) TYPOGRAPHY_ELEMENT_SIZE_KEYS.forEach(typography::remove);
+        typography.remove("mode");
+        next.put("typography", typography);
+    }
+
+    /** 현재 지원하는 세 저장값 외에는 기본으로 정규화한다(chart-options 미러). */
+    private String normalizeStoredFontFamily(Object value) {
+        String family = string(value, "default");
+        return "pretendard".equals(family) || "notoSansKr".equals(family) ? family : "default";
+    }
+
+    private void migrateLegacyTypographyFontFamily(Map<String, Object> next) {
+        if (!(next.get("typography") instanceof Map<?, ?>)) return;
+        Map<String, Object> typography = new LinkedHashMap<>(map(next.get("typography")));
+        boolean hasLegacyGlobal = typography.containsKey("fontFamily");
+        String legacy = hasLegacyGlobal ? normalizeStoredFontFamily(typography.get("fontFamily")) : null;
+        for (String key : TYPOGRAPHY_ELEMENT_FAMILY_KEYS) {
+            if (typography.containsKey(key)) typography.put(key, normalizeStoredFontFamily(typography.get(key)));
+            else if (hasLegacyGlobal) typography.put(key, legacy);
+        }
+        typography.remove("fontFamily");
+        next.put("typography", typography);
+    }
+
     private Map<String, Object> migrateLegacyInteractionOptions(Map<String, Object> options, String chartType) {
         Map<String, Object> next = deepMerge(new LinkedHashMap<>(), options);
+        migrateLegacyTypographyMode(next);
+        migrateLegacyTypographyFontFamily(next);
         boolean cartesian = switch (chartType) {
             case "bar", "line", "scatter", "boxplot", "heatmap" -> true;
             default -> false;

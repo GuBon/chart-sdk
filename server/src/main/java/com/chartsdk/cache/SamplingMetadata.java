@@ -129,16 +129,18 @@ public record SamplingMetadata(
 
     /** 인덱스 키 무작위 표본. popEst/sampleSize는 표시·계획용이고 SUM/COUNT 외삽에는 쓰지 않는다. */
     public SamplingMetadata asIndexRandom(long populationEstimate, int sampleSize) {
+        Double confidence = isRowSample() ? null : CONFIDENCE_LEVEL;
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
-                true, "INDEX_RANDOM", "sample", populationEstimate, sampleSize, null, CONFIDENCE_LEVEL,
+                true, "INDEX_RANDOM", "sample", populationEstimate, sampleSize, null, confidence,
                 List.of(), estimates, executionWarnings("INDEX_RANDOM", estimates));
     }
 
     /** VIEW 또는 JOIN+WHERE 결과에서 뽑은 균일 행 표본. */
     public SamplingMetadata asResultRandom(long populationEstimate, int sampleSize) {
+        Double confidence = isRowSample() ? null : CONFIDENCE_LEVEL;
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
                 true, "RESULT_RANDOM", "sample", populationEstimate > 0 ? populationEstimate : null,
-                sampleSize, null, CONFIDENCE_LEVEL,
+                sampleSize, null, confidence,
                 List.of(), estimates, executionWarnings("RESULT_RANDOM", estimates));
     }
 
@@ -328,6 +330,7 @@ public record SamplingMetadata(
 
     private static String treatment(String aggregate) {
         return switch (aggregate) {
+            case "none" -> "ROW_SAMPLE";
             case "sum", "count" -> "SAMPLE_AGGREGATE";
             case "min", "max" -> "OBSERVED_EXTREME";
             case "count_distinct" -> "OBSERVED_DISTINCT";
@@ -342,6 +345,10 @@ public record SamplingMetadata(
             case "count_distinct" -> "DISTINCT_COUNT_NOT_EXTRAPOLATED";
             default -> null;
         };
+    }
+
+    private boolean isRowSample() {
+        return !estimates.isEmpty() && estimates.stream().allMatch(e -> "none".equals(e.aggregate()));
     }
 
     private static int clampSize(int size) {

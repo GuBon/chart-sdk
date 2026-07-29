@@ -6,6 +6,12 @@ import java.util.List;
 import java.util.Map;
 
 final class ColorResolver {
+    private static final java.util.Set<String> SEQUENTIAL_PRESETS = java.util.Set.of(
+            "burg", "burgyl", "redor", "oryel", "peach", "pinkyl", "mint", "blugrn",
+            "darkmint", "emrld", "bluyl", "teal", "tealgrn", "purp", "purpor", "sunset",
+            "magenta", "sunsetdark", "brwnyl"
+    );
+
     private ColorResolver() {
     }
 
@@ -34,6 +40,15 @@ final class ColorResolver {
     static Map<String, Object> resolveSeriesColors(Map<String, Object> opt, List<String> names) {
         Map<String, Object> resolved = new LinkedHashMap<>(map(opt.get("autoColorMap")));
         List<Object> palette = orderedPalette(opt);
+        if (SEQUENTIAL_PRESETS.contains(String.valueOf(opt.get("palettePreset")))) {
+            List<String> gradient = sampleGradient(palette, names.size());
+            if (!gradient.isEmpty()) {
+                for (int index = 0; index < names.size(); index++) {
+                    resolved.put(names.get(index), gradient.get(index));
+                }
+                return resolved;
+            }
+        }
         java.util.Set<String> used = new java.util.LinkedHashSet<>();
         resolved.values().forEach(value -> used.add(String.valueOf(value).toUpperCase()));
         for (int index = 0; index < names.size(); index++) {
@@ -45,6 +60,37 @@ final class ColorResolver {
             used.add(color);
         }
         return resolved;
+    }
+
+    private static List<String> sampleGradient(List<Object> palette, int count) {
+        if (count <= 0) return List.of();
+        List<String> stops = palette.stream()
+                .map(String::valueOf)
+                .filter(color -> color.matches("(?i)^#[0-9a-f]{6}$"))
+                .map(String::toUpperCase)
+                .toList();
+        if (stops.isEmpty()) return List.of();
+        if (stops.size() == 1) return java.util.Collections.nCopies(count, stops.get(0));
+
+        List<String> sampled = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            double position = count == 1 ? 0.5 : (double) index / (count - 1);
+            double scaled = position * (stops.size() - 1);
+            int left = (int) Math.floor(scaled);
+            int right = Math.min(stops.size() - 1, left + 1);
+            sampled.add(interpolateHex(stops.get(left), stops.get(right), scaled - left));
+        }
+        return sampled;
+    }
+
+    private static String interpolateHex(String left, String right, double ratio) {
+        StringBuilder value = new StringBuilder("#");
+        for (int offset : new int[]{1, 3, 5}) {
+            int start = Integer.parseInt(left.substring(offset, offset + 2), 16);
+            int end = Integer.parseInt(right.substring(offset, offset + 2), 16);
+            value.append(String.format("%02X", (int) Math.round(start + (end - start) * ratio)));
+        }
+        return value.toString();
     }
 
     static Object paletteColor(Map<String, Object> opt, int index) {

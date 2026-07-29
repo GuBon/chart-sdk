@@ -1,5 +1,6 @@
 package com.chartsdk.query;
 
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -290,6 +291,45 @@ class BuilderSqlBuilderTest {
                 SELECT "public"."sales"."category", "public"."sales"."amount" AS "amount" FROM "public"."sales"\
                 """);
         assertThat(sql.params()).isEmpty();
+    }
+
+    @Test
+    void rawValuesUseSystemRowSamplingWithoutAggregateMetadataColumns() {
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "xAxis", "category",
+                "yAxis", List.of(Map.of("column", "amount", "agg", "none")),
+                "sample", Map.of("mode", "manual", "rate", 10, "seed", 77)
+        ), "map", false);
+
+        assertThat(sql.text())
+                .contains("TABLESAMPLE SYSTEM (10) REPEATABLE (77)")
+                .contains("\"public\".\"sales\".\"amount\" AS \"amount\"")
+                .doesNotContain("GROUP BY", SamplingMetadata.HIDDEN_GROUP_COUNT, SamplingMetadata.HIDDEN_TOTAL_COUNT);
+        assertThat(sql.sampling().estimates().get(0).treatment()).isEqualTo("ROW_SAMPLE");
+    }
+
+    @Test
+    void joinedRawValuesSampleResultRowsWithoutGrouping() {
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "joins", List.of(Map.of(
+                        "table", "customers",
+                        "type", "left",
+                        "on", Map.of("leftColumn", "sales.customer_id", "rightColumn", "customers.id")
+                )),
+                "xAxis", "customers.region",
+                "yAxis", List.of(Map.of("column", "sales.amount", "agg", "none")),
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77)
+        ), "bar", false);
+
+        assertThat(sql.text())
+                .contains("\"__chartsdk_population\" AS (SELECT")
+                .contains("ORDER BY random() LIMIT 10000")
+                .contains("\"__chartsdk_sample\".\"__chartsdk_y_0\" AS \"amount\"")
+                .doesNotContain("GROUP BY", SamplingMetadata.HIDDEN_GROUP_COUNT, SamplingMetadata.HIDDEN_TOTAL_COUNT);
+        assertThat(sql.sampling().method()).isEqualTo("RESULT_RANDOM");
+        assertThat(sql.sampling().confidenceLevel()).isNull();
     }
 
     @Test

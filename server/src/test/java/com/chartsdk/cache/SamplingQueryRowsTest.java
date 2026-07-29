@@ -10,6 +10,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class SamplingQueryRowsTest {
     @Test
+    void rawRowSampleUsesVisibleResultSizeAsActualSampleCount() {
+        QueryRows source = new QueryRows(
+                List.of(column("category", "text"), column("amount", "numeric")),
+                List.of(List.of("A", 10), List.of("B", 20), List.of("C", 30)),
+                3, false, 2);
+        SamplingMetadata sampling = SamplingMetadata.fromBuilderConfig(Map.of(
+                        "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77),
+                        "yAxis", List.of(Map.of("column", "amount", "agg", "none"))))
+                .asIndexRandom(1_000_000, 10_000);
+
+        SamplingQueryRows.Result result = SamplingQueryRows.extract(source, sampling);
+
+        assertThat(result.rows()).isSameAs(source);
+        assertThat(result.sampling().sampledRowCount()).isEqualTo(3);
+        assertThat(result.sampling().groups()).isEmpty();
+        assertThat(result.sampling().estimates().get(0).treatment()).isEqualTo("ROW_SAMPLE");
+    }
+
+    @Test
     void movesHiddenCountsIntoMetadataAndRemovesThemFromChartRows() {
         QueryRows source = new QueryRows(
                 List.of(

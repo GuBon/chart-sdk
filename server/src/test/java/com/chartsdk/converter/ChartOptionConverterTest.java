@@ -53,6 +53,57 @@ class ChartOptionConverterTest {
     }
 
     @Test
+    void generatedPieDefaultsKeepDataLabelDisabled() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/chart-defaults.json")) {
+            assertThat(in).as("generated chart defaults").isNotNull();
+            Map<String, Map<String, Object>> byType = new ObjectMapper().readValue(in, new TypeReference<>() {});
+            ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
+
+            Map<String, Object> option = defaultedConverter.convert(rows(), "pie", Map.of());
+            Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+            Map<?, ?> label = (Map<?, ?>) series.get("label");
+
+            assertThat(label.get("show")).isEqualTo(false);
+            assertThat(label.get("position")).isEqualTo("outside");
+        }
+    }
+
+    @Test
+    void hiddenDataLabelDoesNotLeakRotationAndComputedAtPreferenceIsForwarded() {
+        Map<String, Object> option = converter.convert(rows(), "pie", Map.of(
+                "dataLabel", false,
+                "labelRotate", 90,
+                "showComputedAt", false
+        ));
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        Map<?, ?> label = (Map<?, ?>) series.get("label");
+
+        assertThat(label.get("show")).isEqualTo(false);
+        assertThat(label.containsKey("rotate")).isFalse();
+        assertThat(option.get("__chartsdkShowComputedAt")).isEqualTo(false);
+    }
+
+    @Test
+    void generatedMapAndHeatmapDefaultsUseTheFullSequentialPalette() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/chart-defaults.json")) {
+            assertThat(in).as("generated chart defaults").isNotNull();
+            Map<String, Map<String, Object>> byType = new ObjectMapper().readValue(in, new TypeReference<>() {});
+            ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
+            List<String> teal = List.of(
+                    "#D1EEEA", "#A8DBD9", "#85C4C9", "#68ABB8",
+                    "#4F90A6", "#3B738F", "#2A5674"
+            );
+
+            for (String chartType : List.of("map", "heatmap")) {
+                Map<String, Object> option = defaultedConverter.convert(rows2(), chartType, Map.of());
+                assertThat(valueAt(option, "visualMap.inRange.color"))
+                        .as("%s generated defaults", chartType)
+                        .isEqualTo(teal);
+            }
+        }
+    }
+
+    @Test
     void sharedAnalysisAnnotationContractFixtureMatchesServerConverter() throws Exception {
         try (InputStream in = getClass().getResourceAsStream("/analysis-annotation-contract-cases.json")) {
             assertThat(in).as("shared analysis annotation contract fixture").isNotNull();
@@ -250,6 +301,57 @@ class ChartOptionConverterTest {
         assertThat(second.get("type")).isEqualTo("line");
         assertThat(((Map<?, ?>) second.get("lineStyle")).get("color")).isEqualTo("#222222");
         assertThat(first.get("lineStyle")).isNull(); // 막대 시리즈엔 lineStyle 없음
+    }
+
+    @Test
+    void lineVariantOnlyAppliesToLineSeriesInAComboChart() {
+        Map<String, Object> option = converter.convert(rows2(), "line", Map.of(
+                "variant", "smooth",
+                "seriesTypes", Map.of("s2", "bar")
+        ));
+
+        List<?> series = (List<?>) option.get("series");
+        Map<?, ?> line = (Map<?, ?>) series.get(0);
+        Map<?, ?> bar = (Map<?, ?>) series.get(1);
+        assertThat(line.get("type")).isEqualTo("line");
+        assertThat(line.get("smooth")).isEqualTo(true);
+        assertThat(bar.get("type")).isEqualTo("bar");
+        assertThat(bar.containsKey("smooth")).isFalse();
+        assertThat(bar.containsKey("step")).isFalse();
+        assertThat(bar.containsKey("areaStyle")).isFalse();
+        assertThat(bar.containsKey("lineStyle")).isFalse();
+    }
+
+    @Test
+    void bubbleSizeColumnScalesPointsWithoutBecomingAnotherSeries() {
+        QueryRows bubbleRows = new QueryRows(
+                List.of(
+                        Map.of("name", "x", "type", "number"),
+                        Map.of("name", "y", "type", "number"),
+                        Map.of("name", "size", "type", "number")
+                ),
+                List.of(List.of(1, 10, 3), List.of(2, 20, 9)),
+                2,
+                false,
+                0
+        );
+        Map<String, Object> option = converter.convert(bubbleRows, "scatter", Map.of(
+                "variant", "bubble",
+                "scatter", Map.of("bubbleField", "size", "symbolSize", 16)
+        ));
+
+        List<?> series = (List<?>) option.get("series");
+        assertThat(series).hasSize(1);
+        Map<?, ?> points = (Map<?, ?>) series.get(0);
+        assertThat(points.get("name")).isEqualTo("y");
+        assertThat(points.containsKey("symbolSize")).isFalse();
+        List<?> data = (List<?>) points.get("data");
+        assertThat(((Map<?, ?>) data.get(0)).get("value")).isEqualTo(List.of(1, 10, 3));
+        assertThat(((Map<?, ?>) data.get(0)).get("symbolSize")).isEqualTo(6);
+        assertThat(((Map<?, ?>) data.get(1)).get("symbolSize")).isEqualTo(28);
+        Map<?, ?> autoColorMap = (Map<?, ?>) option.get("__chartsdkAutoColorMap");
+        assertThat(autoColorMap).hasSize(1);
+        assertThat(autoColorMap.containsKey("y")).isTrue();
     }
 
     @Test
@@ -571,6 +673,7 @@ class ChartOptionConverterTest {
         Map<?, ?> geo = (Map<?, ?>) option.get("geo");
         assertThat(geo.get("map")).isEqualTo("kr-sigungu");
         assertThat(geo.get("roam")).isEqualTo(true);
+        assertThat(geo.get("itemStyle")).as("ECharts geo 기본 배경색·경계색·경계 굵기 사용").isNull();
 
         List<?> series = (List<?>) option.get("series");
         Map<?, ?> s0 = (Map<?, ?>) series.get(0);
@@ -638,7 +741,8 @@ class ChartOptionConverterTest {
 
             assertThat(series.get("emphasis")).as(chartType + " series emphasis").isNull();
             if ("geoscatter".equals(chartType)) {
-                assertThat(((Map<?, ?>) option.get("geo")).get("emphasis")).isNull();
+                assertThat(((Map<?, ?>) option.get("geo")).get("emphasis"))
+                        .isEqualTo(Map.of("disabled", true));
             }
         }
     }
@@ -716,6 +820,40 @@ class ChartOptionConverterTest {
         // 화이트리스트 밖 값은 kr-sido 폴백(미등록 지도 참조 방지)
         Map<String, Object> bogus = converter.convert(rows(), "map", Map.of("map", Map.of("name", "../etc")));
         assertThat(((Map<?, ?>) ((List<?>) bogus.get("series")).get(0)).get("map")).isEqualTo("kr-sido");
+    }
+
+    @Test
+    void geoScatterUsesThemeColorForAllPointsAndKeepsPointOverrideSeparate() {
+        QueryRows points = new QueryRows(
+                List.of(
+                        Map.of("name", "lng", "type", "number"),
+                        Map.of("name", "lat", "type", "number")
+                ),
+                List.of(List.of(126.978, 37.5665), List.of(129.0756, 35.1796)),
+                2, false, 0);
+        Map<String, Object> option = converter.convert(points, "geoscatter", Map.of(
+                "palette", List.of("#123456", "#654321"),
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "geoscatter",
+                        "seriesName", "__geoscatter__",
+                        "dimensions", List.of(129.0756, 35.1796),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                )),
+                "emphasis", Map.of("colorMode", "custom", "color", "#12AB34")
+        ));
+
+        Map<?, ?> geo = (Map<?, ?>) option.get("geo");
+        assertThat(geo.get("emphasis")).isEqualTo(Map.of("disabled", true));
+
+        Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
+        assertThat(((Map<?, ?>) series.get("itemStyle")).get("color")).isEqualTo("#123456");
+        assertThat(((Map<?, ?>) series.get("emphasis")).get("itemStyle"))
+                .isEqualTo(Map.of("color", "#12AB34"));
+        List<?> data = (List<?>) series.get("data");
+        assertThat(data.get(0)).isEqualTo(List.of(126.978, 37.5665));
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color"))
+                .isEqualTo("#FFB000");
     }
 
     /** 상자수염용 — A: 1..9(순서 섞음), B: 10,20,30,40. 변환기가 카테고리별로 그룹핑·정렬. */
@@ -800,6 +938,33 @@ class ChartOptionConverterTest {
         List<Map<String, Object>> series = (List<Map<String, Object>>) second.get("series");
         assertThat(series.get(4).get("color")).isEqualTo("#010203");
         assertThat(series.get(5).get("color")).isEqualTo(auto.get("s5"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void sequentialPaletteSpreadsAcrossEverySeriesInsteadOfFallingBackToGeneratedColors() {
+        List<Map<String, Object>> columns = new java.util.ArrayList<>();
+        columns.add(Map.of("name", "region", "type", "text"));
+        List<Object> row = new java.util.ArrayList<>();
+        row.add("서울");
+        for (int i = 0; i < 10; i++) {
+            columns.add(Map.of("name", "s" + i, "type", "number"));
+            row.add(i);
+        }
+        QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
+
+        Map<String, Object> option = converter.convert(many, "bar", Map.of(
+                "palettePreset", "burg",
+                "palette", List.of("#000000", "#FFFFFF"),
+                "autoColorMap", Map.of("s0", "#FF0000")
+        ));
+        Map<String, Object> auto = (Map<String, Object>) option.get("__chartsdkAutoColorMap");
+
+        assertThat(auto).hasSize(10);
+        assertThat(auto.get("s0")).isEqualTo("#000000");
+        assertThat(auto.get("s5")).isEqualTo("#8E8E8E");
+        assertThat(auto.get("s9")).isEqualTo("#FFFFFF");
+        assertThat(auto.values()).doesNotHaveDuplicates();
     }
 
     @Test

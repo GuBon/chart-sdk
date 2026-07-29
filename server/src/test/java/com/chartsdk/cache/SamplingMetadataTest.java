@@ -10,6 +10,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class SamplingMetadataTest {
     @Test
+    void rawValuesAreRowSamplesWithoutConfidenceIntervals() {
+        SamplingMetadata definition = SamplingMetadata.fromBuilderConfig(Map.of(
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77),
+                "yAxis", List.of(Map.of("column", "amount", "agg", "none"))));
+
+        SamplingMetadata executed = definition.asIndexRandom(1_000_000, 10_000);
+
+        assertThat(executed.estimates()).containsExactly(
+                new SamplingMetadata.Estimate("amount", "none", "ROW_SAMPLE", null));
+        assertThat(executed.confidenceLevel()).isNull();
+        assertThat(executed.warnings()).containsExactly("INDEX_RANDOM_SAMPLE");
+    }
+
+    @Test
     void derivesSystemSamplingFromBuilderConfig() {
         SamplingMetadata sampling = SamplingMetadata.fromBuilderConfig(
                 Map.of(

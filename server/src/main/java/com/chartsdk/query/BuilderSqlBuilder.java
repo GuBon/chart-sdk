@@ -144,7 +144,7 @@ public final class BuilderSqlBuilder {
         Ref x = resolveRef(xAxis);
         Ref series = seriesBy == null ? null : resolveRef(seriesBy);
 
-        // 차트 종류별 검증 (생성규칙 §9) — 표본 형태 결정·렌더러 교체보다 먼저(표본+원본값 등 오류 조기 차단).
+        // 차트 종류별 검증 (생성규칙 §9) — 표본 형태 결정·렌더러 교체보다 먼저 수행한다.
         boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
         validateChartShape(x, series, yAxis, allNone);
 
@@ -209,7 +209,9 @@ public final class BuilderSqlBuilder {
         }
         // 표본 입력 수는 결과 행 수(그룹 수)와 다르다. 그룹별 n·전체 n(+INDEX_RANDOM 은 그룹별 mean/sd)을 숨은 열로 수집하고
         // 실행 라우터가 API/변환기 전달 전에 제거한다(오차범위 계산용 — §표본추출).
-        if (approximate) selects.addAll(hiddenSampleColumns(yAxis, indexRandom));
+        // 원본값 행 표본은 각 행 자체가 결과다. 집계용 숨은 COUNT/통계 열을 섞으면
+        // GROUP BY 없는 원본 열과 충돌하므로 실행 메타데이터의 행 수는 결과 rows에서 계산한다.
+        if (approximate && !allNone) selects.addAll(hiddenSampleColumns(yAxis, indexRandom));
 
         List<Object> params = new ArrayList<>(leadingParams);
         String where = buildWhere(params);
@@ -251,6 +253,7 @@ public final class BuilderSqlBuilder {
      */
     private Sql buildResultRandom(Ref x, Ref series, List<Map<String, Object>> yAxis, String joins,
                                   SamplingMetadata sampling) {
+        boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
         int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
                 : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
         long seed = sampling.seed() == null ? SamplingMetadata.DEFAULT_SEED : sampling.seed();
@@ -317,9 +320,16 @@ public final class BuilderSqlBuilder {
         for (int i = 0; i < yAxis.size(); i++) {
             String agg = str(yAxis.get(i).get("agg"));
             String alias = str(yAxis.get(i).get("alias"));
-            if (alias == null) alias = (agg == null ? "val" : agg) + "_" + yRefs.get(i).column();
+            if (alias == null) alias = "none".equals(agg)
+                    ? yRefs.get(i).column()
+                    : (agg == null ? "val" : agg) + "_" + yRefs.get(i).column();
             if (alias.startsWith("__chartsdk_")) throw invalidReq("Alias cannot start with reserved prefix __chartsdk_.");
             selects.add(aggSql(agg, sampleColumn(RESULT_Y_PREFIX + i)) + " AS " + SqlIdentifier.quote(alias));
+        }
+        if (allNone) {
+            String order = buildOrder(yAxis.size(), series != null);
+            String sql = cte + "SELECT " + String.join(", ", selects) + " FROM " + sample + order;
+            return new Sql(sql, params, sampling);
         }
         selects.addAll(hiddenResultSampleColumns(yAxis));
 
@@ -663,14 +673,11 @@ public final class BuilderSqlBuilder {
             if (yAxis.size() != 1) throw invalidReq("seriesBy requires exactly one yAxis field.");
         }
         boolean anyNone = yAxis.stream().anyMatch(y -> "none".equals(str(y.get("agg"))));
-        if (allNone && cfg.get("sample") != null) {
-            throw invalidReq("Sample cannot be used with raw values.");
-        }
         if ("scatter".equals(chartType)) {
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter requires agg 'none' on all yAxis.");
             if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "scatter xAxis must be numeric.");
         } else if ("boxplot".equals(chartType)) {
-            // 상자수염: 카테고리별 원본값 분포 → 집계 없음(allNone) + 단일 값 컬럼. (표본은 위 allNone 검사에서 이미 차단)
+            // 상자수염: 카테고리별 원본값 분포 → 집계 없음(allNone) + 단일 값 컬럼.
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "boxplot requires agg 'none' on the value field.");
             if (yAxis.size() != 1) throw invalidReq("boxplot requires exactly one value field.");
         } else if ("geoscatter".equals(chartType)) {

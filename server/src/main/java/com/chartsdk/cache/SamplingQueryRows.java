@@ -22,7 +22,14 @@ public final class SamplingQueryRows {
         List<Map<String, Object>> columns = source.columns();
         int groupIndex = lastIndexOf(columns, SamplingMetadata.HIDDEN_GROUP_COUNT);
         int totalIndex = lastIndexOf(columns, SamplingMetadata.HIDDEN_TOTAL_COUNT);
-        if (groupIndex < 0 || totalIndex < 0) return new Result(source, sampling);
+        if (groupIndex < 0 || totalIndex < 0) {
+            boolean rowSample = !sampling.estimates().isEmpty()
+                    && sampling.estimates().stream().allMatch(estimate -> "none".equals(estimate.aggregate()));
+            return rowSample
+                    ? new Result(source, sampling.withExecution(
+                            source.rows().size(), List.of(), sampling.estimates(), List.of()))
+                    : new Result(source, sampling);
+        }
 
         boolean uniformRandom = "INDEX_RANDOM".equals(sampling.method()) || "RESULT_RANDOM".equals(sampling.method());
         Map<Integer, Integer> seriesCountCols = prefixIndices(columns, SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX);
