@@ -64,7 +64,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 |---|---|---|
 | 검색 입력(이름·설명) | ⏳→📦 | 쿼리 파라미터 `q` → 대상 `mc_chart.name`·`description` (사용자 범위 `owner_id` + ILIKE, pg_trgm GIN) |
 | 종류 필터(막대/선/원형/산점도) | ⏳→📦 | 쿼리 파라미터 `type` → `mc_chart.chart_type` (owner 범위 내 필터) |
-| 데이터 계층 필터 | ⏳→📦 | `/data/{datasourceName}[/{schema}[/{relation}]]` 화면 문맥을 API의 `datasourceId`·`schema`·`relation`으로 변환. 데이터소스는 `mc_chart_datasource`, 스키마·관계는 `builder_config.table`과 `joins[].table`을 조회해 기준·조인 참조를 모두 포함 |
+| 데이터 계층 필터 | ⏳→📦 | `/charts/{datasourceName}[/{schema}[/{relation}]]` 화면 문맥을 API의 `datasourceId`·`schema`·`relation`으로 변환. 데이터소스는 `mc_chart_datasource`, 스키마·관계는 `builder_config.table`과 `joins[].table`을 조회해 기준·조인 참조를 모두 포함 |
 | 정렬(수정일·이름) | ⏳→📦 | 쿼리 파라미터 `sort` → `mc_chart.updated_at`·`name` (기본 updated_at DESC, idx_mc_chart_owner_updated) |
 | 카드 썸네일 | 📦/⏳ | `mc_chart_cache.thumbnail`(후속) / MVP는 차트종류 일러스트(⏳) |
 | 차트명 | 📦 | `mc_chart.name` |
@@ -75,7 +75,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 수정일 | 📦 | `mc_chart.updated_at` (정렬: idx DESC) |
 | 소유자(인증 후) | 📦/🔁 | `mc_chart.owner_id` → `mc_user` |
 | 편집/임베드 버튼 | ⚙️ | 화면 전환 |
-| 데이터 탐색·편집 URL | 🔁 | `mc_datasource.name` + `mc_chart.builder_config.table` → `/data/{datasourceName}/{schema}/{relation}/{chartId}`. 내부 실행·관계 키는 계속 `datasourceId`, 데이터소스 차트 범위는 `mc_chart_datasource`; 별도 컬럼·마이그레이션 없음 |
+| 차트 범위·편집 URL | 🔁 | `mc_datasource.name` + `mc_chart.builder_config.table` → `/charts/{datasourceName}/{schema}/{relation}/{chartId}`. 내부 실행·관계 키는 계속 `datasourceId`, 데이터소스 차트 범위는 `mc_chart_datasource`; 별도 컬럼·마이그레이션 없음 |
 | 삭제 | ⚙️ | `DELETE mc_chart` (cache CASCADE) |
 | 복제(2차) | ⚙️ | `INSERT mc_chart` + 캐시 시드 |
 | 빈 상태 | 🔁 | `count(*)=0` |

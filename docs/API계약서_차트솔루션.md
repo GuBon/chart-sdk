@@ -1,6 +1,6 @@
 # 차트 솔루션 API 계약서 (API Contract)
 
-**문서 버전:** v3.4 — 수동 캐시 갱신의 소유자 범위 검사 명시 (2026-07-28)
+**문서 버전:** v3.5 — 계층형 차트 URL과 기준 관계 저장 계약 명시 (2026-07-30)
 **관련 문서:** PRD v3.2, 화면설계서 v3.7, 노코드 SQL 생성규칙 v2.8, 다중데이터소스_페더레이션_설계
 **범위:** MVP. 인증(로그인)은 제외하되, 임베드 토큰 검증은 포함한다.
 **Base URL:** `/api/v1`
@@ -29,6 +29,8 @@
 | HTTP | code | 상황 |
 |---|---|---|
 | 400 | INVALID_REQUEST | 파라미터 누락/형식 오류 |
+| 400 | MAIN_TABLE_REQUIRED | 저장 차트의 URL 문맥용 기준 관계 누락 |
+| 400 | DATASOURCE_NAME_RESERVED | `/charts/new`와 충돌하는 데이터소스 이름 사용 |
 | 400 | SQL_NOT_SELECT | SELECT 외 구문 |
 | 400 | INVALID_IDENTIFIER · AGG_TYPE_MISMATCH · OP_TYPE_MISMATCH · VALUE_PARSE_ERROR · BUCKET_TYPE_MISMATCH | 노코드 builderConfig 검증 실패 (2A장, 생성규칙 9장) |
 | 401 | TOKEN_INVALID | 토큰 서명 불일치/형식 오류 |
@@ -222,7 +224,7 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 | `relation` | 문자열 | `schema`·`datasourceId`와 함께 관계 범위의 관련 차트를 조회. 기준 관계와 조인 관계를 모두 포함하며 `schema` 미지정 시 `public` |
 | `sort` | `updated_desc`(기본)\|`updated_asc`\|`name_asc`\|`name_desc` | 정렬 |
 | `page` | 1 이상의 정수 | 페이지 번호. 기본 1 |
-| `pageSize` | 1~60 정수 | 페이지 크기. 기본 12 |
+| `pageSize` | 1~60 정수 | 페이지 크기. 기본 8 |
 
 - 인덱스: `idx_mc_chart_owner_updated(owner_id, updated_at DESC)`가 owner 범위 + 기본 정렬을 담당한다. 데이터소스 필터는 `mc_chart_datasource`의 PK `(chart_id,datasource_id)`를 이용한 `EXISTS`로 조인 보조 소스까지 찾는다. 스키마·관계 필터는 `builder_config.table`과 `builder_config.joins[].table` JSONB 참조를 함께 조회한다.
 
@@ -237,9 +239,9 @@ GET /api/v1/charts?q={검색어}&type={대분류}&datasourceId={id}&schema={sche
 }
 ```
 
-`mainTable`은 `builder_config.table`과 현재 `mc_datasource.name`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. `datasourceId`는 실행·관계 식별용, `datasourceName`은 URL 표시용이다. Admin은 이를 이용해 정식 편집 경로 `/data/{datasourceName}/{schema}/{relation}/{chartId}`를 만든다. 메인 관계를 알 수 없는 SQL 차트는 `mainTable:null`과 `/charts/{id}`를 사용한다.
+`mainTable`은 `builder_config.table`과 현재 `mc_datasource.name`에서 파생한 읽기 전용 메타데이터이며 별도 컬럼이 아니다. `datasourceId`는 실행·관계 식별용, `datasourceName`은 URL 표시용이다. Admin은 이를 이용해 정식 편집 경로 `/charts/{datasourceName}/{schema}/{relation}/{chartId}`를 만든다. 모든 저장 차트는 URL 문맥을 위한 기준 관계가 필요하며, 원시 SQL 차트도 `builder_config.table`을 함께 저장한다.
 
-Admin 데이터 탐색 경로는 `/data/{datasourceName}`, `/data/{datasourceName}/{schema}`, `/data/{datasourceName}/{schema}/{relation}` 순서이며 각 경로의 기본 화면은 그 범위의 차트 목록이다. 데이터소스·스키마·관계 범위는 모두 기준 관계와 조인 관계 참조를 포함하고 같은 검색·종류·정렬·페이지네이션 UI를 사용한다. 메타데이터는 각 경로의 `?view=schema`, `?view=relations`, `?view=columns` 탭에서 탐색하며 `/data/{datasourceName}/{schema}/{relation}/{chartId}`는 차트 편집 경로다. 이름은 한 URL 구간으로 UTF-8 퍼센트 인코딩한다. `tables`, `charts` 같은 중간 명사는 상위 문맥과 중복되므로 두지 않는다. 경로는 화면 문맥이고, 저장·실행 권위는 계속 숫자 `datasourceId`, `builder_config.table`, `mc_chart_datasource`에 있다. 데이터소스 이름을 수정하면 새 이름이 새 정식 URL이 되며 배포 전 정책상 구 이름 리다이렉트는 두지 않는다.
+Admin 차트 범위 경로는 `/charts/{datasourceName}`, `/charts/{datasourceName}/{schema}`, `/charts/{datasourceName}/{schema}/{relation}` 순서이며 각 경로의 기본 화면은 그 범위의 공통 차트 목록이다. 데이터소스·스키마·관계 범위는 모두 기준 관계와 조인 관계 참조를 포함하고 같은 검색·종류·정렬·페이지네이션 UI를 사용한다. 메타데이터는 각 경로의 `?view=schema`, `?view=relations`, `?view=columns`에서 명시적으로 탐색하며 `/charts/{datasourceName}/{schema}/{relation}/{chartId}`는 차트 편집 경로다. 이름은 한 URL 구간으로 UTF-8 퍼센트 인코딩한다. 경로는 화면 문맥이고, 저장·실행 권위는 계속 숫자 `datasourceId`, `builder_config.table`, `mc_chart_datasource`에 있다. 데이터소스 이름을 수정하면 새 이름이 새 정식 URL이 되며 구 이름 리다이렉트는 두지 않는다. `/charts/new`와의 충돌을 막기 위해 `new`는 데이터소스 예약 이름이다.
 
 ### 3.2 단건 조회 — S2 진입
 
@@ -394,7 +396,7 @@ PUT    /api/v1/datasources/{id}             → 수정 (dbPassword는 전달 시
 DELETE /api/v1/datasources/{id}             → 삭제 (사용 중 차트 존재 시 409 + 차트 수 반환)
 POST   /api/v1/datasources/test             → 연결 테스트 { host, port, ... } → { ok, message }
 ```
-비밀번호는 AES-GCM 암호화 저장, 응답에 절대 미포함. 데이터소스 이름은 사용자별로 유니크하다(`mc_datasource(owner_id, name)`).
+비밀번호는 AES-GCM 암호화 저장, 응답에 절대 미포함. 데이터소스 이름은 사용자별로 유니크하다(`mc_datasource(owner_id, name)`). `new`는 `/charts/new` 생성 경로와 충돌하므로 대소문자와 관계없이 등록·수정할 수 없다.
 
 ## 5. 스키마 탐색 (S2 좌측 패널)
 
@@ -469,7 +471,7 @@ GET /api/v1/charts?q={검색어}&type={bar|line|pie|scatter}&datasourceId={id}&s
 {
   "charts": [],
   "page": 1,
-  "pageSize": 12,
+  "pageSize": 8,
   "total": 0,
   "totalPages": 1
 }
