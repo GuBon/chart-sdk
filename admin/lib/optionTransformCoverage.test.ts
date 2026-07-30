@@ -12,6 +12,7 @@ import {
 } from '@chartsdk/chart-options';
 import type { QueryResult } from './api/types';
 import { assembleOption } from '../mocks/mockTransform';
+import { tooltipFieldsFor } from '@chartsdk/chart-options/tooltip';
 
 const EXTERNAL_OR_COMPOSITE_KEYS = new Set([
   'chartType',
@@ -52,12 +53,36 @@ const RESULTS: Record<MajorType, QueryResult> = {
     [['B', 20, 10], ['A', 10, 30]],
   ),
   map: result(
-    [{ name: 'region', type: 'text' }, { name: 's1', type: 'number' }],
-    [['B', 20], ['A', 10]],
+    [
+      { name: '__chartsdk_area_name', type: 'text' },
+      { name: '__chartsdk_area_value', type: 'number' },
+      { name: '__chartsdk_longitude', type: 'number' },
+      { name: '__chartsdk_latitude', type: 'number' },
+      { name: '__chartsdk_point_name', type: 'text' },
+      { name: '__chartsdk_point_value', type: 'number' },
+      { name: '__chartsdk_size', type: 'number' },
+      { name: '__chartsdk_color_value', type: 'number' },
+      { name: '__chartsdk_series', type: 'text' },
+    ],
+    [
+      ['서울', 20, 127.0, 37.5, '서울 점', 20, 9, 30, '국내'],
+      ['부산', 10, 129.1, 35.2, '부산 점', 10, 3, 15, '해외'],
+    ],
   ),
   geoscatter: result(
-    [{ name: 'lng', type: 'number' }, { name: 'lat', type: 'number' }, { name: 'size', type: 'number' }],
-    [[127.1, 37.5, 9], [126.9, 35.2, 3]],
+    [
+      { name: '__chartsdk_longitude', type: 'number' },
+      { name: '__chartsdk_latitude', type: 'number' },
+      { name: '__chartsdk_point_name', type: 'text' },
+      { name: '__chartsdk_point_value', type: 'number' },
+      { name: '__chartsdk_size', type: 'number' },
+      { name: '__chartsdk_color_value', type: 'number' },
+      { name: '__chartsdk_series', type: 'text' },
+    ],
+    [
+      [127.1, 37.5, '서울 점', 20, 9, 30, '국내'],
+      [126.9, 35.2, '부산 점', 10, 3, 15, '해외'],
+    ],
   ),
 };
 
@@ -73,8 +98,6 @@ function preparedOptions(chartType: MajorType, key: string): Options {
     ...options.tooltip,
     enabled: true,
     trigger: 'axis',
-    contentMode: 'custom',
-    template: '{series}: {value}',
   };
   options.emphasis = {
     ...options.emphasis,
@@ -107,8 +130,6 @@ function preparedOptions(chartType: MajorType, key: string): Options {
     tickMode: 'auto',
   };
 
-  if (key === 'tooltip.contentMode') options.tooltip.contentMode = 'auto';
-  if (key === 'tooltip.template') options.tooltip.contentMode = 'custom';
   if (key === 'emphasis.colorMode') options.emphasis.colorMode = 'auto';
   if (key === 'emphasis.color') options.emphasis.colorMode = 'custom';
   if (key === 'emphasis.scaleSize') options.emphasis.scale = true;
@@ -138,6 +159,9 @@ function preparedOptions(chartType: MajorType, key: string): Options {
   if (key === 'scatter.symbolSize') options.variant = 'scatter';
   if (key === 'scatter.bubbleField') options.variant = 'bubble';
   if (key === 'variant' && chartType === 'scatter') options.scatter.bubbleField = 'size';
+  if (key.startsWith('map.heatmap')) options.variant = 'heatmap';
+  if (key.startsWith('geoscatter.showEffect')
+    || key.startsWith('geoscatter.ripple')) options.variant = 'effectScatter';
   return options;
 }
 
@@ -167,6 +191,14 @@ function changedValue(definition: OptionDef, chartType: MajorType, current: unkn
       mode: 'coordinates',
       bounds: { west: 126, east: 130, south: 34, north: 38 },
     };
+  }
+  if (definition.key === 'tooltip.fields') {
+    const descriptor = tooltipFieldsFor({
+      chartType,
+      columns: RESULTS[chartType].columns,
+      options: preparedOptions(chartType, definition.key),
+    })[0];
+    return descriptor ? { [descriptor.key]: !descriptor.defaultVisible } : { unavailable: false };
   }
   if (definition.control === 'toggle') return current !== true;
   if (definition.control === 'text' || definition.control === 'textarea') {

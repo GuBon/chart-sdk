@@ -30,6 +30,34 @@
         { "name": "size", "type": "number" }
       ],
       "rows": [[126.978, 37.5665, 10], [129.0756, 35.1796, 30]]
+    },
+    "geo-area-grouped": {
+      "columns": [
+        { "name": "__chartsdk_area_name", "type": "text" },
+        { "name": "__chartsdk_area_value", "type": "number" },
+        { "name": "__chartsdk_series", "type": "text" }
+      ],
+      "rows": [
+        ["서울특별시", 120, "온라인"],
+        ["부산광역시", 80, "매장"],
+        ["제주특별자치도", 55, "온라인"]
+      ]
+    },
+    "geo-points-grouped": {
+      "columns": [
+        { "name": "__chartsdk_longitude", "type": "number" },
+        { "name": "__chartsdk_latitude", "type": "number" },
+        { "name": "__chartsdk_point_name", "type": "text" },
+        { "name": "__chartsdk_point_value", "type": "number" },
+        { "name": "__chartsdk_size", "type": "number" },
+        { "name": "__chartsdk_color_value", "type": "number" },
+        { "name": "__chartsdk_series", "type": "text" }
+      ],
+      "rows": [
+        [126.978, 37.5665, "서울점", 120, 10, 30, "온라인"],
+        [129.0756, 35.1796, "부산점", 80, 30, 15, "매장"],
+        [126.5312, 33.4996, "제주점", 55, 20, 24, "온라인"]
+      ]
     }
   },
   "cases": [
@@ -429,6 +457,38 @@
       }
     },
     {
+      "name": "map-grouped-series-configured",
+      "chartType": "map",
+      "dataset": "geo-area-grouped",
+      "options": {
+        "variant": "map",
+        "legend": { "show": true, "position": "right", "scroll": true },
+        "map": { "name": "kr-sido", "roam": true },
+        "colorMap": { "온라인": "#0055AA", "매장": "#DD5500" }
+      }
+    },
+    {
+      "name": "map-geo-heatmap-configured",
+      "chartType": "map",
+      "dataset": "geo-points-grouped",
+      "options": {
+        "variant": "heatmap",
+        "legend": { "show": true, "position": "top" },
+        "map": {
+          "name": "kr-sigungu",
+          "roam": true,
+          "heatmapPointSize": 18,
+          "heatmapBlurSize": 24,
+          "heatmapMinOpacity": 0.1,
+          "heatmapMaxOpacity": 0.85
+        },
+        "tooltip": {
+          "contentMode": "custom",
+          "template": "{series}\n{name}: {value}"
+        }
+      }
+    },
+    {
       "name": "geoscatter-configured",
       "chartType": "geoscatter",
       "dataset": "geoscatter",
@@ -436,7 +496,13 @@
         "map": {
           "name": "kr-sigungu",
           "roam": true,
-          "viewport": { "mode": "data", "regionCode": null, "regionName": null, "bounds": null }
+          "viewport": { "mode": "data", "regionCode": null, "regionName": null, "bounds": null },
+          "boundary": {
+            "show": true,
+            "areaColor": "#112233",
+            "borderColor": "#AABBCC",
+            "borderWidth": 2.5
+          }
         },
         "geoscatter": { "symbolSize": 18 },
         "itemColorOverrides": [
@@ -454,6 +520,28 @@
           "colorMode": "custom",
           "color": "#11AAFF",
           "scale": false
+        }
+      }
+    },
+    {
+      "name": "geoscatter-effect-grouped-configured",
+      "chartType": "geoscatter",
+      "dataset": "geo-points-grouped",
+      "options": {
+        "variant": "effectScatter",
+        "legend": { "show": true, "position": "left", "scroll": true },
+        "map": { "name": "kr-sido", "roam": true },
+        "colorMap": { "온라인": "#0055AA", "매장": "#DD5500" },
+        "geoscatter": {
+          "symbol": "triangle",
+          "symbolSize": 16,
+          "opacity": 0.8,
+          "borderColor": "#001122",
+          "borderWidth": 2,
+          "showEffectOn": "render",
+          "rippleScale": 4,
+          "ripplePeriod": 6,
+          "rippleBrushType": "fill"
         }
       }
     }
