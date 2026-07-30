@@ -590,7 +590,7 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void mapCustomizesTooltipTemplateAndEmphasisColor() {
+    void mapNormalizesLegacyTooltipTemplateAndCustomizesEmphasisColor() {
         Map<String, Object> option = converter.convert(rows(), "map", Map.of(
                 "map", Map.of(
                         "tooltip", Map.of("enabled", true, "template", "{series}\n{name}: {value}"),
@@ -599,9 +599,11 @@ class ChartOptionConverterTest {
         ));
 
         assertThat(((Map<?, ?>) option.get("tooltip")).get("show")).isNull();
-        assertThat(option.get("__chartsdkTooltip")).isEqualTo(Map.of(
-                "chartType", "map", "template", "{series}\n{name}: {value}"
-        ));
+        Map<?, ?> tooltipMetadata = (Map<?, ?>) option.get("__chartsdkTooltip");
+        assertThat(tooltipMetadata.get("mode")).isEqualTo("fields");
+        assertThat(tooltipMetadata.get("chartType")).isEqualTo("map");
+        assertThat(tooltipMetadata.get("showSeriesColor")).isEqualTo(true);
+        assertThat((List<?>) tooltipMetadata.get("fields")).isNotEmpty();
         Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
         assertThat(series.get("name")).isEqualTo("amount");
         assertThat(((Map<?, ?>) ((Map<?, ?>) series.get("emphasis")).get("itemStyle")).get("areaColor"))
@@ -682,11 +684,66 @@ class ChartOptionConverterTest {
         List<?> data = (List<?>) s0.get("data");
         Map<?, ?> p0 = (Map<?, ?>) data.get(0);
         Map<?, ?> p1 = (Map<?, ?>) data.get(1);
-        assertThat(p0.get("value")).isEqualTo(List.of(127.0, 37.5, 10.0));
+        assertThat(p0.get("value")).isEqualTo(java.util.Arrays.asList(127.0, 37.5, null, 10, null));
         assertThat(p0.get("symbolSize")).isEqualTo(6);   // 최소값 → 6px
         assertThat(p1.get("symbolSize")).isEqualTo(28);  // 최대값 → 6+22px
         assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isNull();
         assertThat(option.get("legend")).isNull();
+    }
+
+    @Test
+    void geoScatterCanHideAndStyleAdministrativeBoundaryWithoutOverridingDefaults() {
+        QueryRows rows = new QueryRows(
+                List.of(Map.of("name", "lng", "type", "number"), Map.of("name", "lat", "type", "number")),
+                List.of(List.of(127.0, 37.5)),
+                1, false, 0);
+
+        Map<String, Object> defaults = converter.convert(rows, "geoscatter", Map.of());
+        Map<?, ?> defaultGeo = (Map<?, ?>) defaults.get("geo");
+        assertThat(defaultGeo.get("show")).isNull();
+        assertThat(defaultGeo.get("itemStyle")).isNull();
+
+        Map<String, Object> hidden = converter.convert(rows, "geoscatter", Map.of(
+                "map", Map.of("boundary", Map.of("show", false))
+        ));
+        Map<?, ?> hiddenGeo = (Map<?, ?>) hidden.get("geo");
+        assertThat(hiddenGeo.get("show")).isEqualTo(false);
+        assertThat(hiddenGeo.get("itemStyle")).isNull();
+
+        Map<String, Object> styled = converter.convert(rows, "geoscatter", Map.of(
+                "map", Map.of("boundary", Map.of(
+                        "show", true,
+                        "areaColor", "#112233",
+                        "borderColor", "#AABBCC",
+                        "borderWidth", 25
+                ))
+        ));
+        Map<?, ?> styledGeo = (Map<?, ?>) styled.get("geo");
+        assertThat(styledGeo.get("show")).isNull();
+        assertThat(styledGeo.get("itemStyle")).isEqualTo(Map.of(
+                "areaColor", "#112233",
+                "borderColor", "#AABBCC",
+                "borderWidth", 20.0
+        ));
+    }
+
+    @Test
+    void generatedGeoScatterDefaultsUseFivePixelAdministrativeBoundary() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/chart-defaults.json")) {
+            assertThat(in).as("generated chart defaults").isNotNull();
+            Map<String, Map<String, Object>> byType = new ObjectMapper().readValue(in, new TypeReference<>() {});
+            ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
+            QueryRows rows = new QueryRows(
+                    List.of(Map.of("name", "lng", "type", "number"), Map.of("name", "lat", "type", "number")),
+                    List.of(List.of(127.0, 37.5)),
+                    1, false, 0);
+
+            Map<String, Object> option = defaultedConverter.convert(rows, "geoscatter", Map.of());
+            Map<?, ?> geo = (Map<?, ?>) option.get("geo");
+
+            assertThat(geo.get("show")).isNull();
+            assertThat(geo.get("itemStyle")).isEqualTo(Map.of("borderWidth", 5.0));
+        }
     }
 
     @Test
@@ -703,7 +760,10 @@ class ChartOptionConverterTest {
         assertThat(geo.get("map")).isEqualTo("kr-sido"); // 기본 지도
         Map<?, ?> s0 = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
         assertThat(s0.get("symbolSize")).isEqualTo(14);
-        assertThat(((List<?>) s0.get("data")).get(0)).isEqualTo(List.of(127.0, 37.5));
+        assertThat(((List<?>) s0.get("data")).get(0)).isEqualTo(Map.of(
+                "name", "127.0, 37.5",
+                "value", java.util.Arrays.asList(127.0, 37.5, null, null, null)
+        ));
     }
 
     @Test
@@ -728,7 +788,7 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void everyChartTypeKeepsNativeTooltipDefaultsAndItsNativeEmphasisDefaults() {
+    void everyChartTypeUsesFieldTooltipMetadataAndKeepsNativeEmphasisDefaults() {
         for (String chartType : List.of("bar", "line", "pie", "scatter", "boxplot", "heatmap", "map", "geoscatter")) {
             Map<String, Object> option = converter.convert(rows(), chartType, Map.of());
             Map<?, ?> tooltip = (Map<?, ?>) option.get("tooltip");
@@ -737,7 +797,10 @@ class ChartOptionConverterTest {
             assertThat(tooltip.get("show")).as(chartType + " tooltip.show").isNull();
             assertThat(tooltip.get("trigger")).as(chartType + " tooltip.trigger").isNull();
             assertThat(tooltip.get("confine")).as(chartType + " tooltip.confine").isNull();
-            assertThat(option.get("__chartsdkTooltip")).as(chartType + " custom tooltip metadata").isNull();
+            Map<?, ?> tooltipMetadata = (Map<?, ?>) option.get("__chartsdkTooltip");
+            assertThat(tooltipMetadata.get("mode")).as(chartType + " tooltip mode").isEqualTo("fields");
+            assertThat(tooltipMetadata.get("chartType")).as(chartType + " tooltip type").isEqualTo(chartType);
+            assertThat(tooltipMetadata.get("showSeriesColor")).as(chartType + " tooltip marker").isEqualTo(true);
 
             assertThat(series.get("emphasis")).as(chartType + " series emphasis").isNull();
             if ("geoscatter".equals(chartType)) {
@@ -766,6 +829,53 @@ class ChartOptionConverterTest {
                         .isEqualTo(Map.of("disabled", true));
             }
         }
+    }
+
+    @Test
+    void fieldTooltipUsesBuilderLabelsAndStoresOnlyVisibleCurrentResultFields() {
+        QueryRows rows = new QueryRows(
+                List.of(
+                        Map.of("name", "region", "type", "text"),
+                        Map.of("name", "월 매출", "type", "numeric")
+                ),
+                List.of(List.of("서울", 1200)),
+                1,
+                false,
+                0
+        );
+        Map<String, Object> option = converter.convert(
+                rows,
+                "bar",
+                Map.of("tooltip", Map.of(
+                        "contentMode", "fields",
+                        "showSeriesColor", false,
+                        "fields", Map.of(
+                                "measure:sum:sales.amount:0", false,
+                                "measure:removed:99", false
+                        )
+                )),
+                Map.of(
+                        "xAxis", "sales.region",
+                        "yAxis", List.of(Map.of(
+                                "column", "sales.amount",
+                                "agg", "sum",
+                                "alias", "월 매출"
+                        ))
+                )
+        );
+
+        assertThat(option.get("__chartsdkTooltip")).isEqualTo(Map.of(
+                "mode", "fields",
+                "chartType", "bar",
+                "showSeriesColor", false,
+                "fields", List.of(Map.of(
+                        "key", "x:sales.region",
+                        "label", "region",
+                        "role", "가로축",
+                        "kind", "category",
+                        "defaultVisible", true
+                ))
+        ));
     }
 
     @Test
@@ -802,10 +912,11 @@ class ChartOptionConverterTest {
                 "padding", 16,
                 "textStyle", Map.of("fontSize", 12, "color", "#F0F0F0")
         ));
-        assertThat(option.get("__chartsdkTooltip")).isEqualTo(Map.of(
-                "chartType", "line",
-                "template", "{series}: {value}"
-        ));
+        Map<?, ?> tooltipMetadata = (Map<?, ?>) option.get("__chartsdkTooltip");
+        assertThat(tooltipMetadata.get("mode")).isEqualTo("fields");
+        assertThat(tooltipMetadata.get("chartType")).isEqualTo("line");
+        assertThat(tooltipMetadata.get("showSeriesColor")).isEqualTo(true);
+        assertThat((List<?>) tooltipMetadata.get("fields")).isNotEmpty();
         Map<?, ?> emphasis = (Map<?, ?>) ((Map<?, ?>) ((List<?>) option.get("series")).get(0)).get("emphasis");
         assertThat(emphasis.get("focus")).isEqualTo("series");
         assertThat(emphasis.get("scale")).isEqualTo(false);
@@ -851,9 +962,161 @@ class ChartOptionConverterTest {
         assertThat(((Map<?, ?>) series.get("emphasis")).get("itemStyle"))
                 .isEqualTo(Map.of("color", "#12AB34"));
         List<?> data = (List<?>) series.get("data");
-        assertThat(data.get(0)).isEqualTo(List.of(126.978, 37.5665));
+        assertThat(data.get(0)).isEqualTo(Map.of(
+                "name", "126.978, 37.5665",
+                "value", java.util.Arrays.asList(126.978, 37.5665, null, null, null)
+        ));
         assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color"))
                 .isEqualTo("#FFB000");
+    }
+
+    @Test
+    void mapGroupsReservedAreaRowsIntoStableSeriesAndTargetsEverySeries() {
+        QueryRows rows = new QueryRows(
+                List.of(
+                        Map.of("name", "__chartsdk_area_name", "type", "text"),
+                        Map.of("name", "__chartsdk_area_value", "type", "number"),
+                        Map.of("name", "__chartsdk_series", "type", "text")
+                ),
+                List.of(
+                        List.of("서울특별시", 120, "온라인"),
+                        List.of("부산광역시", 80, "매장"),
+                        List.of("제주특별자치도", 55, "온라인")
+                ),
+                3, false, 0
+        );
+        Map<String, Object> option = converter.convert(rows, "map", Map.of(
+                "variant", "map",
+                "legend", Map.of("show", true, "position", "right"),
+                "colorMap", Map.of("온라인", "#0055AA", "매장", "#DD5500")
+        ));
+
+        List<?> series = (List<?>) option.get("series");
+        assertThat(series).hasSize(2);
+        Map<?, ?> online = (Map<?, ?>) series.get(0);
+        Map<?, ?> store = (Map<?, ?>) series.get(1);
+        assertThat(online.get("id")).isEqualTo("__chartsdk_geo_map_0");
+        assertThat(online.get("name")).isEqualTo("온라인");
+        assertThat(online.get("type")).isEqualTo("map");
+        assertThat(((List<?>) online.get("data"))).hasSize(2);
+        Map<?, ?> onlineStyle = (Map<?, ?>) online.get("itemStyle");
+        assertThat(onlineStyle.get("areaColor")).isEqualTo("#0055AA");
+        assertThat(store.get("id")).isEqualTo("__chartsdk_geo_map_1");
+        assertThat(store.get("name")).isEqualTo("매장");
+        assertThat(option.get("legend")).isNotNull();
+        assertThat((List<?>) ((Map<?, ?>) option.get("visualMap")).get("seriesTargets"))
+                .isEqualTo(List.of(
+                        Map.of("seriesId", "__chartsdk_geo_map_0", "dimension", 0),
+                        Map.of("seriesId", "__chartsdk_geo_map_1", "dimension", 0)
+                ));
+    }
+
+    @Test
+    void mapHeatmapUsesPointRolesGroupsAndEcharts61SeriesTargets() {
+        QueryRows rows = groupedGeoPointRows();
+        Map<String, Object> option = converter.convert(rows, "map", Map.of(
+                "variant", "heatmap",
+                "map", Map.of(
+                        "name", "kr-sigungu",
+                        "heatmapPointSize", 18,
+                        "heatmapBlurSize", 24,
+                        "heatmapMinOpacity", 0.1,
+                        "heatmapMaxOpacity", 0.85
+                ),
+                "tooltip", Map.of("contentMode", "custom", "template", "{series}: {value}")
+        ));
+
+        assertThat(((Map<?, ?>) option.get("geo")).get("map")).isEqualTo("kr-sigungu");
+        Map<?, ?> tooltipMetadata = (Map<?, ?>) option.get("__chartsdkTooltip");
+        assertThat(tooltipMetadata.get("mode")).isEqualTo("fields");
+        assertThat(tooltipMetadata.get("chartType")).isEqualTo("map");
+        assertThat(tooltipMetadata.get("showSeriesColor")).isEqualTo(true);
+        assertThat((List<?>) tooltipMetadata.get("fields")).isNotEmpty();
+        List<?> series = (List<?>) option.get("series");
+        assertThat(series).hasSize(2);
+        Map<?, ?> online = (Map<?, ?>) series.get(0);
+        assertThat(online.get("id")).isEqualTo("__chartsdk_geo_heatmap_0");
+        assertThat(online.get("type")).isEqualTo("heatmap");
+        assertThat(online.get("pointSize")).isEqualTo(18);
+        assertThat(online.get("blurSize")).isEqualTo(24);
+        assertThat(online.get("minOpacity")).isEqualTo(0.1);
+        assertThat(online.get("maxOpacity")).isEqualTo(0.85);
+        Map<?, ?> firstPoint = (Map<?, ?>) ((List<?>) online.get("data")).get(0);
+        assertThat(firstPoint.get("name")).isEqualTo("서울점");
+        assertThat(firstPoint.get("value")).isEqualTo(List.of(126.978, 37.5665, 120.0, 30.0));
+        assertThat((List<?>) ((Map<?, ?>) option.get("visualMap")).get("seriesTargets"))
+                .isEqualTo(List.of(
+                        Map.of("seriesId", "__chartsdk_geo_heatmap_0", "dimension", 3),
+                        Map.of("seriesId", "__chartsdk_geo_heatmap_1", "dimension", 3)
+                ));
+    }
+
+    @Test
+    void effectScatterUsesSeriesColorsAndSharedPointStyles() {
+        QueryRows rows = groupedGeoPointRows();
+        Map<String, Object> option = converter.convert(rows, "geoscatter", Map.of(
+                "variant", "effectScatter",
+                "colorMap", Map.of("온라인", "#0055AA"),
+                "geoscatter", Map.of(
+                        "symbol", "triangle",
+                        "symbolSize", 16,
+                        "opacity", 0.8,
+                        "borderColor", "#001122",
+                        "borderWidth", 2,
+                        "showEffectOn", "render",
+                        "rippleScale", 4,
+                        "ripplePeriod", 6,
+                        "rippleBrushType", "fill"
+                )
+        ));
+
+        List<?> series = (List<?>) option.get("series");
+        assertThat(series).hasSize(2);
+        Map<?, ?> online = (Map<?, ?>) series.get(0);
+        assertThat(online.get("id")).isEqualTo("__chartsdk_geo_point_0");
+        assertThat(online.get("type")).isEqualTo("effectScatter");
+        assertThat(online.get("symbol")).isEqualTo("triangle");
+        assertThat(online.get("symbolSize")).isEqualTo(16);
+        assertThat(online.get("showEffectOn")).isEqualTo("render");
+        assertThat(online.get("rippleEffect")).isEqualTo(Map.of(
+                "scale", 4.0, "period", 6.0, "brushType", "fill"
+        ));
+        assertThat(online.get("itemStyle")).isEqualTo(Map.of(
+                "color", "#0055AA",
+                "opacity", 0.8,
+                "borderColor", "#001122",
+                "borderWidth", 2
+        ));
+        Map<?, ?> firstPoint = (Map<?, ?>) ((List<?>) online.get("data")).get(0);
+        assertThat(firstPoint.get("name")).isEqualTo("서울점");
+        assertThat(firstPoint.get("value"))
+                .isEqualTo(List.of(126.978, 37.5665, 120, 10, 30));
+        assertThat(firstPoint.get("symbolSize")).isEqualTo(6);
+        assertThat((List<?>) ((Map<?, ?>) option.get("visualMap")).get("seriesTargets"))
+                .isEqualTo(List.of(
+                        Map.of("seriesId", "__chartsdk_geo_point_0", "dimension", 4),
+                        Map.of("seriesId", "__chartsdk_geo_point_1", "dimension", 4)
+                ));
+    }
+
+    private QueryRows groupedGeoPointRows() {
+        return new QueryRows(
+                List.of(
+                        Map.of("name", "__chartsdk_longitude", "type", "number"),
+                        Map.of("name", "__chartsdk_latitude", "type", "number"),
+                        Map.of("name", "__chartsdk_point_name", "type", "text"),
+                        Map.of("name", "__chartsdk_point_value", "type", "number"),
+                        Map.of("name", "__chartsdk_size", "type", "number"),
+                        Map.of("name", "__chartsdk_color_value", "type", "number"),
+                        Map.of("name", "__chartsdk_series", "type", "text")
+                ),
+                List.of(
+                        List.of(126.978, 37.5665, "서울점", 120, 10, 30, "온라인"),
+                        List.of(129.0756, 35.1796, "부산점", 80, 30, 15, "매장"),
+                        List.of(126.5312, 33.4996, "제주점", 55, 20, 24, "온라인")
+                ),
+                3, false, 0
+        );
     }
 
     /** 상자수염용 — A: 1..9(순서 섞음), B: 10,20,30,40. 변환기가 카테고리별로 그룹핑·정렬. */

@@ -58,7 +58,11 @@ public final class BuilderSqlBuilder {
     private static final String RESULT_Y_PREFIX = "__chartsdk_y_";
     private static final String SPATIAL_LONGITUDE = "__chartsdk_longitude";
     private static final String SPATIAL_LATITUDE = "__chartsdk_latitude";
+    private static final String GEO_POINT_NAME = "__chartsdk_point_name";
+    private static final String GEO_POINT_VALUE = "__chartsdk_point_value";
     private static final String SPATIAL_SIZE = "__chartsdk_size";
+    private static final String GEO_POINT_COLOR = "__chartsdk_color_value";
+    private static final String GEO_SERIES = "__chartsdk_series";
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
     private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
@@ -184,7 +188,13 @@ public final class BuilderSqlBuilder {
         String bucket = str(cfg.get("xAxisBucket"));
         String xSql;
         if (bucket == null) {
-            xSql = render(x);
+            if (isGeoPointSeries()) {
+                xSql = render(x) + " AS " + SqlIdentifier.quote(SPATIAL_LONGITUDE);
+            } else if (isGeoAreaSeries()) {
+                xSql = "CAST(" + render(x) + " AS text) AS " + SqlIdentifier.quote(SPATIAL_AREA_NAME);
+            } else {
+                xSql = render(x);
+            }
         } else {
             if (!Set.of("day", "week", "month").contains(bucket)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Unsupported bucket: " + bucket);
@@ -197,16 +207,24 @@ public final class BuilderSqlBuilder {
 
         List<String> selects = new ArrayList<>();
         selects.add(xSql);
-        if (series != null) selects.add(render(series) + " AS " + SqlIdentifier.quote(series.column()));
-        for (Map<String, Object> y : yAxis) {
+        if (series != null) {
+            String alias = isGeoSeries() ? GEO_SERIES : series.column();
+            String expression = isGeoSeries() ? "CAST(" + render(series) + " AS text)" : render(series);
+            selects.add(expression + " AS " + SqlIdentifier.quote(alias));
+        }
+        for (int yIndex = 0; yIndex < yAxis.size(); yIndex++) {
+            Map<String, Object> y = yAxis.get(yIndex);
             Ref col = resolveRef(str(y.get("column")));
             String agg = str(y.get("agg"));
             assertAggCompatible(agg, col);
             String alias = str(y.get("alias"));
             if (alias == null) alias = "none".equals(agg) ? col.column() : (agg == null ? "val" : agg) + "_" + col.column();
             if (alias.startsWith("__chartsdk_")) throw invalidReq("Alias cannot start with reserved prefix __chartsdk_.");
+            if (isGeoPointSeries()) alias = yIndex == 0 ? SPATIAL_LATITUDE : SPATIAL_SIZE;
+            if (isGeoAreaSeries() && yIndex == 0) alias = SPATIAL_AREA_VALUE;
             selects.add(aggSql(agg, col) + " AS " + SqlIdentifier.quote(alias));
         }
+        if (isGeoPointSeries()) appendGeoPointRoleSelects(selects);
         // 표본 입력 수는 결과 행 수(그룹 수)와 다르다. 그룹별 n·전체 n(+INDEX_RANDOM 은 그룹별 mean/sd)을 숨은 열로 수집하고
         // 실행 라우터가 API/변환기 전달 전에 제거한다(오차범위 계산용 — §표본추출).
         // 원본값 행 표본은 각 행 자체가 결과다. 집계용 숨은 COUNT/통계 열을 섞으면
@@ -247,6 +265,59 @@ public final class BuilderSqlBuilder {
         };
     }
 
+    private record RawSamplingSource(String cteHead, String fromBase, List<Object> leadingParams) {}
+
+    /**
+     * 집계하지 않는 공간 행에도 일반 원본값과 동일한 표본 계획을 적용한다.
+     * INDEX_RANDOM은 먼저 물리 PK 표본 CTE를 만들고 이후 공간 함수를 그 별칭에 적용한다.
+     */
+    private RawSamplingSource prepareRawSamplingSource(SamplingMetadata sampling) {
+        boolean approximate = sampling != null && sampling.approximate();
+        if (approximate && "INDEX_RANDOM".equals(sampling.method())) {
+            if (plan == null || plan.method() != SamplePlan.Method.INDEX_RANDOM) {
+                throw invalidReq("Index sampling requires an execution plan.");
+            }
+            String physicalBase = RefRenderer.SINGLE.table(baseRef.datasourceId(), baseRef.schema(), baseRef.table());
+            String pk = SqlIdentifier.quote(plan.pkColumn());
+            String sampleCte = SqlIdentifier.quote(SAMPLE_CTE);
+            String baseAlias = SqlIdentifier.quote(BASE_ALIAS);
+            String keysAlias = SqlIdentifier.quote(KEYS_ALIAS);
+            String value = SqlIdentifier.quote("v");
+            String cte = "WITH " + sampleCte + " AS (SELECT " + baseAlias + ".* FROM unnest(?) AS "
+                    + keysAlias + "(" + value + ") JOIN " + physicalBase + " " + baseAlias
+                    + " ON " + baseAlias + "." + pk + " = " + keysAlias + "." + value + ") ";
+            renderer = RefRenderer.alias(SAMPLE_CTE);
+            return new RawSamplingSource(cte, sampleCte, new ArrayList<>(List.of(plan.keys())));
+        }
+        if (approximate && "SYSTEM".equals(sampling.method())) {
+            double blockRate = plan != null ? plan.blockRate() : sampling.rate();
+            String from = render(baseRef) + " TABLESAMPLE SYSTEM (" + number(blockRate)
+                    + ") REPEATABLE (" + sampling.seed() + ")";
+            return new RawSamplingSource("", from, new ArrayList<>());
+        }
+        return new RawSamplingSource("", render(baseRef), new ArrayList<>());
+    }
+
+    private Sql finishRawProjectionSampling(String sql, List<Object> params, SamplingMetadata sampling) {
+        if (sampling == null || !sampling.approximate() || !"RESULT_RANDOM".equals(sampling.method())) {
+            return new Sql(sql, params, sampling);
+        }
+        int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
+                : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
+        long seed = sampling.seed() == null ? SamplingMetadata.DEFAULT_SEED : sampling.seed();
+        String seedCte = SqlIdentifier.quote(SEED_CTE);
+        String population = SqlIdentifier.quote(POPULATION_CTE);
+        String sample = SqlIdentifier.quote(SAMPLE_CTE);
+        String wrapped = "WITH " + seedCte + " AS MATERIALIZED (SELECT setseed(?) AS "
+                + SqlIdentifier.quote("seeded") + "), " + population + " AS (" + sql + "), "
+                + sample + " AS MATERIALIZED (SELECT " + population + ".* FROM " + population
+                + " CROSS JOIN " + seedCte + " ORDER BY random() LIMIT " + sampleSize + ") SELECT * FROM " + sample;
+        List<Object> wrappedParams = new ArrayList<>();
+        wrappedParams.add(postgresSeed(seed));
+        wrappedParams.addAll(params);
+        return new Sql(wrapped, wrappedParams, sampling);
+    }
+
     /**
      * VIEW 또는 JOIN+WHERE 결과를 모집단 CTE로 만든 뒤 고정 개수 행을 뽑고 집계한다.
      * PostgreSQL은 seeded random top-k, DuckDB는 native reservoir를 사용하지만 API 의미는 RESULT_RANDOM으로 같다.
@@ -267,6 +338,12 @@ public final class BuilderSqlBuilder {
             assertAggCompatible(str(yAxis.get(i).get("agg")), ref);
             yRefs.add(ref);
             projected.add(render(ref) + " AS " + SqlIdentifier.quote(RESULT_Y_PREFIX + i));
+        }
+        Map<String, Ref> geoPointRoleRefs = geoPointRoleRefs();
+        for (Map.Entry<String, Ref> entry : geoPointRoleRefs.entrySet()) {
+            String expression = render(entry.getValue());
+            if (GEO_POINT_NAME.equals(entry.getKey())) expression = "CAST(" + expression + " AS text)";
+            projected.add(expression + " AS " + SqlIdentifier.quote(entry.getKey()));
         }
 
         List<Object> params = new ArrayList<>();
@@ -302,7 +379,9 @@ public final class BuilderSqlBuilder {
         String bucket = str(cfg.get("xAxisBucket"));
         String xSql;
         if (bucket == null) {
-            xSql = sampledX + " AS " + SqlIdentifier.quote(x.column());
+            String xAlias = isGeoPointSeries() ? SPATIAL_LONGITUDE
+                    : isGeoAreaSeries() ? SPATIAL_AREA_NAME : x.column();
+            xSql = sampledX + " AS " + SqlIdentifier.quote(xAlias);
         } else {
             if (!Set.of("day", "week", "month").contains(bucket)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "BUCKET_TYPE_MISMATCH", "Unsupported bucket: " + bucket);
@@ -316,7 +395,9 @@ public final class BuilderSqlBuilder {
         List<String> selects = new ArrayList<>();
         selects.add(xSql);
         String sampledSeries = series == null ? null : sampleColumn(RESULT_SERIES);
-        if (sampledSeries != null) selects.add(sampledSeries + " AS " + SqlIdentifier.quote(series.column()));
+        if (sampledSeries != null) {
+            selects.add(sampledSeries + " AS " + SqlIdentifier.quote(isGeoSeries() ? GEO_SERIES : series.column()));
+        }
         for (int i = 0; i < yAxis.size(); i++) {
             String agg = str(yAxis.get(i).get("agg"));
             String alias = str(yAxis.get(i).get("alias"));
@@ -324,7 +405,14 @@ public final class BuilderSqlBuilder {
                     ? yRefs.get(i).column()
                     : (agg == null ? "val" : agg) + "_" + yRefs.get(i).column();
             if (alias.startsWith("__chartsdk_")) throw invalidReq("Alias cannot start with reserved prefix __chartsdk_.");
+            if (isGeoPointSeries()) alias = i == 0 ? SPATIAL_LATITUDE : SPATIAL_SIZE;
+            if (isGeoAreaSeries() && i == 0) alias = SPATIAL_AREA_VALUE;
             selects.add(aggSql(agg, sampleColumn(RESULT_Y_PREFIX + i)) + " AS " + SqlIdentifier.quote(alias));
+        }
+        for (String alias : geoPointRoleRefs.keySet()) {
+            if (selects.stream().noneMatch(select -> select.endsWith(" AS " + SqlIdentifier.quote(alias)))) {
+                selects.add(sampleColumn(alias) + " AS " + SqlIdentifier.quote(alias));
+            }
         }
         if (allNone) {
             String order = buildOrder(yAxis.size(), series != null);
@@ -346,10 +434,10 @@ public final class BuilderSqlBuilder {
      * 컬럼 식별자는 카탈로그 화이트리스트를 통과하고 타입도 SRID가 명시된 Point로 제한한다.
      */
     private Sql buildSpatialGeoScatter(String joins, SamplingMetadata sampling) {
-        if (sampling != null) throw invalidReq("Sample cannot be used with spatial point values.");
         if (federated) {
             throw invalidReq("Spatial point columns are not supported across multiple datasources.");
         }
+        RawSamplingSource source = prepareRawSamplingSource(sampling);
 
         Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
         String pointColumn = geoPoint == null ? null : str(geoPoint.get("spatialColumn"));
@@ -366,37 +454,33 @@ public final class BuilderSqlBuilder {
         List<String> selects = new ArrayList<>();
         selects.add("ST_X(" + wgs84 + ") AS " + SqlIdentifier.quote(SPATIAL_LONGITUDE));
         selects.add("ST_Y(" + wgs84 + ") AS " + SqlIdentifier.quote(SPATIAL_LATITUDE));
-
-        String sizeColumn = str(geoPoint.get("sizeColumn"));
-        if (sizeColumn != null) {
-            Ref size = resolveRef(sizeColumn);
-            if (!isNumeric(typeOf(size))) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
-                        "geoscatter size column must be numeric.");
-            }
-            selects.add(render(size) + " AS " + SqlIdentifier.quote(SPATIAL_SIZE));
+        appendGeoPointRoleSelects(selects);
+        String seriesColumn = str(cfg.get("seriesBy"));
+        if (seriesColumn != null) {
+            Ref series = resolveRef(seriesColumn);
+            selects.add("CAST(" + render(series) + " AS text) AS " + SqlIdentifier.quote(GEO_SERIES));
         }
 
-        List<Object> params = new ArrayList<>();
+        List<Object> params = new ArrayList<>(source.leadingParams());
         String where = buildWhere(params);
         where += where.isEmpty() ? " WHERE " + pointSql + " IS NOT NULL" : " AND " + pointSql + " IS NOT NULL";
-        String sql = "SELECT " + String.join(", ", selects)
-                + " FROM " + render(baseRef) + joins + where;
-        return new Sql(sql, params, null);
+        String sql = source.cteHead() + "SELECT " + String.join(", ", selects)
+                + " FROM " + source.fromBase() + joins + where;
+        return finishRawProjectionSampling(sql, params, sampling);
     }
 
     private boolean isSpatialGeoPoint() {
         Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
-        return "geoscatter".equals(chartType) && geoPoint != null
+        return isGeoPointSeries() && geoPoint != null
                 && "spatial".equals(str(geoPoint.get("mode")));
     }
 
     /** PostGIS Polygon/MultiPolygon을 동적 ECharts 지도 경계용 GeoJSON 행으로 투영한다. */
     private Sql buildSpatialGeoMap(String joins, SamplingMetadata sampling) {
-        if (sampling != null) throw invalidReq("Sample cannot be used with spatial polygon values.");
         if (federated) {
             throw invalidReq("Spatial polygon columns are not supported across multiple datasources.");
         }
+        RawSamplingSource source = prepareRawSamplingSource(sampling);
 
         Map<String, Object> geoArea = asMap(cfg.get("geoArea"));
         String spatialColumn = geoArea == null ? null : str(geoArea.get("spatialColumn"));
@@ -420,24 +504,74 @@ public final class BuilderSqlBuilder {
 
         String areaSql = render(area);
         String wgs84 = "ST_Transform((" + areaSql + ")::geometry, 4326)";
-        List<String> selects = List.of(
+        List<String> selects = new ArrayList<>(List.of(
                 "CAST(" + render(name) + " AS text) AS " + SqlIdentifier.quote(SPATIAL_AREA_NAME),
                 render(value) + " AS " + SqlIdentifier.quote(SPATIAL_AREA_VALUE),
                 "ST_AsGeoJSON(" + wgs84 + ", 6) AS " + SqlIdentifier.quote(SPATIAL_AREA_GEOJSON)
-        );
+        ));
+        String seriesColumn = str(cfg.get("seriesBy"));
+        if (seriesColumn != null) {
+            Ref series = resolveRef(seriesColumn);
+            selects.add("CAST(" + render(series) + " AS text) AS " + SqlIdentifier.quote(GEO_SERIES));
+        }
 
-        List<Object> params = new ArrayList<>();
+        List<Object> params = new ArrayList<>(source.leadingParams());
         String where = buildWhere(params);
         where += where.isEmpty() ? " WHERE " + areaSql + " IS NOT NULL" : " AND " + areaSql + " IS NOT NULL";
-        String sql = "SELECT " + String.join(", ", selects)
-                + " FROM " + render(baseRef) + joins + where;
-        return new Sql(sql, params, null);
+        String sql = source.cteHead() + "SELECT " + String.join(", ", selects)
+                + " FROM " + source.fromBase() + joins + where;
+        return finishRawProjectionSampling(sql, params, sampling);
     }
 
     private boolean isSpatialGeoArea() {
         Map<String, Object> geoArea = asMap(cfg.get("geoArea"));
-        return "map".equals(chartType) && geoArea != null
+        return isGeoAreaSeries() && geoArea != null
                 && "spatial".equals(str(geoArea.get("mode")));
+    }
+
+    private boolean isGeoPointSeries() {
+        return "geoscatter".equals(chartType)
+                || ("map".equals(chartType) && "heatmap".equals(str(cfg.get("geoSeriesType"))));
+    }
+
+    private boolean isGeoAreaSeries() {
+        return "map".equals(chartType) && !isGeoPointSeries();
+    }
+
+    private boolean isGeoSeries() {
+        return isGeoPointSeries() || isGeoAreaSeries();
+    }
+
+    private void appendGeoPointRoleSelects(List<String> selects) {
+        for (Map.Entry<String, Ref> entry : geoPointRoleRefs().entrySet()) {
+            String quotedAlias = SqlIdentifier.quote(entry.getKey());
+            if (selects.stream().anyMatch(select -> select.endsWith(" AS " + quotedAlias))) continue;
+            String expression = render(entry.getValue());
+            if (GEO_POINT_NAME.equals(entry.getKey())) expression = "CAST(" + expression + " AS text)";
+            selects.add(expression + " AS " + quotedAlias);
+        }
+    }
+
+    private Map<String, Ref> geoPointRoleRefs() {
+        Map<String, Ref> refs = new LinkedHashMap<>();
+        if (!isGeoPointSeries()) return refs;
+        Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
+        if (geoPoint == null) return refs;
+        for (String[] role : List.of(
+                new String[]{"nameColumn", GEO_POINT_NAME, "text"},
+                new String[]{"valueColumn", GEO_POINT_VALUE, "numeric"},
+                new String[]{"sizeColumn", SPATIAL_SIZE, "numeric"},
+                new String[]{"colorColumn", GEO_POINT_COLOR, "numeric"})) {
+            String column = str(geoPoint.get(role[0]));
+            if (column == null) continue;
+            Ref ref = resolveRef(column);
+            if ("numeric".equals(role[2]) && !isNumeric(typeOf(ref))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                        "Geo point " + role[0] + " must be numeric.");
+            }
+            refs.put(role[1], ref);
+        }
+        return refs;
     }
 
     private static boolean isSpatialPointType(String type) {
@@ -667,10 +801,12 @@ public final class BuilderSqlBuilder {
     // ── 검증 헬퍼 ────────────────────────────────────────
     private void validateChartShape(Ref x, Ref series, List<Map<String, Object>> yAxis, boolean allNone) {
         if (series != null) {
-            if (!("bar".equals(chartType) || "line".equals(chartType))) {
-                throw invalidReq("seriesBy is supported only for bar and line charts.");
+            if (!("bar".equals(chartType) || "line".equals(chartType) || isGeoSeries())) {
+                throw invalidReq("seriesBy is not supported for this chart type.");
             }
-            if (yAxis.size() != 1) throw invalidReq("seriesBy requires exactly one yAxis field.");
+            if (("bar".equals(chartType) || "line".equals(chartType)) && yAxis.size() != 1) {
+                throw invalidReq("seriesBy requires exactly one yAxis field.");
+            }
         }
         boolean anyNone = yAxis.stream().anyMatch(y -> "none".equals(str(y.get("agg"))));
         if ("scatter".equals(chartType)) {
@@ -680,17 +816,17 @@ public final class BuilderSqlBuilder {
             // 상자수염: 카테고리별 원본값 분포 → 집계 없음(allNone) + 단일 값 컬럼.
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "boxplot requires agg 'none' on the value field.");
             if (yAxis.size() != 1) throw invalidReq("boxplot requires exactly one value field.");
-        } else if ("geoscatter".equals(chartType)) {
-            // 지도 포인트: X=경도(숫자)·Y=위도(+선택 크기값) 원본 좌표 → 집계 없음 + 최대 2컬럼.
-            if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "geoscatter requires agg 'none' on coordinate fields.");
-            if (yAxis.isEmpty() || yAxis.size() > 2) throw invalidReq("geoscatter requires latitude (and optional size) — one or two yAxis fields.");
-            if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "geoscatter xAxis (longitude) must be numeric.");
+        } else if (isGeoPointSeries()) {
+            // 지도 포인트: X=경도·Y=위도이며 이름·값·크기·색상값은 별도 역할 컬럼으로 전달한다.
+            if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "Geo point coordinates require agg 'none'.");
+            if (yAxis.size() != 1) throw invalidReq("Geo point input requires exactly one latitude field.");
+            if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "Geo point longitude must be numeric.");
         } else {
             if (anyNone && !allNone) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "raw values cannot be mixed with aggregate yAxis fields.");
             }
             if ("pie".equals(chartType) && yAxis.size() != 1) throw invalidReq("pie requires exactly one yAxis.");
-            if ("map".equals(chartType) && yAxis.size() != 1) throw invalidReq("map requires exactly one yAxis.");
+            if (isGeoAreaSeries() && yAxis.size() != 1) throw invalidReq("map requires exactly one value field.");
         }
     }
 

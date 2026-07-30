@@ -59,4 +59,25 @@ class SeriesPivotTest {
         assertThatThrownBy(() -> SeriesPivot.pivot(duplicate, Map.of("seriesBy", "year")))
                 .hasMessageContaining("서울 / 2012");
     }
+
+    @Test
+    void keepsGeoSeriesInLongRowFormForTheGeoConverter() {
+        QueryRows input = new QueryRows(
+                List.of(
+                        Map.of("name", "__chartsdk_longitude", "type", "number"),
+                        Map.of("name", "__chartsdk_latitude", "type", "number"),
+                        Map.of("name", "__chartsdk_series", "type", "text")
+                ),
+                List.of(
+                        List.of(127.0, 37.5, "A"),
+                        List.of(129.0, 35.1, "B")
+                ),
+                2, false, 0
+        );
+
+        assertThat(SeriesPivot.pivot(input, Map.of("seriesBy", "category"), "geoscatter"))
+                .isSameAs(input);
+        assertThat(SeriesPivot.pivot(input, Map.of("seriesBy", "category"), "map"))
+                .isSameAs(input);
+    }
 }

@@ -132,13 +132,27 @@ class ChartServiceTest {
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(22L);
         when(charts.get(null, 22L)).thenReturn(Map.of("id", 22L));
         ChartSaveRequest request = new ChartSaveRequest(
-                "원시 SQL", null, 1L, "raw", sql, null, "bar", Map.of(), "manual", 3600, null);
+                "원시 SQL", null, 1L, "raw", sql, Map.of("table", "sales"), "bar", Map.of(), "manual", 3600, null);
 
         service.create(request);
 
         verify(queries, times(1)).executeUnbounded(1L, sql, List.of());
         verify(compute).seedPreparedQuietly(22L, queryRows, 0, null);
         verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    void saveRejectsChartWithoutPrimaryTableContext() {
+        ChartSaveRequest request = new ChartSaveRequest(
+                "원시 SQL", null, 1L, "raw", "SELECT 1", null, "bar", Map.of(), "manual", 3600, null);
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("MAIN_TABLE_REQUIRED");
+
+        verify(queries, never()).executeUnbounded(anyLong(), any(), any());
+        verify(charts, never()).create(any(), any());
     }
 
     @Test

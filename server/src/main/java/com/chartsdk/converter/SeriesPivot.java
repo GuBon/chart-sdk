@@ -70,6 +70,15 @@ public final class SeriesPivot {
         return new QueryRows(columns, rows, rows.size(), input.truncated(), input.elapsedMs());
     }
 
+    /**
+     * 지도 계열은 long-row의 각 행이 실제 지역/좌표 데이터이므로 wide pivot을 하지 않는다.
+     * ChartOptionConverter가 __chartsdk_series 열을 기준으로 ECharts series 배열을 직접 조립한다.
+     */
+    public static QueryRows pivot(QueryRows input, Map<String, Object> builderConfig, String chartType) {
+        if ("map".equals(chartType) || "geoscatter".equals(chartType)) return input;
+        return pivot(input, builderConfig);
+    }
+
     private static int compareSeries(String left, String right) {
         try {
             return Double.compare(Double.parseDouble(left), Double.parseDouble(right));

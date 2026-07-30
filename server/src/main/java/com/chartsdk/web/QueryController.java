@@ -58,12 +58,12 @@ public class QueryController {
         Map<String, Object> cfg = body.builderConfig();
         FederatedQueryRunner.BuiltResult built = runner.runBuilder(body.datasourceId(), cfg, chartType, rawMode);
         QueryRows rows = built.rows();
-        if (!rawMode) rows = SeriesPivot.pivot(rows, cfg);
+        if (!rawMode) rows = SeriesPivot.pivot(rows, cfg, chartType);
 
         Map<String, Object> result = rowsResult(rows);
         result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
         if (!rawMode) {
-            result.put("option", converter.convert(rows, chartType, options(body)));
+            result.put("option", converter.convert(rows, chartType, options(body), cfg));
             SamplingMetadata sampling = built.sampling();
             if (sampling != null) sampling.putInto(result);
         }
@@ -79,7 +79,12 @@ public class QueryController {
         List<List<Object>> data = (List<List<Object>>) rows.get("rows");
         QueryRows qr = new QueryRows(columns, data, data.size(), false, 0);
         String chartType = body.chartType() == null ? "bar" : body.chartType();
-        return Map.of("option", converter.convert(qr, chartType, options(body)));
+        return Map.of("option", converter.convert(
+                qr,
+                chartType,
+                options(body),
+                body.builderConfig() == null ? Map.of() : body.builderConfig()
+        ));
     }
 
     private static Map<String, Object> rowsResult(QueryRows rows) {

@@ -41,6 +41,13 @@ public class ChartOptionConverter {
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
     private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
+    private static final String SPATIAL_LONGITUDE = "__chartsdk_longitude";
+    private static final String SPATIAL_LATITUDE = "__chartsdk_latitude";
+    private static final String GEO_POINT_NAME = "__chartsdk_point_name";
+    private static final String GEO_POINT_VALUE = "__chartsdk_point_value";
+    private static final String GEO_POINT_SIZE = "__chartsdk_size";
+    private static final String GEO_POINT_COLOR = "__chartsdk_color_value";
+    private static final String GEO_SERIES = "__chartsdk_series";
     private static final List<String> LEGACY_DEFAULT_PALETTE = List.of(
             "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
             "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888"
@@ -100,6 +107,15 @@ public class ChartOptionConverter {
     }
 
     public Map<String, Object> convert(QueryRows rows, String chartType, Map<String, Object> options) {
+        return convert(rows, chartType, options, Map.of());
+    }
+
+    public Map<String, Object> convert(
+            QueryRows rows,
+            String chartType,
+            Map<String, Object> options,
+            Map<String, Object> builderConfig
+    ) {
         Map<String, Object> storedOptions = options == null ? Map.of() : options;
         Map<String, Object> normalizedOptions = migrateLegacyInteractionOptions(
                 storedOptions,
@@ -141,6 +157,13 @@ public class ChartOptionConverter {
         List<String> colorNames = new ArrayList<>();
         if ("pie".equals(chartType)) {
             categories.forEach(category -> colorNames.add(String.valueOf(category)));
+        } else if (("map".equals(chartType) || "geoscatter".equals(chartType))
+                && columnIndex(columns, GEO_SERIES) >= 0) {
+            int seriesIndex = columnIndex(columns, GEO_SERIES);
+            for (List<Object> row : dataRows) {
+                String seriesName = seriesName(row, seriesIndex, "미분류");
+                if (!colorNames.contains(seriesName)) colorNames.add(seriesName);
+            }
         } else {
             for (int c = 1; c < columns.size(); c++) {
                 if (c != scatterBubbleIndex) colorNames.add(string(columns.get(c).get("name"), ""));
@@ -164,13 +187,17 @@ public class ChartOptionConverter {
         applyTitle(o, opt);
         applyColor(o, opt);
         applyLegend(o, opt);
-        applyTooltip(o, opt, chartType);
+        applyTooltip(o, opt, chartType, columns, builderConfig);
         applyDataZoom(o, opt, chartType);
 
         // 신규 유형은 직교 폴스루를 타지 않고 전용 조립(축·시리즈 형태가 다르다).
         if ("boxplot".equals(chartType)) { buildBoxplot(o, opt, columns, dataRows, itemColors); return o; }
         if ("heatmap".equals(chartType)) { buildHeatmap(o, opt, columns, dataRows, itemColors); return o; }
-        if ("map".equals(chartType)) { buildMap(o, opt, columns, dataRows, itemColors); return o; }
+        if ("map".equals(chartType)) {
+            if ("heatmap".equals(variant)) buildGeoHeatmap(o, opt, columns, dataRows, itemColors);
+            else buildMap(o, opt, columns, dataRows, itemColors);
+            return o;
+        }
         if ("geoscatter".equals(chartType)) { buildGeoScatter(o, opt, columns, dataRows, itemColors); return o; }
 
         if ("pie".equals(chartType)) {
@@ -278,7 +305,13 @@ public class ChartOptionConverter {
         o.put("dataZoom", List.of(inside));
     }
 
-    private void applyTooltip(Map<String, Object> o, Map<String, Object> opt, String chartType) {
+    private void applyTooltip(
+            Map<String, Object> o,
+            Map<String, Object> opt,
+            String chartType,
+            List<Map<String, Object>> columns,
+            Map<String, Object> builderConfig
+    ) {
         Map<String, Object> tooltip = map(opt.get("tooltip"));
         Map<String, Object> t = new LinkedHashMap<>();
         boolean enabled = !Boolean.FALSE.equals(tooltip.get("enabled"));
@@ -305,27 +338,21 @@ public class ChartOptionConverter {
         t.put("textStyle", textStyle);
         o.put("tooltip", t);
 
-        if (enabled && "custom".equals(string(tooltip.get("contentMode"), "auto"))) {
-            o.put(TOOLTIP_METADATA_KEY, Map.of(
-                    "chartType", chartType,
-                    "template", string(tooltip.get("template"), tooltipTemplateFor(chartType))
+        if (enabled) {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("mode", "fields");
+            metadata.put("chartType", chartType);
+            metadata.put("fields", TooltipFieldResolver.visibleFields(
+                    chartType,
+                    opt,
+                    columns,
+                    builderConfig
             ));
+            metadata.put("showSeriesColor", !Boolean.FALSE.equals(tooltip.get("showSeriesColor")));
+            o.put(TOOLTIP_METADATA_KEY, metadata);
         } else {
             o.remove(TOOLTIP_METADATA_KEY);
         }
-    }
-
-    private String tooltipTemplateFor(String chartType) {
-        return switch (chartType) {
-            case "bar", "line" -> "{series}\n{name}: {value}";
-            case "pie" -> "{name}: {value} ({percent}%)";
-            case "scatter" -> "{series}\nX: {x}\nY: {y}";
-            case "boxplot" -> "{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}";
-            case "heatmap" -> "X: {x}\nY: {y}\n값: {value}";
-            case "map" -> "지역: {name}\n값: {value}";
-            case "geoscatter" -> "경도: {lng}\n위도: {lat}";
-            default -> "{series}\n{name}: {value}";
-        };
     }
 
     /** 모든 시리즈가 공유하는 강조 계약. 자동 항목은 생략해 ECharts 유형별 기본값을 그대로 사용한다. */
@@ -543,69 +570,88 @@ public class ChartOptionConverter {
         int nameIndex = columnIndex(columns, SPATIAL_AREA_NAME);
         int valueIndex = columnIndex(columns, SPATIAL_AREA_VALUE);
         int geoJsonIndex = columnIndex(columns, SPATIAL_AREA_GEOJSON);
-        boolean spatial = nameIndex >= 0 && valueIndex >= 0 && geoJsonIndex >= 0;
-        List<Object> data = new ArrayList<>();
+        int seriesIndex = columnIndex(columns, GEO_SERIES);
+        boolean reservedArea = nameIndex >= 0 && valueIndex >= 0;
+        boolean spatial = reservedArea && geoJsonIndex >= 0;
+        LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
         ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
-        List<Object> features = new ArrayList<>();
+        LinkedHashMap<String, Object> featuresByName = new LinkedHashMap<>();
         MessageDigest digest = spatial ? sha256() : null;
         double min = Double.POSITIVE_INFINITY, max = Double.NEGATIVE_INFINITY;
         for (List<Object> r : rows) {
-            int ni = spatial ? nameIndex : 0;
-            int vi = spatial ? valueIndex : 1;
+            int ni = reservedArea ? nameIndex : 0;
+            int vi = reservedArea ? valueIndex : 1;
             String name = r.size() > ni ? String.valueOf(r.get(ni)) : "";
+            String seriesName = seriesName(r, seriesIndex,
+                    reservedArea ? "값" : columns.size() > 1 ? string(columns.get(1).get("name"), "값") : "값");
             if (spatial) {
                 if (r.size() <= geoJsonIndex || !(r.get(geoJsonIndex) instanceof String geometryJson)) continue;
                 Map<String, Object> geometry = parsePolygonGeometry(geometryJson);
                 if (geometry == null) continue;
-                Map<String, Object> feature = new LinkedHashMap<>();
-                feature.put("type", "Feature");
-                feature.put("properties", Map.of("name", name));
-                feature.put("geometry", geometry);
-                features.add(feature);
-                digest.update(name.getBytes(StandardCharsets.UTF_8));
-                digest.update((byte) 0);
-                digest.update(geometryJson.getBytes(StandardCharsets.UTF_8));
+                if (!featuresByName.containsKey(name)) {
+                    Map<String, Object> feature = new LinkedHashMap<>();
+                    feature.put("type", "Feature");
+                    feature.put("properties", Map.of("name", name));
+                    feature.put("geometry", geometry);
+                    featuresByName.put(name, feature);
+                    digest.update(name.getBytes(StandardCharsets.UTF_8));
+                    digest.update((byte) 0);
+                    digest.update(geometryJson.getBytes(StandardCharsets.UTF_8));
+                }
             }
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("name", name);
             double v = (r.size() > vi && r.get(vi) instanceof Number n) ? n.doubleValue() : 0;
             point.put("value", v);
             List<Object> dimensions = List.of(name);
-            int occurrence = itemOccurrences.next("map", "", dimensions);
-            Object itemColor = itemColors.color("map", "", dimensions, occurrence);
-            data.add(withItemColor(point, itemColor, "areaColor", false));
+            int occurrence = itemOccurrences.next("map", seriesName, dimensions);
+            Object itemColor = itemColors.color("map", seriesName, dimensions, occurrence);
+            dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
+                    .add(withItemColor(point, itemColor, "areaColor", false));
             if (v < min) min = v;
             if (v > max) max = v;
         }
+        if (dataBySeries.isEmpty()) dataBySeries.put("값", new ArrayList<>());
         if (Double.isInfinite(min)) { min = 0; max = 1; }
         if (min == max) max = min + 1;
-
-        o.remove("legend"); // 지도는 visualMap 이 범례 대체
-        o.put("visualMap", visualMap(min, max, opt));
 
         String selectedMap = spatial ? dynamicMapName(digest) : mapName(opt);
         if (spatial) {
             Map<String, Object> featureCollection = new LinkedHashMap<>();
             featureCollection.put("type", "FeatureCollection");
-            featureCollection.put("features", features);
+            featureCollection.put("features", new ArrayList<>(featuresByName.values()));
             o.put(EMBEDDED_MAPS_KEY, List.of(Map.of("name", selectedMap, "geoJSON", featureCollection)));
         }
 
-        Map<String, Object> s = new LinkedHashMap<>();
-        s.put("type", "map");
-        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "값") : "값");
-        s.put("map", selectedMap);
-        s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
-        Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
-        boolean labelShown = Boolean.TRUE.equals(opt.get("dataLabel"));
-        label.put("show", labelShown);
-        if (labelShown) putLabelRotation(label, opt);
-        s.put("label", label);
-        applyLabelLayout(s, opt);
-        applySeriesEmphasis(s, opt, "map");
-        s.putAll(nonCartesianInsets(opt, false, true));
-        s.put("data", data);
-        o.put("series", List.of(s));
+        List<Map<String, Object>> series = new ArrayList<>();
+        List<Map<String, Object>> targets = new ArrayList<>();
+        int seriesNumber = 0;
+        for (Map.Entry<String, List<Object>> entry : dataBySeries.entrySet()) {
+            String id = "__chartsdk_geo_map_" + seriesNumber;
+            Map<String, Object> s = new LinkedHashMap<>();
+            s.put("id", id);
+            s.put("type", "map");
+            s.put("name", entry.getKey());
+            s.put("map", selectedMap);
+            s.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
+            Object seriesColor = ColorResolver.pickColor(opt, entry.getKey(), seriesNumber);
+            if (seriesColor != null) s.put("itemStyle", Map.of("areaColor", seriesColor));
+            Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
+            boolean labelShown = Boolean.TRUE.equals(opt.get("dataLabel"));
+            label.put("show", labelShown);
+            if (labelShown) putLabelRotation(label, opt);
+            s.put("label", label);
+            applyLabelLayout(s, opt);
+            applySeriesEmphasis(s, opt, "map");
+            s.putAll(nonCartesianInsets(opt, dataBySeries.size() > 1, true));
+            s.put("data", entry.getValue());
+            series.add(s);
+            targets.add(Map.of("seriesId", id, "dimension", 0));
+            seriesNumber++;
+        }
+        if (series.size() <= 1) o.remove("legend");
+        o.put("visualMap", visualMap(min, max, opt, targets));
+        o.put("series", series);
         applyMapViewportMetadata(o, opt);
     }
 
@@ -631,65 +677,231 @@ public class ChartOptionConverter {
         return "chartsdk-dynamic-" + HexFormat.of().formatHex(digest.digest()).substring(0, 16);
     }
 
-    /**
-     * 지도 포인트: 경도(0열)·위도(1열)(+선택 크기값 2열) → geo 좌표계 + scatter (공식 effectScatter-map 예제 구조).
-     * JSON 전송이라 symbolSize 콜백 불가 → 크기값이 있으면 포인트별 symbolSize 를 계산해 데이터 항목에 넣는다(6~28px sqrt).
-     */
+    /** 지도 포인트: 예약 역할 열을 seriesBy별 scatter/effectScatter로 분리해 공용 geo 위에 그린다. */
     private void buildGeoScatter(Map<String, Object> o, Map<String, Object> opt, List<Map<String, Object>> columns,
                                  List<List<Object>> rows, ItemColorResolver itemColors) {
-        boolean hasSize = columns.size() > 2;
+        int longitudeIndex = columnIndex(columns, SPATIAL_LONGITUDE);
+        int latitudeIndex = columnIndex(columns, SPATIAL_LATITUDE);
+        boolean legacyColumns = longitudeIndex < 0 || latitudeIndex < 0;
+        if (longitudeIndex < 0) longitudeIndex = 0;
+        if (latitudeIndex < 0) latitudeIndex = 1;
+        int nameIndex = columnIndex(columns, GEO_POINT_NAME);
+        int valueIndex = columnIndex(columns, GEO_POINT_VALUE);
+        int sizeIndex = columnIndex(columns, GEO_POINT_SIZE);
+        int colorIndex = columnIndex(columns, GEO_POINT_COLOR);
+        int seriesIndex = columnIndex(columns, GEO_SERIES);
+        if (legacyColumns && sizeIndex < 0 && columns.size() > 2) sizeIndex = 2;
+        boolean hasSize = sizeIndex >= 0;
         double sMin = Double.POSITIVE_INFINITY, sMax = Double.NEGATIVE_INFINITY;
         if (hasSize) {
             for (List<Object> r : rows) {
-                if (r.size() > 2 && r.get(2) instanceof Number n) {
+                if (r.size() > sizeIndex && r.get(sizeIndex) instanceof Number n) {
                     double v = n.doubleValue();
                     if (v < sMin) sMin = v;
                     if (v > sMax) sMax = v;
                 }
             }
         }
+        double colorMin = Double.POSITIVE_INFINITY, colorMax = Double.NEGATIVE_INFINITY;
+        if (colorIndex >= 0) {
+            for (List<Object> row : rows) {
+                if (row.size() > colorIndex && row.get(colorIndex) instanceof Number number) {
+                    colorMin = Math.min(colorMin, number.doubleValue());
+                    colorMax = Math.max(colorMax, number.doubleValue());
+                }
+            }
+        }
         int base = map(opt.get("geoscatter")).get("symbolSize") instanceof Number n ? n.intValue() : 10;
-
-        List<Object> data = new ArrayList<>();
+        String seriesType = "effectScatter".equals(string(opt.get("variant"), "scatter"))
+                ? "effectScatter" : "scatter";
+        LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
         ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         for (List<Object> r : rows) {
-            double lng = (r.size() > 0 && r.get(0) instanceof Number n) ? n.doubleValue() : 0;
-            double lat = (r.size() > 1 && r.get(1) instanceof Number n) ? n.doubleValue() : 0;
+            double lng = (r.size() > longitudeIndex && r.get(longitudeIndex) instanceof Number n) ? n.doubleValue() : 0;
+            double lat = (r.size() > latitudeIndex && r.get(latitudeIndex) instanceof Number n) ? n.doubleValue() : 0;
+            String seriesName = seriesName(r, seriesIndex, "포인트");
+            String pointName = nameIndex >= 0 && r.size() > nameIndex && r.get(nameIndex) != null
+                    ? String.valueOf(r.get(nameIndex)) : roundCoordinate(lng) + ", " + roundCoordinate(lat);
+            Object pointValue = valueIndex >= 0 && r.size() > valueIndex ? r.get(valueIndex) : null;
+            Object sizeValue = sizeIndex >= 0 && r.size() > sizeIndex ? r.get(sizeIndex) : null;
+            Object colorValue = colorIndex >= 0 && r.size() > colorIndex ? r.get(colorIndex) : null;
             List<Object> dimensions = List.of(roundCoordinate(lng), roundCoordinate(lat));
-            int occurrence = itemOccurrences.next("geoscatter", "", dimensions);
-            Object itemColor = itemColors.color("geoscatter", "", dimensions, occurrence);
-            if (!hasSize || Double.isInfinite(sMin)) {
-                data.add(withItemColor(List.of(lng, lat), itemColor, "color", false));
-                continue;
-            }
-            double v = (r.size() > 2 && r.get(2) instanceof Number n) ? n.doubleValue() : 0;
+            int occurrence = itemOccurrences.next("geoscatter", seriesName, dimensions);
+            Object itemColor = itemColors.color("geoscatter", seriesName, dimensions, occurrence);
             Map<String, Object> point = new LinkedHashMap<>();
-            point.put("value", List.of(lng, lat, v));
-            point.put("symbolSize", sMax == sMin ? base : (int) Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-            data.add(withItemColor(point, itemColor, "color", false));
+            point.put("name", pointName);
+            point.put("value", java.util.Arrays.asList(lng, lat, pointValue, sizeValue, colorValue));
+            if (hasSize && !Double.isInfinite(sMin)) {
+                point.put("symbolSize", scaledBubbleSize(sizeValue, sMin, sMax, base));
+            }
+            dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
+                    .add(withItemColor(point, itemColor, "color", false));
         }
+        if (dataBySeries.isEmpty()) dataBySeries.put("포인트", new ArrayList<>());
 
-        o.remove("legend"); // 단일 포인트 시리즈 — 범례 무의미
+        applyPointGeo(o, opt, dataBySeries.size() > 1, colorIndex >= 0);
+        List<Map<String, Object>> series = new ArrayList<>();
+        List<Map<String, Object>> targets = new ArrayList<>();
+        int index = 0;
+        for (Map.Entry<String, List<Object>> entry : dataBySeries.entrySet()) {
+            String id = "__chartsdk_geo_point_" + index;
+            Map<String, Object> s = new LinkedHashMap<>();
+            s.put("id", id);
+            s.put("type", seriesType);
+            s.put("coordinateSystem", "geo");
+            s.put("name", entry.getKey());
+            s.put("symbol", string(map(opt.get("geoscatter")).get("symbol"), "circle"));
+            s.put("symbolSize", base);
+            s.put("clip", true);
+            Object color = ColorResolver.pickColor(opt, entry.getKey(), index);
+            Map<String, Object> pointConfig = map(opt.get("geoscatter"));
+            Map<String, Object> itemStyle = new LinkedHashMap<>();
+            if (color != null) itemStyle.put("color", color);
+            putIfNotNull(itemStyle, "opacity", pointConfig.get("opacity"));
+            putIfNotNull(itemStyle, "borderColor", pointConfig.get("borderColor"));
+            putIfNotNull(itemStyle, "borderWidth", pointConfig.get("borderWidth"));
+            if (!itemStyle.isEmpty()) s.put("itemStyle", itemStyle);
+            if ("effectScatter".equals(seriesType)) applyEffectScatter(s, opt);
+            applyPointLabel(s, opt);
+            applySeriesEmphasis(s, opt, "scatter");
+            s.put("data", entry.getValue());
+            series.add(s);
+            if (colorIndex >= 0) targets.add(Map.of("seriesId", id, "dimension", 4));
+            index++;
+        }
+        if (series.size() <= 1) o.remove("legend");
+        if (colorIndex >= 0) {
+            if (Double.isInfinite(colorMin)) { colorMin = 0; colorMax = 1; }
+            if (colorMin == colorMax) colorMax = colorMin + 1;
+            o.put("visualMap", visualMap(colorMin, colorMax, opt, targets));
+        } else {
+            o.remove("visualMap");
+        }
+        o.put("series", series);
+        applyMapViewportMetadata(o, opt);
+    }
+
+    /** map 대분류의 geo heatmap. 값이 없으면 각 행을 1로 사용해 순수 밀도 지도를 만든다. */
+    private void buildGeoHeatmap(Map<String, Object> o, Map<String, Object> opt,
+                                 List<Map<String, Object>> columns, List<List<Object>> rows,
+                                 ItemColorResolver itemColors) {
+        int longitudeIndex = columnIndex(columns, SPATIAL_LONGITUDE);
+        int latitudeIndex = columnIndex(columns, SPATIAL_LATITUDE);
+        if (longitudeIndex < 0) longitudeIndex = 0;
+        if (latitudeIndex < 0) latitudeIndex = 1;
+        int nameIndex = columnIndex(columns, GEO_POINT_NAME);
+        int valueIndex = columnIndex(columns, GEO_POINT_VALUE);
+        int colorIndex = columnIndex(columns, GEO_POINT_COLOR);
+        int seriesIndex = columnIndex(columns, GEO_SERIES);
+        LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
+        ItemColorResolver.Occurrences occurrences = new ItemColorResolver.Occurrences();
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        for (List<Object> row : rows) {
+            double longitude = row.size() > longitudeIndex && row.get(longitudeIndex) instanceof Number number
+                    ? number.doubleValue() : 0;
+            double latitude = row.size() > latitudeIndex && row.get(latitudeIndex) instanceof Number number
+                    ? number.doubleValue() : 0;
+            String seriesName = seriesName(row, seriesIndex, "밀도");
+            String pointName = nameIndex >= 0 && row.size() > nameIndex && row.get(nameIndex) != null
+                    ? String.valueOf(row.get(nameIndex)) : roundCoordinate(longitude) + ", " + roundCoordinate(latitude);
+            double intensity = valueIndex >= 0 && row.size() > valueIndex && row.get(valueIndex) instanceof Number number
+                    ? number.doubleValue() : 1;
+            double colorValue = colorIndex >= 0 && row.size() > colorIndex && row.get(colorIndex) instanceof Number number
+                    ? number.doubleValue() : intensity;
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("name", pointName);
+            point.put("value", List.of(longitude, latitude, intensity, colorValue));
+            List<Object> dimensions = List.of(roundCoordinate(longitude), roundCoordinate(latitude));
+            int occurrence = occurrences.next("geoscatter", seriesName, dimensions);
+            Object itemColor = itemColors.color("geoscatter", seriesName, dimensions, occurrence);
+            dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
+                    .add(withItemColor(point, itemColor, "color", false));
+            min = Math.min(min, colorValue);
+            max = Math.max(max, colorValue);
+        }
+        if (dataBySeries.isEmpty()) dataBySeries.put("밀도", new ArrayList<>());
+        if (Double.isInfinite(min)) { min = 0; max = 1; }
+        if (min == max) max = min + 1;
+
+        applyPointGeo(o, opt, dataBySeries.size() > 1, true);
+        Map<String, Object> mapOptions = map(opt.get("map"));
+        List<Map<String, Object>> series = new ArrayList<>();
+        List<Map<String, Object>> targets = new ArrayList<>();
+        int index = 0;
+        for (Map.Entry<String, List<Object>> entry : dataBySeries.entrySet()) {
+            String id = "__chartsdk_geo_heatmap_" + index;
+            Map<String, Object> heatmap = new LinkedHashMap<>();
+            heatmap.put("id", id);
+            heatmap.put("type", "heatmap");
+            heatmap.put("coordinateSystem", "geo");
+            heatmap.put("name", entry.getKey());
+            heatmap.put("pointSize", number(mapOptions.get("heatmapPointSize"), 20));
+            heatmap.put("blurSize", number(mapOptions.get("heatmapBlurSize"), 30));
+            heatmap.put("minOpacity", doubleNumber(mapOptions.get("heatmapMinOpacity"), 0));
+            heatmap.put("maxOpacity", doubleNumber(mapOptions.get("heatmapMaxOpacity"), 1));
+            heatmap.put("data", entry.getValue());
+            applySeriesEmphasis(heatmap, opt, "heatmap");
+            series.add(heatmap);
+            targets.add(Map.of("seriesId", id, "dimension", 3));
+            index++;
+        }
+        if (series.size() <= 1) o.remove("legend");
+        o.put("visualMap", visualMap(min, max, opt, targets));
+        o.put("series", series);
+        applyMapViewportMetadata(o, opt);
+    }
+
+    private void applyPointGeo(Map<String, Object> option, Map<String, Object> opt,
+                               boolean includeLegend, boolean includeVisualMap) {
+        Map<String, Object> boundary = map(map(opt.get("map")).get("boundary"));
         Map<String, Object> geo = new LinkedHashMap<>();
         geo.put("map", mapName(opt));
         geo.put("roam", Boolean.TRUE.equals(map(opt.get("map")).get("roam")));
-        geo.putAll(nonCartesianInsets(opt, false, false));
+        geo.put("clip", true);
+        geo.putAll(nonCartesianInsets(opt, includeLegend, includeVisualMap));
         geo.put("label", Map.of("show", false));
-        // 포인트 지도에서 강조 대상은 scatter 점뿐이다. 배경 행정구역 hover 강조는 항상 차단한다.
+        boolean boundaryHidden = Boolean.FALSE.equals(boundary.get("show"));
+        if (boundaryHidden) {
+            geo.put("show", false);
+        } else {
+            Map<String, Object> itemStyle = new LinkedHashMap<>();
+            putIfNotNull(itemStyle, "areaColor", boundary.get("areaColor"));
+            putIfNotNull(itemStyle, "borderColor", boundary.get("borderColor"));
+            if (boundary.get("borderWidth") instanceof Number) {
+                itemStyle.put("borderWidth", clampDouble(boundary.get("borderWidth"), 0, 20, 5));
+            }
+            if (!itemStyle.isEmpty()) geo.put("itemStyle", itemStyle);
+        }
+        // 배경 행정구역은 좌표 데이터와 별개의 장식이므로 hover 강조를 차단한다.
         geo.put("emphasis", Map.of("disabled", true));
-        o.put("geo", geo);
+        option.put("geo", geo);
+    }
 
-        Map<String, Object> s = new LinkedHashMap<>();
-        s.put("type", "scatter");
-        s.put("coordinateSystem", "geo");
-        s.put("name", columns.size() > 1 ? string(columns.get(1).get("name"), "포인트") : "포인트");
-        s.put("symbolSize", base);
-        Object color = ColorResolver.paletteColor(opt, 0);
-        if (color != null) s.put("itemStyle", Map.of("color", color));
-        applySeriesEmphasis(s, opt, "scatter");
-        s.put("data", data);
-        o.put("series", List.of(s));
-        applyMapViewportMetadata(o, opt);
+    private void applyPointLabel(Map<String, Object> series, Map<String, Object> opt) {
+        Map<String, Object> label = textStyle(typography(opt).dataLabel(), fontFamilyStack(opt, "dataLabel"));
+        boolean shown = Boolean.TRUE.equals(opt.get("dataLabel"));
+        label.put("show", shown);
+        label.put("formatter", "{b}");
+        if (shown) putLabelRotation(label, opt);
+        series.put("label", label);
+        applyLabelLayout(series, opt);
+    }
+
+    private void applyEffectScatter(Map<String, Object> series, Map<String, Object> opt) {
+        Map<String, Object> config = map(opt.get("geoscatter"));
+        series.put("showEffectOn", string(config.get("showEffectOn"), "render"));
+        series.put("rippleEffect", Map.of(
+                "scale", doubleNumber(config.get("rippleScale"), 2.5),
+                "period", doubleNumber(config.get("ripplePeriod"), 4),
+                "brushType", string(config.get("rippleBrushType"), "fill")
+        ));
+    }
+
+    private static String seriesName(List<Object> row, int seriesIndex, String fallback) {
+        if (seriesIndex < 0 || row.size() <= seriesIndex || row.get(seriesIndex) == null) return fallback;
+        String value = String.valueOf(row.get(seriesIndex));
+        return value.isBlank() ? "미분류" : value;
     }
 
     /** Admin과 SDK가 등록된 GeoJSON·포인트 데이터에 동일한 표시 영역을 적용하도록 내부 계약을 전달한다. */
@@ -706,6 +918,12 @@ public class ChartOptionConverter {
 
     /** heatmap·map 공용 visualMap. v2는 순차형 전체 단계, 구 저장 데이터는 종전 2색 계약을 유지한다. */
     private Map<String, Object> visualMap(double min, double max, Map<String, Object> opt) {
+        return visualMap(min, max, opt, List.of());
+    }
+
+    /** ECharts 6.1 seriesTargets로 여러 지도 계열의 색상 차원을 한 visualMap에 연결한다. */
+    private Map<String, Object> visualMap(double min, double max, Map<String, Object> opt,
+                                          List<Map<String, Object>> seriesTargets) {
         List<Object> palette = ColorResolver.orderedPalette(opt);
         Object top = palette.isEmpty() ? null : palette.get(0);
         boolean continuousPalette = number(map(opt.get("colorTheme")).get("version"), 0) == 2;
@@ -720,6 +938,7 @@ public class ChartOptionConverter {
         // 제목이 하단이면 visualMap 을 제목 위로 올려 겹침 방지(규칙 1의 map/heatmap 변형).
         vm.put("bottom", titleAtBottom(opt) ? metrics.titleHeight() : 0);
         vm.put("textStyle", textStyle(typography.legend(), fontFamilyStack(opt, "legend")));
+        if (seriesTargets != null && !seriesTargets.isEmpty()) vm.put("seriesTargets", seriesTargets);
         vm.put("inRange", Map.of(
                 "color",
                 continuousPalette && !palette.isEmpty()
@@ -1725,6 +1944,10 @@ public class ChartOptionConverter {
         return value instanceof Number n && Double.isFinite(n.doubleValue()) ? (int) Math.round(n.doubleValue()) : fallback;
     }
 
+    private static double doubleNumber(Object value, double fallback) {
+        return value instanceof Number n && Double.isFinite(n.doubleValue()) ? n.doubleValue() : fallback;
+    }
+
     private static int clampInt(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
     }
@@ -1767,10 +1990,53 @@ public class ChartOptionConverter {
         next.put("typography", typography);
     }
 
+    /**
+     * 제거된 지도 계열별 스타일을 colorMap과 포인트 공통 외형으로 승격한다(chart-options 미러).
+     */
+    private void migrateLegacyGeoSeriesStyles(Map<String, Object> next, String chartType) {
+        if (!(next.get("geoSeriesStyles") instanceof Map<?, ?>)) return;
+        Map<String, Object> styles = map(next.get("geoSeriesStyles"));
+        Map<String, Object> colorMap = new LinkedHashMap<>(map(next.get("colorMap")));
+        Map<String, Object> point = new LinkedHashMap<>(map(next.get("geoscatter")));
+        List<String> pointKeys = List.of(
+                "opacity", "borderColor", "borderWidth", "symbol", "symbolSize",
+                "showEffectOn", "rippleScale", "ripplePeriod", "rippleBrushType");
+
+        for (Map.Entry<String, Object> entry : styles.entrySet()) {
+            Map<String, Object> style = map(entry.getValue());
+            Object color = style.get("color");
+            if (!colorMap.containsKey(entry.getKey()) && color instanceof String value && !value.isBlank()) {
+                colorMap.put(entry.getKey(), value);
+            }
+            if ("geoscatter".equals(chartType)) {
+                for (String key : pointKeys) {
+                    if (!point.containsKey(key) && style.get(key) != null) point.put(key, style.get(key));
+                }
+            }
+        }
+
+        if (!colorMap.isEmpty()) next.put("colorMap", colorMap);
+        if ("geoscatter".equals(chartType) && !point.isEmpty()) next.put("geoscatter", point);
+        next.remove("geoSeriesStyles");
+    }
+
     private Map<String, Object> migrateLegacyInteractionOptions(Map<String, Object> options, String chartType) {
         Map<String, Object> next = deepMerge(new LinkedHashMap<>(), options);
+        if ("map".equals(chartType) && (next.get("variant") == null || "basic".equals(next.get("variant")))) {
+            next.put("variant", "map");
+        }
+        if ("geoscatter".equals(chartType) && (next.get("variant") == null || "basic".equals(next.get("variant")))) {
+            next.put("variant", "scatter");
+        }
         migrateLegacyTypographyMode(next);
         migrateLegacyTypographyFontFamily(next);
+        migrateLegacyGeoSeriesStyles(next, chartType);
+        if (next.get("tooltip") instanceof Map<?, ?>) {
+            Map<String, Object> tooltip = new LinkedHashMap<>(map(next.get("tooltip")));
+            tooltip.remove("contentMode");
+            tooltip.remove("template");
+            next.put("tooltip", tooltip);
+        }
         boolean cartesian = switch (chartType) {
             case "bar", "line", "scatter", "boxplot", "heatmap" -> true;
             default -> false;
@@ -1809,10 +2075,8 @@ public class ChartOptionConverter {
         if (!tooltip.containsKey("enabled") && legacyTooltip.containsKey("enabled")) {
             tooltip.put("enabled", legacyTooltip.get("enabled"));
         }
-        if (!tooltip.containsKey("template") && legacyTooltip.containsKey("template")) {
-            tooltip.put("contentMode", "custom");
-            tooltip.put("template", legacyTooltip.get("template"));
-        }
+        tooltip.remove("contentMode");
+        tooltip.remove("template");
         if (!emphasis.containsKey("enabled") && legacyEmphasis.containsKey("enabled")) {
             emphasis.put("enabled", legacyEmphasis.get("enabled"));
         }

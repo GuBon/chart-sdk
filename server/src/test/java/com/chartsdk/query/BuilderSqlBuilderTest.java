@@ -304,7 +304,7 @@ class BuilderSqlBuilderTest {
 
         assertThat(sql.text())
                 .contains("TABLESAMPLE SYSTEM (10) REPEATABLE (77)")
-                .contains("\"public\".\"sales\".\"amount\" AS \"amount\"")
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_area_value\"")
                 .doesNotContain("GROUP BY", SamplingMetadata.HIDDEN_GROUP_COUNT, SamplingMetadata.HIDDEN_TOTAL_COUNT);
         assertThat(sql.sampling().estimates().get(0).treatment()).isEqualTo("ROW_SAMPLE");
     }
@@ -453,7 +453,7 @@ class BuilderSqlBuilderTest {
                 "yAxis", List.of(Map.of("column", "id", "agg", "none"))
         ), "geoscatter", false))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("longitude) must be numeric");
+                .hasMessageContaining("longitude must be numeric");
 
         // 3컬럼 → 거부
         assertThatThrownBy(() -> BuilderSqlBuilder.generate(catalog, Map.of(
@@ -462,7 +462,7 @@ class BuilderSqlBuilderTest {
                 "yAxis", List.of(Map.of("column", "id", "agg", "none"), Map.of("column", "amount", "agg", "none"), Map.of("column", "customer_id", "agg", "none"))
         ), "geoscatter", false))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("one or two yAxis fields");
+                .hasMessageContaining("exactly one latitude field");
     }
 
     @Test
@@ -496,6 +496,72 @@ class BuilderSqlBuilderTest {
     }
 
     @Test
+    void geoPointProjectsAllRolesAndSeriesGroupingForScatterAndMapHeatmap() {
+        Map<String, Object> config = Map.of(
+                "table", "sales",
+                "xAxis", "amount",
+                "yAxis", List.of(Map.of("column", "id", "agg", "none")),
+                "seriesBy", "category",
+                "geoPoint", Map.of(
+                        "mode", "columns",
+                        "nameColumn", "category",
+                        "valueColumn", "amount",
+                        "sizeColumn", "customer_id",
+                        "colorColumn", "amount")
+        );
+
+        BuilderSqlBuilder.Sql scatter = BuilderSqlBuilder.generate(catalog, config, "geoscatter", false);
+        assertThat(scatter.text())
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_longitude\"")
+                .contains("\"public\".\"sales\".\"id\" AS \"__chartsdk_latitude\"")
+                .contains("CAST(\"public\".\"sales\".\"category\" AS text) AS \"__chartsdk_point_name\"")
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_point_value\"")
+                .contains("\"public\".\"sales\".\"customer_id\" AS \"__chartsdk_size\"")
+                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_color_value\"")
+                .contains("CAST(\"public\".\"sales\".\"category\" AS text) AS \"__chartsdk_series\"")
+                .doesNotContain("GROUP BY");
+
+        Map<String, Object> heatmapConfig = new java.util.LinkedHashMap<>(config);
+        heatmapConfig.put("geoSeriesType", "heatmap");
+        BuilderSqlBuilder.Sql heatmap = BuilderSqlBuilder.generate(catalog, heatmapConfig, "map", false);
+        assertThat(heatmap.text())
+                .contains("\"__chartsdk_longitude\"")
+                .contains("\"__chartsdk_latitude\"")
+                .contains("\"__chartsdk_point_value\"")
+                .contains("\"__chartsdk_color_value\"")
+                .contains("\"__chartsdk_series\"")
+                .doesNotContain("\"__chartsdk_area_name\"", "GROUP BY");
+    }
+
+    @Test
+    void spatialGeoRowsUseTheSameSamplingPlansAsOtherRawValues() {
+        BuilderSqlBuilder.Sql pointSystem = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoPoint", Map.of("mode", "spatial", "spatialColumn", "location", "valueColumn", "amount"),
+                "sample", Map.of("mode", "manual", "rate", 10, "seed", 77)
+        ), "geoscatter", false);
+        assertThat(pointSystem.text())
+                .contains("TABLESAMPLE SYSTEM (10) REPEATABLE (77)")
+                .contains("\"__chartsdk_point_value\"");
+        assertThat(pointSystem.sampling().estimates()).allSatisfy(estimate ->
+                assertThat(estimate.treatment()).isEqualTo("ROW_SAMPLE"));
+
+        BuilderSqlBuilder.Sql areaSystem = BuilderSqlBuilder.generate(catalog, Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "service_area",
+                        "nameColumn", "category",
+                        "valueColumn", "amount"),
+                "sample", Map.of("mode", "manual", "rate", 5, "seed", 91)
+        ), "map", false);
+        assertThat(areaSystem.text())
+                .contains("TABLESAMPLE SYSTEM (5) REPEATABLE (91)")
+                .contains("\"__chartsdk_geojson\"");
+        assertThat(areaSystem.sampling().approximate()).isTrue();
+    }
+
+    @Test
     void mapRequiresSingleValueField() {
         // 정상: 집계 1개 → GROUP BY 있는 SQL
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, Map.of(
@@ -511,7 +577,7 @@ class BuilderSqlBuilderTest {
                 "yAxis", List.of(Map.of("column", "amount", "agg", "sum"), Map.of("column", "id", "agg", "count"))
         ), "map", false))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("map requires exactly one yAxis");
+                .hasMessageContaining("map requires exactly one value field");
     }
 
     @Test

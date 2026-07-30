@@ -124,12 +124,17 @@ public class ChartService {
         CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
                 chart.version(), chart.sampling());
         Map<String, Object> response = new LinkedHashMap<>();
-        var displayRows = SeriesPivot.pivot(rows.rows(), chart.builderConfig());
+        var displayRows = SeriesPivot.pivot(rows.rows(), chart.builderConfig(), chart.chartType());
         response.put("chartId", chart.id());
         response.put("computedAt", rows.computedAt().toString());
         response.put("rowCount", displayRows.rowCount());
         response.put("truncated", rows.rows().truncated());
-        response.put("option", converter.convert(displayRows, chart.chartType(), chart.options()));
+        response.put("option", converter.convert(
+                displayRows,
+                chart.chartType(),
+                chart.options(),
+                chart.builderConfig()
+        ));
         if (includeRows) {
             response.put("columns", displayRows.columns());
             response.put("rows", displayRows.rows());
@@ -148,6 +153,7 @@ public class ChartService {
     }
 
     private Prepared prepareForSave(ChartSaveRequest input) {
+        assertMainTable(input.builderConfig());
         String defineMode = input.defineMode() == null ? "builder" : input.defineMode();
         String chartType = input.chartType() == null ? "bar" : input.chartType();
         if ("builder".equals(defineMode)) {
@@ -179,6 +185,21 @@ public class ChartService {
                 rows,
                 null
         );
+    }
+
+    private static void assertMainTable(Map<String, Object> builderConfig) {
+        Object table = builderConfig == null ? null : builderConfig.get("table");
+        boolean valid = table instanceof String relation && !relation.isBlank();
+        if (table instanceof Map<?, ?> relation) {
+            valid = relation.get("name") instanceof String name && !name.isBlank();
+        }
+        if (!valid) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "MAIN_TABLE_REQUIRED",
+                    "A primary table is required to save a chart."
+            );
+        }
     }
 
     private static ChartSaveRequest copy(ChartSaveRequest input, String defineMode, String sqlQuery, String chartType, String refreshMode) {
