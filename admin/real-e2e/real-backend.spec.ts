@@ -33,7 +33,6 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
 
   await page.goto('/charts/new');
   await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: DATASOURCE_NAME });
-  await page.getByTestId('base-table-selector').click();
   await page.getByTestId('schema-sidebar').getByPlaceholder('검색', { exact: true }).fill('korea_sigungu_statistics');
   await page.locator('aside').first()
     .getByRole('button', { name: /korea_sigungu_statistics.*geometry_demo/ })
@@ -51,11 +50,12 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
   await page.getByPlaceholder('차트 이름').fill(CHART_NAME);
   await page.locator('header').first().getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.getByText('저장되었습니다')).toBeVisible();
-  await expect(page).toHaveURL(/\/data\/real-postgis-e2e\/geometry_demo\/korea_sigungu_statistics\/\d+$/);
+  await expect(page).toHaveURL(/\/charts\/real-postgis-e2e\/geometry_demo\/korea_sigungu_statistics\/\d+$/);
+  const chartPath = new URL(page.url()).pathname;
   const chartId = Number(new URL(page.url()).pathname.split('/').at(-1));
   expect(chartId).toBeGreaterThan(0);
 
-  await page.goto(`/charts/${chartId}`);
+  await page.goto(chartPath);
   await expect(page.getByPlaceholder('차트 이름')).toHaveValue(CHART_NAME);
   await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '__chartsdk_area_name' })).toBeVisible();
@@ -80,7 +80,7 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
   await expect(page.getByText('토큰을 발급했습니다')).toBeVisible();
   await expect(page.getByRole('cell', { name: 'real-e2e-user', exact: true })).toBeVisible();
 
-  await page.goto(`/charts/${chartId}`);
+  await page.goto(chartPath);
   await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   await page.locator('header').first().getByRole('button', { name: '임베드 코드', exact: true }).click();
   const embedDialog = page.getByRole('dialog', { name: '임베드 코드' });

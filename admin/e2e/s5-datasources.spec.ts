@@ -22,22 +22,17 @@ test.describe('S5 데이터소스 관리', () => {
     await page.goto('/datasources');
 
     await page.getByRole('link', { name: 'analytics-db' }).click();
-    await expect(page).toHaveURL('/data/analytics-db');
+    await expect(page).toHaveURL('/charts/analytics-db?view=schema');
     await expect(page.getByRole('heading', { name: 'analytics-db' })).toBeVisible();
-    await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
-    await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible();
-
-    await page.getByRole('link', { name: '스키마 탐색' }).click();
-    await expect(page).toHaveURL('/data/analytics-db?view=schema');
     await page.getByRole('link', { name: 'public' }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public?view=relations');
+    await expect(page).toHaveURL('/charts/analytics-db/public?view=relations');
     await page.getByRole('navigation', { name: '스키마 보기' }).getByRole('link', { name: '차트', exact: true }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public');
+    await expect(page).toHaveURL('/charts/analytics-db/public');
     await expect(page.locator('#chart-datasource-filter')).toHaveValue('analytics-db');
     await expect(page.getByText('일별 방문자', { exact: true })).toBeVisible();
 
-    await page.getByRole('link', { name: '관계 탐색' }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public?view=relations');
+    await page.getByRole('link', { name: '데이터 탐색' }).click();
+    await expect(page).toHaveURL('/charts/analytics-db/public?view=relations');
     const search = page.getByRole('textbox', { name: '관계 검색' });
     await search.fill('users');
     await expect(page.getByRole('link', { name: 'users' })).toBeVisible();
@@ -45,17 +40,17 @@ test.describe('S5 데이터소스 관리', () => {
     await search.clear();
 
     await page.getByRole('link', { name: 'sales' }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public/sales?view=columns');
+    await expect(page).toHaveURL('/charts/analytics-db/public/sales?view=columns');
     await expect(page.getByRole('heading', { name: 'sales', exact: true })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '컬럼명' })).toBeVisible();
 
     await page.getByRole('navigation', { name: '테이블 보기' }).getByRole('link', { name: '차트', exact: true }).click();
-    await expect(page).toHaveURL('/data/analytics-db/public/sales');
+    await expect(page).toHaveURL('/charts/analytics-db/public/sales');
     await expect(page.locator('#chart-type-filter')).toBeVisible();
     const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
     await expect(visitorChart).toBeVisible();
     await expect(visitorChart.getByRole('link', { name: '편집' }))
-      .toHaveAttribute('href', '/data/analytics-db/public/sales/13');
+      .toHaveAttribute('href', '/charts/analytics-db/public/sales/13');
   });
 
   test('추가 모달은 생성 시 비밀번호를 요구하고 저장 후 목록에 반영한다', async ({ page }) => {
@@ -77,6 +72,20 @@ test.describe('S5 데이터소스 관리', () => {
 
     await expect(page.getByText('reporting-db')).toBeVisible();
     await expect(page.getByText('reporting.internal : 5432')).toBeVisible();
+  });
+
+  test('차트 생성 경로와 충돌하는 new 이름은 등록할 수 없다', async ({ page }) => {
+    await page.goto('/datasources');
+    await page.getByRole('button', { name: '데이터소스 추가' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('analytics-db').fill('new');
+    await dialog.getByPlaceholder('db.internal').fill('db.internal');
+    await dialog.getByRole('textbox', { name: 'analytics', exact: true }).fill('analytics');
+    await dialog.getByPlaceholder('reader').fill('reader');
+    await dialog.locator('input[type="password"]').fill('secret');
+
+    await expect(dialog.getByText('new는 차트 생성 경로에 사용되어 데이터소스 이름으로 등록할 수 없습니다.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '저장' })).toBeDisabled();
   });
 
   test('사용 중인 데이터소스 삭제는 409 경고를 인라인으로 보여준다', async ({ page }) => {
@@ -104,7 +113,7 @@ test.describe('S5 데이터소스 관리', () => {
     await dialog.getByPlaceholder('analytics-db').fill('analytics-db-2');
     await dialog.getByRole('button', { name: '저장' }).click();
     const renamedDatasource = page.getByRole('link', { name: 'analytics-db-2' });
-    await expect(renamedDatasource).toHaveAttribute('href', '/data/analytics-db-2');
+    await expect(renamedDatasource).toHaveAttribute('href', '/charts/analytics-db-2?view=schema');
   });
 
   test('수정 시 비밀번호를 비우면 PUT 요청에 dbPassword가 없다', async ({ page }) => {

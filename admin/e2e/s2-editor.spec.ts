@@ -1,10 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
 async function selectBase(page: Page, name: string | RegExp) {
-  const change = page.getByRole('button', { name: '원본 테이블 변경', exact: true });
-  if (await change.count()) await change.click();
-  else await page.getByTestId('base-table-selector').click();
-  await expect(page.getByTestId('table-selection-banner')).toContainText('원본 테이블 선택 중');
   await page.locator('aside').first().getByRole('button', { name }).click();
 }
 
@@ -64,7 +60,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   });
 
   test('미리보기는 720px을 넘어 확장되고 끝까지 줄인 데이터·노코드 패널은 자동으로 접힌다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
 
     const previewWorkspace = page.getByTestId('visual-editor-workspace');
     const builderWorkspace = page.getByTestId('data-builder-workspace');
@@ -117,9 +113,9 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
       if (message.type() === 'error' && message.text().includes('[ECharts]')) echartsErrors.push(message.text());
     });
 
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
 
-    await expect(page).toHaveURL('/data/sales-db/public/sales/12');
+    await expect(page).toHaveURL('/charts/sales-db/public/sales/12');
 
     const sidePanels = page.locator('aside');
     await expect(sidePanels.last().locator('canvas')).toBeVisible();
@@ -147,31 +143,19 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(tree.getByText('numeric', { exact: true })).toBeVisible();
   });
 
-  test('원본·조인 선택 대상이 왼쪽 패널에 표시되고 검색 포커스·Esc 취소가 동작한다', async ({ page }) => {
+  test('왼쪽 테이블은 원본으로 바로 선택되고 조인 선택은 검색 포커스·Esc 취소가 동작한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
 
-    const baseSelector = page.getByTestId('base-table-selector');
     await expect(page.getByText('읽기 전용 조회')).toHaveCount(0);
-    await expect(baseSelector).toHaveCSS('height', '32px');
-    await expect(baseSelector.locator('svg')).toHaveCount(1);
-    await baseSelector.click();
-    await expect(baseSelector).toHaveAttribute('aria-pressed', 'true');
-    await expect(baseSelector).toContainText('선택 중');
-    await expect(baseSelector.locator('svg')).toHaveCount(0);
-    await expect(page.getByTestId('table-selection-banner')).toContainText('원본 테이블 선택 중');
-    await expect(page.getByTestId('table-selection-banner').getByRole('status')).toHaveCSS('white-space', 'nowrap');
-    await expect(page.locator('#schema-search')).toBeFocused();
-
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('table-selection-banner')).toHaveCount(0);
-    await expect(baseSelector).toHaveAttribute('aria-pressed', 'false');
-
+    await expect(page.getByTestId('base-table-selector')).toHaveCount(0);
     await selectBase(page, 'sales public');
-    await expect(baseSelector).toContainText('public.sales');
+    await expect(page.locator('aside').first().getByRole('button', { name: 'sales public' })).toHaveClass(/bg-blue-50/);
+    await expect(page.getByText('public.sales', { exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
     await expect(page.getByTestId('table-selection-banner')).toContainText('1번째 조인 테이블 선택 중');
+    await expect(page.locator('#schema-search')).toBeFocused();
     await expect(page.locator('aside').first().getByRole('button', { name: 'sales public' })).toBeDisabled();
     await page.locator('aside').first().getByRole('button', { name: 'orders public' }).click();
 
@@ -243,8 +227,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await selectBase(page, /events/);
     await expect(page.locator('aside').first().getByRole('button', { name: 'events analytics' })).toBeVisible();
 
-    // 노코드 테이블 셀렉트 값은 스키마 한정 키
-    await expect(page.getByTestId('base-table-selector')).toContainText('analytics.events');
+    await expect(page.getByText('analytics.events', { exact: true })).toBeVisible();
 
     await page.getByRole('combobox', { name: 'X축' }).selectOption('kind');
     await page.getByRole('button', { name: '+ 값 추가' }).click();
@@ -276,7 +259,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   });
 
   test('시각화 옵션 배치를 자동·오른쪽·아래쪽으로 선택하고 사용자 선택을 저장한다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
 
     const workspace = page.getByTestId('visual-editor-workspace');
     const dockSelect = page.getByRole('combobox', { name: '옵션 패널 배치' });
@@ -298,7 +281,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   });
 
   test('가로·세로 프리셋과 직접 크기 편집, 패널별 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
     const designCanvas = page.getByTestId('chart-design-canvas');
@@ -348,7 +331,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     const dataRail = page.getByTestId('schema-sidebar-rail');
     await expect(dataRail).toBeVisible();
 
-    await page.getByRole('button', { name: '노코드 구성·결과 접기' }).click();
+    await page.getByRole('button', { name: '데이터 구성·결과 접기' }).click();
     await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
     const builderRail = page.getByTestId('data-builder-workspace-rail');
     await expect(builderRail).toBeVisible();
@@ -388,7 +371,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('button', { name: '데이터 패널 펼치기' }).click();
     await expect(page.getByTestId('schema-sidebar')).toBeVisible();
     await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
-    await page.getByRole('button', { name: '노코드 구성·결과 펼치기' }).click();
+    await page.getByRole('button', { name: '데이터 구성·결과 펼치기' }).click();
     await expect(page.getByTestId('data-builder-workspace')).toBeVisible();
   });
 
@@ -398,7 +381,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder') builderRuns += 1;
     });
 
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     // 저장 차트 재진입 시 정의 복원에 필요한 초기 조회는 이 테스트의 편집 동작과 무관하다.
     builderRuns = 0;
@@ -467,7 +450,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
         return match(request.postDataJSON().options ?? {});
       });
 
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     const preview = page.getByTestId('chart-preview');
     await expect(preview.locator('canvas')).toBeVisible();
 
@@ -811,7 +794,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   });
 
   test('표본 추출 설정은 테이블 변경과 축 재구성 뒤에도 유지된다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.getByRole('switch', { name: '표본 추출' })).toBeVisible();
 
     await page.getByRole('switch', { name: '표본 추출' }).click();
@@ -857,7 +840,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await selectBase(page, /sales_summary/);
     await expect(page.locator('aside').first().getByText('View', { exact: true })).toBeVisible();
 
-    await expect(page.getByTestId('base-table-selector')).toContainText('analytics.sales_summary');
+    await expect(page.getByText('analytics.sales_summary', { exact: true })).toBeVisible();
     await page.getByRole('combobox', { name: 'X축' }).selectOption('category');
     await page.getByRole('button', { name: '+ 값 추가' }).click();
     await useSumValue(page);
@@ -879,13 +862,12 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     const stale = tree.getByRole('button', { name: /stale_sales_mv/ });
     await expect(stale).toBeDisabled();
     await expect(stale).toHaveAttribute('title', 'REFRESH가 필요한 Materialized View입니다.');
-    await page.getByTestId('base-table-selector').click();
     await expect(stale).toBeDisabled();
 
     const ready = tree.getByRole('button', { name: /monthly_sales_mv/ });
     await expect(ready).toBeEnabled();
     await ready.click();
-    await expect(page.getByTestId('base-table-selector')).toContainText('analytics.monthly_sales_mv');
+    await expect(page.getByText('analytics.monthly_sales_mv', { exact: true })).toBeVisible();
   });
 
   test('테이블 조인을 구성하면 생성 SQL에 JOIN이 들어가고 컬럼이 qualified 된다 (11장)', async ({ page }) => {
@@ -987,6 +969,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByPlaceholder('차트 이름').fill('월별 매출');
     await page.getByRole('button', { name: '저장', exact: true }).click();
     await expect(page.getByText('저장되었습니다')).toBeVisible();
+    await expect(page).toHaveURL(/\/charts\/analytics-db\/public\/sales\/\d+$/);
   });
 
   test('전역 초기화는 이름·Builder·차트 옵션을 마지막 저장 상태로 복원한다', async ({ page }) => {
@@ -1044,7 +1027,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     // 소스를 sales-db 로 전환 — 모달 없이 구성(X축) 유지
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
     await expect(page.getByText('데이터소스를 변경할까요?')).toBeHidden();
-    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeHidden();
+    await expect(page.getByText('원본 테이블을 변경할까요?')).toBeHidden();
     await expect(page.getByRole('combobox', { name: '데이터소스' })).toHaveValue('2');
     await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue('category'); // 구성 유지
     // 현재 탐색 중인 sales-db(ds2) 목록에서 customers를 조인 대상으로 선택한다.
@@ -1052,20 +1035,18 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByTestId('join-table-selector-0')).toContainText('public.customers');
   });
 
-  test('사이드바에서 다른 테이블을 클릭하면 기준 테이블 변경 확인 모달을 거친다', async ({ page }) => {
+  test('설정된 차트에서 다른 원본 테이블을 클릭하면 변경 확인 모달을 거친다', async ({ page }) => {
     await buildChart(page); // base = ds1 sales
-    // 원본 선택 칸을 누른 뒤 같은 소스의 다른 테이블(users) 선택 → 확인 모달
     await selectBase(page, /users/);
-    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeVisible();
-    // 취소 → base 유지
-    await page.getByRole('button', { name: '취소', exact: true }).click();
-    await expect(page.getByText('기준 테이블을 바꿀까요?')).toBeHidden();
-    await expect(page.getByTestId('base-table-selector')).toContainText('public.sales');
-    // 다시 클릭 → 변경 → base 교체 + 구성(X축) 초기화
+    await expect(page.getByText('원본 테이블을 변경할까요?')).toBeVisible();
+    await expect(page.getByText(/X축.*Y축.*설정되어 있습니다/)).toBeVisible();
+    await page.getByRole('button', { name: '아니요', exact: true }).click();
+    await expect(page.getByText('원본 테이블을 변경할까요?')).toBeHidden();
+    await expect(page.getByText('public.sales', { exact: true })).toBeVisible();
     await selectBase(page, /users/);
-    await page.getByRole('button', { name: '변경', exact: true }).click();
-    await expect(page.getByTestId('base-table-selector')).toContainText('public.users');
-    await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue(''); // 기준 변경 시 구성 초기화
+    await page.getByRole('button', { name: '예', exact: true }).click();
+    await expect(page.getByText('public.users', { exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'X축' })).toHaveValue('');
   });
 
   test('미저장 변경 상태에서 목록 이동은 이탈확인 모달을 거친다', async ({ page }) => {

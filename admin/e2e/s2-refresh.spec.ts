@@ -17,7 +17,7 @@ async function openDataRefresh(page: Page) {
 
 test.describe('S2 저장 차트 캐시 갱신', () => {
   test('지금 갱신은 캐시 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     await expect(page.getByTestId('chart-design-canvas').getByText(/데이터 기준/)).toBeVisible();
     const action = await openDataRefresh(page);
@@ -38,7 +38,7 @@ test.describe('S2 저장 차트 캐시 갱신', () => {
   });
 
   test('데이터 기준 시각 토글은 편집기 미리보기 캡션을 실제로 숨긴다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     const canvas = page.getByTestId('chart-design-canvas');
     await expect(canvas.getByText(/데이터 기준/)).toBeVisible();
@@ -56,7 +56,7 @@ test.describe('S2 저장 차트 캐시 갱신', () => {
   });
 
   test('갱신 결과에 새 자동 계열 색상이 생겨도 편집기를 미저장 상태로 만들지 않는다', async ({ page }) => {
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
     await page.evaluate(() => {
@@ -95,7 +95,7 @@ test.describe('S2 저장 차트 캐시 갱신', () => {
     await expect(action.getByRole('button', { name: '지금 갱신', exact: true })).toBeDisabled();
     await expect(action).toContainText('차트를 저장한 뒤 갱신할 수 있습니다.');
 
-    await page.goto('/charts/12');
+    await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('저장 전 변경');
     action = await openDataRefresh(page);
