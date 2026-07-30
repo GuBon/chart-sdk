@@ -108,12 +108,73 @@ describe('chart color selection', () => {
     expect(locateColorSelection(option, 'scatter', selection)).toEqual({ seriesIndex: 0, dataIndex: 2 });
   });
 
+  it('map 대분류의 geo heatmap 점은 영역이 아니라 좌표 항목으로 식별한다', () => {
+    const option = {
+      geo: { map: 'kr-sido' },
+      series: [{
+        type: 'heatmap',
+        coordinateSystem: 'geo',
+        name: '온라인',
+        data: [{ name: '서울점', value: [126.978, 37.5665, 120, 30] }],
+      }],
+    };
+
+    const selection = colorSelectionFromChartClick('map', {
+      componentType: 'series',
+      seriesIndex: 0,
+      dataIndex: 0,
+    }, option);
+    expect(selection).toMatchObject({
+      kind: 'geoscatter',
+      dimensions: [126.978, 37.5665],
+      occurrence: 0,
+    });
+    expect(locateColorSelection(option, 'map', selection)).toEqual({ seriesIndex: 0, dataIndex: 0 });
+  });
+
   it('원형 정적 대상은 중복 이름을 한 번만 노출한다', () => {
     expect(staticColorSelections(
       'pie',
       [{ name: '지역' }, { name: '값' }],
       [['서울', 10], ['서울', 20], ['부산', 30]],
     ).map((item) => item.label)).toEqual(['서울', '부산']);
+  });
+
+  it('지도 계열 기준값을 정적 색상 대상으로 노출한다', () => {
+    const selections = staticColorSelections(
+      'geoscatter',
+      [
+        { name: '__chartsdk_longitude', type: 'number' },
+        { name: '__chartsdk_latitude', type: 'number' },
+        { name: '__chartsdk_series', type: 'text' },
+      ],
+      [[126.978, 37.5665, '온라인'], [129.0756, 35.1796, '매장'], [127.1, 37.4, '온라인']],
+    );
+
+    expect(selections).toEqual([
+      { scope: 'series', seriesName: '온라인', label: '온라인' },
+      { scope: 'series', seriesName: '매장', label: '매장' },
+    ]);
+  });
+
+  it('계열 기준이 없는 지도는 변환기와 같은 기본 계열명을 사용한다', () => {
+    expect(staticColorSelections(
+      'map',
+      [{ name: '__chartsdk_area_name' }, { name: '__chartsdk_area_value' }],
+      [['서울특별시', 120]],
+    ).map((selection) => selection.seriesName)).toEqual(['값']);
+
+    expect(staticColorSelections(
+      'map',
+      [{ name: '__chartsdk_longitude' }, { name: '__chartsdk_latitude' }],
+      [[126.978, 37.5665]],
+    ).map((selection) => selection.seriesName)).toEqual(['밀도']);
+
+    expect(staticColorSelections(
+      'geoscatter',
+      [{ name: '__chartsdk_longitude' }, { name: '__chartsdk_latitude' }],
+      [[126.978, 37.5665]],
+    ).map((selection) => selection.seriesName)).toEqual(['포인트']);
   });
 
   it('버블 크기 컬럼은 색상 시리즈 대상에서 제외한다', () => {

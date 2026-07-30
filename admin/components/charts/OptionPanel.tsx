@@ -48,6 +48,7 @@ export type OptionDock = Exclude<OptionDockPreference, 'auto'>;
 interface Props {
   chartType: MajorType;
   options: Options;
+  builderConfig: Record<string, any> | null;
   columns: { name: string; type: string }[];
   rows: unknown[][];
   hasResult: boolean;
@@ -80,6 +81,7 @@ interface Props {
 export function OptionPanel({
   chartType,
   options,
+  builderConfig,
   columns,
   rows,
   hasResult,
@@ -120,13 +122,19 @@ export function OptionPanel({
     : null;
   const normalizedQuery = query.toLowerCase().trim();
   const allDefinitions = visibleDefs(chartType, options);
-  const definitions = allDefinitions.filter(
+  const matchedDefinitions = allDefinitions.filter(
     (definition) => !normalizedQuery
       || definition.label.toLowerCase().includes(normalizedQuery)
       || definition.section.toLowerCase().includes(normalizedQuery)
       || optionEditorSectionOf(definition).toLowerCase().includes(normalizedQuery)
       || OPTION_EDITOR_TAB_LABELS[optionEditorTabOf(definition)].toLowerCase().includes(normalizedQuery),
   );
+  // 색상 방향 반전은 테마 색상 컨트롤 안에 렌더한다. 검색 시에도 팔레트와 함께 보여 준다.
+  const definitions = normalizedQuery
+    && matchedDefinitions.some((definition) => definition.key === 'paletteReversed')
+    && !matchedDefinitions.some((definition) => definition.key === 'palette')
+    ? allDefinitions.filter((definition) => definition.key === 'palette' || matchedDefinitions.includes(definition))
+    : matchedDefinitions;
   const availableTabs = optionEditorTabsFor(chartType).filter(
     (tab) => allDefinitions.some((definition) => optionEditorTabOf(definition) === tab),
   );
@@ -411,7 +419,7 @@ export function OptionPanel({
                   {open && (
                     <div className="mt-2.5 flex flex-col gap-2.5">
                       {section === '글꼴' && <TypographyPolicy typography={typography} />}
-                      {sectionDefinitions.map((definition) => definition.control === 'mapViewport' ? (
+                      {sectionDefinitions.map((definition) => definition.key === 'paletteReversed' ? null : definition.control === 'mapViewport' ? (
                         <MapViewportControl
                           key={definition.key}
                           chartType={chartType}
@@ -431,8 +439,10 @@ export function OptionPanel({
                           def={definition}
                           value={valueOf(definition)}
                           chartType={chartType}
+                          chartOptions={options}
                           columns={columns}
                           rows={rows}
+                          builderConfig={builderConfig}
                           colorTargets={colorTargets}
                           hasResult={hasResult}
                           disabled={definition.key === 'refreshNow'
@@ -464,6 +474,10 @@ export function OptionPanel({
                           onColorPickingChange={onColorPickingChange}
                           onApplySelectedColor={applySelectedColor}
                           onClearSelectedColor={clearSelectedColorOverride}
+                          onPaletteReversedChange={(reversed) => {
+                            const direction = allDefinitions.find((candidate) => candidate.key === 'paletteReversed');
+                            if (direction) setValue(direction, reversed);
+                          }}
                           onDeleteSelectedChartItem={deleteSelectedChartItem}
                           onClearAllChartItems={clearAllChartItemOverrides}
                         />

@@ -31,7 +31,7 @@ function snippet(chartId: number, token: string) {
   return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${sdkSrc()}"\n        data-api-base="${apiBase()}"></script>`;
 }
 
-export function EmbedModal({ chart, onClose }: { chart: ChartSummary; onClose: () => void }) {
+export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>; onClose: () => void }) {
   const [tokens, setTokens] = useState<UserToken[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [tokenId, setTokenId] = useState<number | null>(null);

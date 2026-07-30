@@ -14,7 +14,8 @@ export const charts: ChartSummary[] = ([
   { id: 14, name: '카테고리별 판매', description: '상품 카테고리별 판매량 비교', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-08T11:20:00Z' },
   { id: 15, name: '분기별 이익', description: null, chartType: 'pie', datasourceId: 2, updatedAt: '2026-06-05T16:45:00Z' },
   { id: 16, name: '시간대별 트래픽', description: '시간대별 API 요청 수', chartType: 'line', datasourceId: 1, updatedAt: '2026-06-03T08:10:00Z' },
-  // 추가 8개(5월) — 페이지네이션(총 13 = 12+1)·종류/데이터소스 필터·정렬 검증용. 전부 6월보다 과거라 2페이지로 밀리는 건 #24 하나뿐.
+  // 추가 8개(5월) — 페이지네이션(총 13 = 8+5)·종류/데이터소스 필터·정렬 검증용.
+  // 최신 수정순에서 1페이지는 #12~#19, 2페이지는 #20~#24로 결정된다.
   // '가격대별 분포'는 name_asc 정렬에서 결정적 첫 항목(ㄱ 초성). scatter 2개(17·18)로 종류 필터 '분포' 검증.
   { id: 17, name: '가격대별 분포', description: '상품 가격대 산포', chartType: 'scatter', datasourceId: 1, updatedAt: '2026-05-28T09:00:00Z' },
   { id: 18, name: '지역별 고객 분포', description: '지역별 고객 산포', chartType: 'scatter', datasourceId: 2, updatedAt: '2026-05-25T09:00:00Z' },
@@ -239,7 +240,7 @@ export const tokens: UserToken[] = [
   { tokenId: 45, userId: 10, createdAt: '2026-01-20T00:00:00Z', expiresAt: '2027-01-20T00:00:00Z', isActive: false, token: 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjEwLCJqdGkiOjQ1fQ.k9Lw' },
 ];
 
-/** /charts/:id 복원용 상세(목록 항목을 기반으로 빌더 기본형 부여) */
+/** 저장된 차트 편집 복원용 상세(목록 항목을 기반으로 빌더 기본형 부여) */
 export function chartDetail(summary: ChartSummary): Chart {
   return {
     ...summary, // chartType·datasourceId 포함

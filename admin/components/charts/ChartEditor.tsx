@@ -2,12 +2,12 @@
 
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, ChevronUp, ChevronsRight, RotateCcw } from 'lucide-react';
+import { ChevronLeft, ChevronUp, ChevronsRight, Plus, RotateCcw } from 'lucide-react';
 import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
 import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
-import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
+import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, GeoSeriesType, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
 import { activeTables, builderExecutionIssue, builderValidationIssue, emptyBuilder, emptyJoin, isTableQueryMode, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import { chartSaveIssue } from '@/lib/chartSave';
@@ -57,6 +57,31 @@ function rawPreviewSignature(config: BuilderConfig): string {
     where: config.where ?? [],
     orderBy: rawOrder,
   });
+}
+
+function configuredNoCodeSettings(config: BuilderConfig): string[] {
+  const settings: string[] = [];
+  const hasGeoPointFields = config.geoPoint != null
+    && Object.entries(config.geoPoint).some(([key, value]) => key !== 'mode' && value != null && value !== '');
+  const hasGeoAreaFields = config.geoArea != null
+    && (config.geoArea.mode === 'spatial'
+      || Object.entries(config.geoArea).some(([key, value]) => key !== 'mode' && value != null && value !== ''));
+
+  if ((config.joins?.length ?? 0) > 0) settings.push('조인');
+  if (config.xAxis || config.xAxisBucket) settings.push('X축');
+  if (config.yAxis.length > 0) settings.push('Y축');
+  if (config.seriesBy) settings.push('계열');
+  if (config.where.length > 0) settings.push('조건');
+  if (config.orderBy) settings.push('정렬');
+  if (config.sample) settings.push('표본 추출');
+  if (config.limit != null) settings.push('조회 제한');
+  if (
+    hasGeoPointFields
+    || hasGeoAreaFields
+    || config.geoSeriesType === 'heatmap'
+    || config.geoSeriesType === 'effectScatter'
+  ) settings.push('지도 데이터');
+  return settings;
 }
 
 function useStoredBoolean(key: string, initial: boolean) {
@@ -209,7 +234,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [pendingBaseTable, setPendingBaseTable] = useState<SchemaTable | null>(null);
   const [tableSelectionTarget, setTableSelectionTarget] = useState<TableSelectionTarget | null>(null);
   const [tableSelectionFocusKey, setTableSelectionFocusKey] = useState(0);
-  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leavePath, setLeavePath] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
   const [embedOpen, setEmbedOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false);
@@ -284,8 +309,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
         if (definitionResult.status === 'fulfilled') {
           const c = definitionResult.value;
-          const restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
+          let restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
           let restoredOptions = optionsWithDefaults(c.chartType, c.options);
+          if (c.chartType === 'map' || c.chartType === 'geoscatter') {
+            restoredBuilder = normalizeBuilderForChartType({
+              ...restoredBuilder,
+              geoSeriesType: restoredOptions.variant as GeoSeriesType,
+            }, c.chartType);
+          }
           const restoredAutoColors = autoColorMapFromOption(restoredPreviewOption);
           if (restoredAutoColors) restoredOptions = { ...restoredOptions, autoColorMap: restoredAutoColors };
 
@@ -343,14 +374,19 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     if (!result || resultKind !== 'chart') return;
     const t = setTimeout(() => {
       void queryApi
-        .preview({ chartType, options, rows: { columns: result.columns, rows: result.rows } })
+        .preview({
+          chartType,
+          options,
+          builderConfig: builder,
+          rows: { columns: result.columns, rows: result.rows },
+        })
         .then((r) => {
           if (requestId === optionPreviewRequestId.current) applyResolvedOption(r.option);
         })
         .catch(() => {});
     }, 200);
     return () => clearTimeout(t);
-  }, [chartType, options, result, resultKind]);
+  }, [builder, chartType, options, result, resultKind]);
 
   // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
   const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth', {
@@ -475,11 +511,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setPendingBaseTable(null);
     setTableSelectionTarget(target);
 
-    const currentRef = target.kind === 'base'
-      ? builder.table
-      : target.kind === 'join'
-        ? builder.joins?.[target.index]?.table
-        : null;
+    const currentRef = target.kind === 'join'
+      ? builder.joins?.[target.index]?.table
+      : null;
     if (currentRef) setDatasourceId(currentRef.datasourceId);
 
     setLeftCollapsed(false);
@@ -543,10 +577,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }
   };
 
-  // 기준 테이블 확정(구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
+  // 원본 테이블 확정(나머지 구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
-    // 표본 설정은 방식(자동/갯수)·seed 로 테이블 독립이므로 그대로 유지(정확도는 절대 갯수가 결정).
-    setBuilder({ table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name }, joins: [], xAxis: null, xAxisBucket: null, seriesBy: null, seriesOrder: 'asc', yAxis: [], where: [], orderBy: null, sample: builder.sample ?? null, geoPoint: undefined, geoArea: undefined });
+    setBuilder({
+      ...emptyBuilder(),
+      table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name },
+    });
     setTableSelectionTarget(null);
     resetResults();
     setDirty(true);
@@ -554,18 +590,15 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     await previewRawTable(t);
   };
 
-  // 왼쪽 목록의 선택 결과를 현재 선택 대상(base/기존 조인/새 조인)에 적용한다.
+  // 조인 선택 중이면 조인에 적용하고, 그 외에는 왼쪽 테이블을 원본으로 적용한다.
   const selectTable = async (t: SchemaTable) => {
-    if (!tableSelectionTarget) return;
-
     const refOf = (table: SchemaTable): TableRef => ({ datasourceId: table.datasourceId, schema: table.schema, name: table.name });
-    if (tableSelectionTarget.kind === 'base') {
+    if (!tableSelectionTarget) {
       if (builder.table && tableRefKey(builder.table) === tableRefKey(t)) {
-        setTableSelectionTarget(null);
         await previewRawTable(t);
         return;
       }
-      if (builder.table) {
+      if (builder.table && configuredNoCodeSettings(builder).length > 0) {
         setPendingBaseTable(t);
         return;
       }
@@ -822,12 +855,23 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }
   };
 
-  const goList = () => {
-    if (hasUnsavedChanges) setLeaveOpen(true);
-    else router.push('/');
+  const navigateFromEditor = (path: string) => {
+    if (hasUnsavedChanges) setLeavePath(path);
+    else router.push(path);
   };
 
+  const goList = () => navigateFromEditor('/');
+  const createChart = () => navigateFromEditor('/charts/new');
+
   const changeOptions = (next: Options) => {
+    if ((chartType === 'map' || chartType === 'geoscatter') && next.variant !== options.variant) {
+      const geoSeriesType = next.variant as GeoSeriesType;
+      const normalized = normalizeBuilderForChartType({ ...builder, geoSeriesType }, chartType);
+      setBuilder(normalized);
+      setColorSelection(null);
+      setColorPicking(false);
+      resetResults();
+    }
     setOptions(next);
     if (!result || resultKind !== 'chart') setOption(null);
     setDirty(true);
@@ -917,6 +961,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         <Button variant="ghost" size="sm" icon={<ChevronLeft className="size-4" />} onClick={goList}>
           목록
         </Button>
+        {savedId != null && (
+          <Button variant="secondary" size="sm" className="h-8" icon={<Plus className="size-3.5" />} onClick={createChart}>
+            차트 생성
+          </Button>
+        )}
         <div className="w-[280px]">
           <Input
             value={name}
@@ -927,7 +976,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             placeholder="차트 이름"
           />
         </div>
-        {savedId != null && <span className="text-[13px] text-text-tertiary">#{savedId}</span>}
         <div className="flex-1" />
         <Button
           variant="secondary"
@@ -964,11 +1012,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 datasources={datasources}
                 tables={tables.filter((t) => t.datasourceId === datasourceId)}
                 datasourceId={datasourceId}
-                selectedTable={tableSelectionTarget
-                  ? selectedTableKey
-                  : rawTable
-                    ? tableRefKey(rawTable)
-                    : null}
+                selectedTable={selectedTableKey}
                 selection={tableSelectionTarget && selectionLabel
                   ? { label: selectionLabel }
                   : null}
@@ -976,7 +1020,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 focusRequestKey={tableSelectionFocusKey}
                 onChangeDatasource={changeDatasource}
                 onSelectTable={selectTable}
-                onPreviewTable={previewRawTable}
                 onCancelSelection={cancelTableSelection}
                 onCollapse={() => {
                   cancelTableSelection();
@@ -990,7 +1033,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
         {builderCollapsed ? (
           <CollapsedPanelRail
-            label="노코드 구성·결과"
+            label="데이터 구성·결과"
             controls="data-builder-workspace"
             testId="data-builder-workspace-rail"
             onExpand={expandBuilderPanel}
@@ -1006,7 +1049,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   datasources={datasources}
                   tableSelectionTarget={tableSelectionTarget}
                   onRequestTableSelection={requestTableSelection}
-                  onPreviewBaseTable={previewRawTable}
                   onCollapse={() => setBuilderCollapsed(true)}
                   onChange={(b) => {
                     // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
@@ -1109,6 +1151,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 <OptionPanel
                   chartType={chartType}
                   options={options}
+                  builderConfig={builder}
                   columns={resultKind === 'chart' ? result?.columns ?? [] : []}
                   rows={resultKind === 'chart' ? result?.rows ?? [] : []}
                   hasResult={resultKind === 'chart' && !!result}
@@ -1147,7 +1190,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   onChangeChartType={(to, next) => {
                     // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
                     // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
-                    const normalized = normalizeBuilderForChartType(builder, to);
+                    const normalized = normalizeBuilderForChartType(
+                      to === 'map' || to === 'geoscatter'
+                        ? { ...builder, geoSeriesType: next.variant as GeoSeriesType }
+                        : builder,
+                      to,
+                    );
                     const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
                     setColorSelection(null);
                     setColorPicking(false);
@@ -1175,44 +1223,46 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </aside>
       </div>
 
-      {/* 기준 테이블 변경 확인 모달 */}
+      {/* 원본 테이블 변경 확인 모달 */}
       {pendingBaseTable != null && (
         <Modal
-          title="기준 테이블을 바꿀까요?"
+          title="원본 테이블을 변경할까요?"
           width={460}
           divided={false}
           onClose={cancelTableSelection}
           footer={
             <>
               <Button variant="secondary" size="sm" className="h-[34px]" onClick={cancelTableSelection}>
-                취소
+                아니요
               </Button>
               <Button size="sm" className="h-[34px]" onClick={() => { const t = pendingBaseTable; setPendingBaseTable(null); if (t) void applyBaseTable(t); }}>
-                변경
+                예
               </Button>
             </>
           }
         >
-          <p className="text-[13px] text-text-secondary">기준 테이블을 바꾸면 현재 구성(조인·축·조건)이 초기화됩니다. 다른 데이터소스의 테이블과 조인하려면 사이드바에서 소스만 바꾼 뒤 우측 &quot;조인&quot; 행에서 추가하세요.</p>
+          <p className="text-[13px] text-text-secondary">
+            현재 {configuredNoCodeSettings(builder).join('·')} 항목이 설정되어 있습니다. 정말 변경하시겠습니까? 변경하면 원본 테이블 외의 설정은 초기화됩니다.
+          </p>
         </Modal>
       )}
 
       {/* 이탈확인 모달 */}
-      {leaveOpen && (
+      {leavePath != null && (
         <Modal
           title="저장되지 않은 변경이 있습니다"
           width={460}
           divided={false}
-          onClose={() => setLeaveOpen(false)}
+          onClose={() => setLeavePath(null)}
           footer={
             <>
-              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setLeaveOpen(false)}>
+              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setLeavePath(null)}>
                 계속 편집
               </Button>
-              <Button variant="ghost" size="sm" className="h-[34px]" onClick={() => router.push('/')}>
+              <Button variant="ghost" size="sm" className="h-[34px]" onClick={() => router.push(leavePath)}>
                 저장 안 함
               </Button>
-              <Button size="sm" className="h-[34px]" disabled={saving} onClick={async () => { if (await save()) router.push('/'); }}>
+              <Button size="sm" className="h-[34px]" disabled={saving} onClick={async () => { if (await save()) router.push(leavePath); }}>
                 저장 후 나가기
               </Button>
             </>
@@ -1225,7 +1275,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       {/* 임베드 코드 모달(S3) — 저장된 차트에서만 */}
       {embedOpen && savedId != null && (
         <EmbedModal
-          chart={{ id: savedId, name: name || '차트', description: (options.description as string) || null, chartType, datasourceId: primaryDatasourceId ?? 0, updatedAt: new Date().toISOString() }}
+          chart={{ id: savedId }}
           onClose={() => setEmbedOpen(false)}
         />
       )}

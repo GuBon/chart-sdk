@@ -147,6 +147,31 @@ describe('차트 논리 크기와 글꼴 계약', () => {
       legendFontFamily: 'default',
     });
   });
+
+  it('구 지도 계열별 스타일은 계열 색상과 포인트 공통 스타일로 이관한다', () => {
+    const migrated = migrateLegacyInteractionOptions({
+      colorMap: { 매장: '#ABCDEF' },
+      geoSeriesStyles: {
+        온라인: {
+          color: '#0055AA',
+          opacity: 0.8,
+          borderWidth: 2,
+          symbol: 'triangle',
+          symbolSize: 16,
+        },
+        매장: { color: '#DD5500', opacity: 0.65 },
+      },
+    }, 'geoscatter');
+
+    expect(migrated.geoSeriesStyles).toBeUndefined();
+    expect(migrated.colorMap).toEqual({ 온라인: '#0055AA', 매장: '#ABCDEF' });
+    expect(migrated.geoscatter).toMatchObject({
+      opacity: 0.8,
+      borderWidth: 2,
+      symbol: 'triangle',
+      symbolSize: 16,
+    });
+  });
 });
 
 describe('제목 텍스트 방향', () => {

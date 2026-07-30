@@ -76,7 +76,7 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTable
           <p className="p-4 text-[13px] text-text-tertiary">
             {tab === 'result'
               ? '차트 구성을 완성하거나 축 없이 조건·정렬을 설정한 뒤 [실행]을 누르세요.'
-              : '왼쪽 데이터 패널 또는 노코드 구성의 원본 테이블을 누르면 원본 데이터가 표시됩니다.'}
+              : '왼쪽 데이터 패널에서 테이블을 선택하면 원본 데이터가 표시됩니다.'}
           </p>
         )}
       </div>

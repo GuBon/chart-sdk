@@ -428,32 +428,32 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
   it('map 검증 — 값 컬럼 1개', () => {
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }] }), 'map', TABLES)).toBeNull();
     expect(builderValidationIssue(bar({ yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'count' }] }), 'map', TABLES))
-      .toBe('지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.');
+      .toBe('영역 지도는 값 컬럼을 1개만 사용할 수 있습니다.');
   });
 
-  it('geoscatter 는 원본값(none)만 허용하고 normalize 가 좌표 2컬럼으로 정규화한다', () => {
+  it('geoscatter 는 원본 좌표를 경도·위도로 정규화하고 레거시 두 번째 Y를 크기 역할로 이관한다', () => {
     expect(aggChoicesForChart('geoscatter')).toHaveLength(1);
     const src = bar({ xAxisBucket: 'month', sample: { rate: 20 }, yAxis: [{ column: 'amount', agg: 'sum' }, { column: 'id', agg: 'avg' }, { column: 'customer_id', agg: 'count' }] });
     const out = normalizeBuilderForChartType(src, 'geoscatter');
     expect(out.xAxisBucket).toBeNull();
     expect(out.sample).toEqual({ rate: 20 });
-    expect(out.yAxis).toHaveLength(2);
+    expect(out.yAxis).toHaveLength(1);
     expect(out.yAxis.every((y) => y.agg === 'none')).toBe(true);
-    expect(out.geoPoint).toEqual({ mode: 'columns' });
+    expect(out.geoPoint).toMatchObject({ mode: 'columns', sizeColumn: 'id' });
   });
 
-  it('geoscatter 검증 — 경도·위도 숫자 필수, 최대 2컬럼', () => {
+  it('geoscatter 검증 — 경도·위도 숫자 필수, 위도는 단일 컬럼', () => {
     // 정상: 경도=amount(숫자), 위도=id(숫자)
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES)).toBeNull();
     // 텍스트 X(category) → 거부
     expect(builderValidationIssue(bar({ xAxis: 'category', yAxis: [{ column: 'id', agg: 'none' }] }), 'geoscatter', TABLES))
       .toBe('포인트 지도는 숫자 경도(X) 컬럼이 필요합니다.');
-    // 3컬럼 → 거부
+    // 위도 역할 2개 이상 → 거부
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'id', agg: 'none' }, { column: 'amount', agg: 'none' }, { column: 'customer_id', agg: 'none' }] }), 'geoscatter', TABLES))
-      .toBe('포인트 지도는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.');
+      .toBe('지도 좌표 입력은 위도 컬럼을 1개만 사용할 수 있습니다.');
     // 비숫자 위도 → 거부
     expect(builderValidationIssue(bar({ xAxis: 'amount', yAxis: [{ column: 'category', agg: 'none' }] }), 'geoscatter', TABLES))
-      .toBe('포인트 지도의 위도·크기값 컬럼은 숫자여야 합니다.');
+      .toBe('포인트 지도의 위도 컬럼은 숫자여야 합니다.');
   });
 
   it('geoscatter 공간 Point 모드는 X/Y 대신 Point와 선택 크기 컬럼을 검증한다', () => {
@@ -479,6 +479,60 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
     };
     expect(builderValidationIssue(crossSource, 'geoscatter', TABLES))
       .toBe('공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.');
+  });
+
+  it('map 히트맵은 포인트 입력 역할·계열 기준·원본값 표본을 함께 사용한다', () => {
+    const config = bar({
+      xAxis: 'amount',
+      yAxis: [{ column: 'id', agg: 'none' }],
+      seriesBy: 'date',
+      geoSeriesType: 'heatmap',
+      geoPoint: {
+        mode: 'columns',
+        nameColumn: 'category',
+        valueColumn: 'amount',
+        colorColumn: 'customer_id',
+      },
+      sample: { rate: 20 },
+    });
+
+    expect(builderValidationIssue(config, 'map', TABLES)).toBeNull();
+    const normalized = normalizeBuilderForChartType(config, 'map');
+    expect(normalized).toMatchObject({
+      geoSeriesType: 'heatmap',
+      seriesBy: 'date',
+      sample: { rate: 20 },
+      xAxis: 'amount',
+      yAxis: [{ column: 'id', agg: 'none' }],
+      geoPoint: {
+        mode: 'columns',
+        nameColumn: 'category',
+        valueColumn: 'amount',
+        colorColumn: 'customer_id',
+      },
+    });
+  });
+
+  it('공간 Point·Polygon도 표본 설정을 정규화 과정에서 유지한다', () => {
+    const point = normalizeBuilderForChartType(bar({
+      sample: { rate: 15 },
+      geoSeriesType: 'effectScatter',
+      geoPoint: { mode: 'spatial', spatialColumn: 'location', valueColumn: 'amount' },
+    }), 'geoscatter');
+    expect(point.sample).toEqual({ rate: 15 });
+    expect(builderValidationIssue(point, 'geoscatter', TABLES)).toBeNull();
+
+    const area = normalizeBuilderForChartType(bar({
+      sample: { rate: 12 },
+      geoArea: {
+        mode: 'spatial',
+        spatialColumn: 'service_area',
+        nameColumn: 'category',
+        valueColumn: 'amount',
+      },
+    }), 'map');
+    expect(area.sample).toEqual({ rate: 12 });
+    expect(builderValidationIssue(area, 'map', TABLES)).toBeNull();
   });
 
   it('map 공간 Polygon 모드는 경계·이름·숫자값 컬럼을 검증하고 X/Y를 비운다', () => {

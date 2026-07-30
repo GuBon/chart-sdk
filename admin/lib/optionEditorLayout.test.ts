@@ -38,11 +38,11 @@ describe('차트 옵션 편집 정보 구조', () => {
     }
   });
 
-  it('직교·원형·지도는 각 작업에 필요한 탭만 권장 순서로 제공한다', () => {
+  it('모든 차트는 같은 상대 순서를 사용하고 적용할 옵션이 없는 탭만 생략한다', () => {
     expect(optionEditorTabsFor('bar')).toEqual(['basic', 'series', 'axis', 'style', 'interaction', 'data']);
     expect(optionEditorTabsFor('pie')).toEqual(['basic', 'series', 'style', 'interaction', 'data']);
-    expect(optionEditorTabsFor('map')).toEqual(['basic', 'style', 'area', 'series', 'interaction', 'data']);
-    expect(optionEditorTabsFor('geoscatter')).toEqual(['basic', 'style', 'area', 'interaction', 'data']);
+    expect(optionEditorTabsFor('map')).toEqual(['basic', 'series', 'area', 'style', 'interaction', 'data']);
+    expect(optionEditorTabsFor('geoscatter')).toEqual(['basic', 'series', 'area', 'style', 'interaction', 'data']);
   });
 
   it('계열 탭은 계열 구성·분석 표시와 라벨·정렬·범례를 제공한다', () => {
@@ -51,7 +51,7 @@ describe('차트 옵션 편집 정보 구조', () => {
     expect(visibleSections('scatter', 'series')).toEqual(['분석 표시', '라벨 · 정렬', '범례']);
     expect(visibleSections('boxplot', 'series')).toEqual(['분석 표시', '범례']);
     expect(visibleSections('pie', 'series')).toEqual(['라벨 · 정렬', '범례']);
-    expect(visibleSections('geoscatter', 'series')).toEqual([]);
+    expect(visibleSections('geoscatter', 'series')).toEqual(['라벨 · 정렬', '범례']);
   });
 
   it('원형 라벨 위치는 전용 키 하나만 사용하고 라벨을 켰을 때만 노출한다', () => {
@@ -81,11 +81,11 @@ describe('차트 옵션 편집 정보 구조', () => {
   });
 
   it('선택지가 하나뿐인 차트는 의미 없는 중분류 컨트롤을 숨긴다', () => {
-    for (const chartType of ['boxplot', 'heatmap', 'map', 'geoscatter'] as const) {
+    for (const chartType of ['boxplot', 'heatmap'] as const) {
       const keys = visibleDefs(chartType, defaultsFor(chartType)).map((definition) => definition.key);
       expect(keys).not.toContain('variant');
     }
-    for (const chartType of ['bar', 'line', 'pie', 'scatter'] as const) {
+    for (const chartType of ['bar', 'line', 'pie', 'scatter', 'map', 'geoscatter'] as const) {
       const keys = visibleDefs(chartType, defaultsFor(chartType)).map((definition) => definition.key);
       expect(keys).toContain('variant');
     }
@@ -100,10 +100,15 @@ describe('차트 옵션 편집 정보 구조', () => {
     const theme = visibleDefs('map', defaultsFor('map')).find((definition) => definition.key === 'palettePreset');
     expect(theme?.label).toBe('테마');
     expect(theme && optionEditorTabOf(theme)).toBe('style');
+    const pointSections = visibleDefs('geoscatter', defaultsFor('geoscatter'))
+      .filter((definition) => definition.key.startsWith('geoscatter.'))
+      .map(optionEditorSectionOf);
+    expect([...new Set(pointSections)]).toEqual(['점']);
   });
 
   it('지도 영역과 상호작용의 고급 모양 설정을 별도 섹션으로 분리한다', () => {
-    expect(visibleSections('map', 'area')).toEqual(['표시 영역']);
+    expect(visibleSections('map', 'area')).toEqual(['행정 경계', '표시 영역']);
+    expect(visibleSections('geoscatter', 'area')).toEqual(['행정 경계', '표시 영역']);
     expect(visibleSections('bar', 'interaction')).toEqual(['툴팁', '툴팁 모양', '강조']);
     expect(visibleSections('pie', 'interaction')).toEqual(['툴팁', '툴팁 모양', '강조']);
 
@@ -111,6 +116,51 @@ describe('차트 옵션 편집 정보 구조', () => {
       .filter((definition) => optionEditorTabOf(definition) === 'area')
       .map((definition) => definition.key);
     expect(areaKeys).toEqual(['map.name', 'map.viewport', 'map.roam']);
+
+    const pointAreaKeys = visibleDefs('geoscatter', defaultsFor('geoscatter'))
+      .filter((definition) => optionEditorTabOf(definition) === 'area')
+      .map((definition) => definition.key);
+    expect(pointAreaKeys).toEqual([
+      'map.boundary.show',
+      'map.name',
+      'map.boundary.areaColor',
+      'map.boundary.borderColor',
+      'map.boundary.borderWidth',
+      'map.viewport',
+      'map.roam',
+    ]);
+    expect(defaultsFor('geoscatter').map.boundary.show).toBe(true);
+    expect(defaultsFor('geoscatter').map.boundary.borderWidth).toBe(5);
+    const boundaryWidth = visibleDefs('geoscatter', defaultsFor('geoscatter'))
+      .find((definition) => definition.key === 'map.boundary.borderWidth');
+    expect(boundaryWidth).toMatchObject({
+      default: 5,
+      min: 0,
+      max: 20,
+      step: 0.5,
+      unit: 'px',
+    });
+  });
+
+  it('포인트 지도에서 행정구역을 끄면 종속된 모양 설정만 숨기고 저장값은 유지한다', () => {
+    const options = defaultsFor('geoscatter');
+    options.map.boundary = {
+      show: false,
+      areaColor: '#112233',
+      borderColor: '#445566',
+      borderWidth: 2,
+    };
+    const visibleKeys = visibleDefs('geoscatter', options).map((definition) => definition.key);
+
+    expect(visibleKeys).toContain('map.boundary.show');
+    expect(visibleKeys).not.toContain('map.boundary.areaColor');
+    expect(visibleKeys).not.toContain('map.boundary.borderColor');
+    expect(visibleKeys).not.toContain('map.boundary.borderWidth');
+    expect(options.map.boundary).toMatchObject({
+      areaColor: '#112233',
+      borderColor: '#445566',
+      borderWidth: 2,
+    });
   });
 
   it('요소별 글꼴·글자 크기는 그 요소를 편집하는 섹션에 있고 스타일에는 전체 크기만 남는다', () => {

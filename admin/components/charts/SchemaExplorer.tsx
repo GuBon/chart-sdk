@@ -31,7 +31,6 @@ interface Props {
   focusRequestKey: number;
   onChangeDatasource: (id: number) => void;
   onSelectTable: (table: SchemaTable) => void;
-  onPreviewTable: (table: SchemaTable) => void;
   onCancelSelection: () => void;
   onCollapse: () => void;
 }
@@ -60,7 +59,6 @@ export function SchemaExplorer({
   focusRequestKey,
   onChangeDatasource,
   onSelectTable,
-  onPreviewTable,
   onCancelSelection,
   onCollapse,
 }: Props) {
@@ -242,10 +240,7 @@ export function SchemaExplorer({
               <div key={key}>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (selection) selectTable(t);
-                    else onPreviewTable(t);
-                  }}
+                  onClick={() => selectTable(t)}
                   disabled={disabled}
                   title={
                     unavailable
@@ -254,7 +249,7 @@ export function SchemaExplorer({
                         ? '현재 구성에서 이미 사용 중인 항목입니다.'
                         : selection
                           ? `${selection.label}: ${t.schema}.${t.name}`
-                          : '원본 데이터 보기'
+                          : '원본 테이블로 선택'
                   }
                   className={cn(
                     'flex w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',

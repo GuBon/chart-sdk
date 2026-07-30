@@ -73,7 +73,43 @@ export function staticColorSelections(
         label: column.name,
       }));
   }
+  if (chartType === 'map' || chartType === 'geoscatter') {
+    return geoSeriesNames(chartType, columns, rows).map((name) => ({
+      scope: 'series',
+      seriesName: name,
+      label: name,
+    }));
+  }
   return [];
+}
+
+/**
+ * 지도 변환기와 같은 규칙으로 실제 ECharts 계열 이름을 복원한다.
+ * 색상 대상이 변환 결과와 같은 계열을 가리켜야 팔레트·직접 지정 색상이 정확히 적용된다.
+ */
+export function geoSeriesNames(
+  chartType: MajorType,
+  columns: readonly { name: string; type?: string }[],
+  rows: readonly unknown[][],
+): string[] {
+  if (chartType !== 'map' && chartType !== 'geoscatter') return [];
+
+  const seriesIndex = columns.findIndex((column) => column.name === '__chartsdk_series');
+  if (seriesIndex >= 0) {
+    const names: string[] = [];
+    for (const row of rows) {
+      const name = row[seriesIndex] == null || String(row[seriesIndex]).trim() === ''
+        ? '미분류'
+        : String(row[seriesIndex]);
+      if (!names.includes(name)) names.push(name);
+    }
+    if (names.length > 0) return names;
+  }
+
+  if (chartType === 'geoscatter') return ['포인트'];
+  if (columns.some((column) => column.name === '__chartsdk_longitude')) return ['밀도'];
+  const hasAreaValue = columns.some((column) => column.name === '__chartsdk_area_value');
+  return [hasAreaValue ? '값' : columns[1]?.name || '값'];
 }
 
 export function bubbleSizeColumns<T extends { name: string; type?: string }>(
@@ -119,10 +155,10 @@ export function locateColorSelection(
   selection: ColorSelection | null | undefined,
 ): LocatedColorItem | null {
   if (selection?.scope !== 'item') return null;
-  if (colorKind(chartType) !== selection.kind) return null;
   const targetKey = itemColorTargetKey(selection);
   const series = optionSeries(option);
   for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex++) {
+    if (colorKind(chartType, series[seriesIndex]) !== selection.kind) continue;
     const itemSeriesKey = itemColorSeriesKey(selection.kind, series[seriesIndex]?.name);
     if (itemSeriesKey !== selection.seriesName) continue;
     const data = seriesData(series[seriesIndex]);
@@ -147,10 +183,10 @@ export function itemTargetAt(
   seriesIndex: number,
   dataIndex: number,
 ): ItemColorTarget | null {
-  const kind = colorKind(chartType);
-  if (!kind) return null;
   const series = optionSeries(option)[seriesIndex];
   if (!series) return null;
+  const kind = colorKind(chartType, series);
+  if (!kind) return null;
   const data = seriesData(series);
   if (dataIndex < 0 || dataIndex >= data.length) return null;
   const dimensions = itemDimensions(option, kind, series, dataIndex);
@@ -178,8 +214,9 @@ export function cssColorToHex(value: unknown): string | null {
   return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 }
 
-function colorKind(chartType: MajorType): ItemColorKind | null {
+function colorKind(chartType: MajorType, series?: Record<string, unknown>): ItemColorKind | null {
   if (chartType === 'bar' || chartType === 'line') return 'cartesian';
+  if (chartType === 'map' && series?.type === 'heatmap' && series.coordinateSystem === 'geo') return 'geoscatter';
   return chartType;
 }
 

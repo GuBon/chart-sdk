@@ -69,7 +69,12 @@ export const queryApi = {
   runBuilder: (body: { datasourceId: number; builderConfig: unknown; chartType: string; options: unknown; mode?: 'aggregate' | 'rows' }) =>
     request<QueryResult>('/query/run-builder', { method: 'POST', body }),
   /** SQL 재실행 없이 option 만 재조립 */
-  preview: (body: { chartType: string; options: unknown; rows: { columns: unknown[]; rows: unknown[][] } }) =>
+  preview: (body: {
+    chartType: string;
+    options: unknown;
+    builderConfig?: unknown;
+    rows: { columns: unknown[]; rows: unknown[][] };
+  }) =>
     request<{ option: Record<string, unknown> }>('/charts/preview', { method: 'POST', body }),
 };
 

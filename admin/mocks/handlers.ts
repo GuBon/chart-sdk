@@ -74,7 +74,7 @@ export const handlers = [
     const schema = p.get('schema');
     const relation = p.get('relation');
     const sort = p.get('sort') ?? 'updated_desc';
-    const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '12') || 12));
+    const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '8') || 8));
     const requestedPage = Math.max(1, Number(p.get('page') ?? '1') || 1);
     let list = chartList;
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
@@ -121,7 +121,7 @@ export const handlers = [
         truncated: result.truncated,
         ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
         computedAt: computedAtFor(id),
-        option: assembleOption(result, chart.chartType, chart.options ?? {}),
+        option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
       };
     }
     return HttpResponse.json({ previews, errors });
@@ -149,7 +149,7 @@ export const handlers = [
       truncated: result.truncated,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: computedAtFor(chartId),
-      option: assembleOption(result, chart.chartType, chart.options ?? {}),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
     });
   }),
   http.get('/api/v1/charts/:id/preview', ({ params }) => {
@@ -170,7 +170,7 @@ export const handlers = [
       elapsedMs: result.elapsedMs,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: computedAtFor(id),
-      option: assembleOption(result, chart.chartType, chart.options ?? {}),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
     });
   }),
   http.post('/api/v1/charts/:id/refresh', ({ params }) => {
@@ -215,6 +215,7 @@ export const handlers = [
     const builderConfig = body.builderConfig as { table?: unknown } | undefined;
     const datasourceId = Number(body.datasourceId) || 1;
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId);
+    if (!mainTable) return err(400, 'MAIN_TABLE_REQUIRED', 'A primary table is required to save a chart.');
     const chart = { id, ...body, mainTable, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
@@ -229,7 +230,8 @@ export const handlers = [
     const builderConfig = body.builderConfig as { table?: unknown } | undefined;
     const current = chartList.find((item) => item.id === id);
     const datasourceId = Number(body.datasourceId) || current?.datasourceId || 1;
-    const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable ?? null;
+    const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable;
+    if (!mainTable) return err(400, 'MAIN_TABLE_REQUIRED', 'A primary table is required to save a chart.');
     const chart = { id, ...body, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
@@ -242,6 +244,9 @@ export const handlers = [
 
   http.post('/api/v1/datasources', async ({ request }) => {
     const body = (await request.json()) as Partial<Datasource>;
+    if (body.name?.trim().toLocaleLowerCase('en-US') === 'new') {
+      return err(400, 'DATASOURCE_NAME_RESERVED', "Datasource name 'new' is reserved.");
+    }
     const created: Datasource = {
       id: nextDsId++,
       name: body.name ?? '',
@@ -262,6 +267,9 @@ export const handlers = [
     const body = (await request.json()) as Partial<Datasource>;
     const idx = datasources.findIndex((d) => d.id === id);
     if (idx < 0) return err(404, 'NOT_FOUND', '데이터소스를 찾을 수 없습니다.');
+    if (body.name?.trim().toLocaleLowerCase('en-US') === 'new') {
+      return err(400, 'DATASOURCE_NAME_RESERVED', "Datasource name 'new' is reserved.");
+    }
     datasources[idx] = { ...datasources[idx], ...body, id };
     const nextName = datasources[idx].name;
     chartList = chartList.map((chart) => chart.mainTable?.datasourceId === id
@@ -309,14 +317,21 @@ export const handlers = [
       return HttpResponse.json({ ...buildRawRows(body.builderConfig), generatedSql: buildRowsSql(body.builderConfig) });
     }
     const result = buildAggregateRows(body.builderConfig, body.chartType);
-    const option = assembleOption(result, body.chartType, body.options);
+    const option = assembleOption(result, body.chartType, body.options, body.builderConfig);
     return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig, body.chartType), option });
   }),
 
   http.post('/api/v1/charts/preview', async ({ request }) => {
-    const body = (await request.json()) as { chartType: ChartType; options: Record<string, unknown>; rows: { columns: { name: string; type: string }[]; rows: unknown[][] } };
+    const body = (await request.json()) as {
+      chartType: ChartType;
+      options: Record<string, unknown>;
+      builderConfig?: BuilderConfig;
+      rows: { columns: { name: string; type: string }[]; rows: unknown[][] };
+    };
     const result = { ...body.rows, rowCount: body.rows.rows.length, truncated: false, elapsedMs: 0 };
-    return HttpResponse.json({ option: assembleOption(result, body.chartType, body.options) });
+    return HttpResponse.json({
+      option: assembleOption(result, body.chartType, body.options, body.builderConfig ?? null),
+    });
   }),
 
   // ── 토큰 · 사용자(S7) ─────────────────────────────

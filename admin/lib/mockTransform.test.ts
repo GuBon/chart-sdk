@@ -242,7 +242,7 @@ describe('mock 변환기 레이아웃 계약', () => {
     expect((option.yAxis as Record<string, any>).axisLabel.interval).toBe('auto');
   });
 
-  it('지도 툴팁 템플릿과 강조 색상을 서버 변환기와 같은 계약으로 조립한다', () => {
+  it('지도 레거시 툴팁 템플릿을 항목 선택 방식으로 정규화한다', () => {
     const option = assembleOption(result, 'map', {
       map: {
         tooltip: { enabled: true, template: '{series}\n{name}: {value}' },
@@ -252,7 +252,13 @@ describe('mock 변환기 레이아웃 계약', () => {
     const series = (option.series as Array<Record<string, any>>)[0];
 
     expect((option.tooltip as Record<string, unknown>).show).toBeUndefined();
-    expect(option.__chartsdkTooltip).toEqual({ chartType: 'map', template: '{series}\n{name}: {value}' });
+    const tooltipMetadata = option.__chartsdkTooltip as Record<string, unknown>;
+    expect(tooltipMetadata).toMatchObject({
+      mode: 'fields',
+      chartType: 'map',
+      showSeriesColor: true,
+    });
+    expect(Array.isArray(tooltipMetadata.fields)).toBe(true);
     expect(series.name).toBe('s1');
     expect(series.emphasis.itemStyle.areaColor).toBe('#12AB34');
     expect(series.select).toBeUndefined();
@@ -270,7 +276,7 @@ describe('mock 변환기 레이아웃 계약', () => {
     expect(series.emphasis.disabled).toBe(true);
   });
 
-  it.each(MAJOR_TYPES)('%s 초기 상호작용은 ECharts 기본 동작을 덮어쓰지 않는다', (chartType) => {
+  it.each(MAJOR_TYPES)('%s 초기 툴팁은 네이티브 스타일과 필드 선택 메타데이터를 함께 사용한다', (chartType) => {
     const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
     const tooltip = option.tooltip as Record<string, unknown>;
     const series = (option.series as Array<Record<string, any>>)[0];
@@ -282,8 +288,13 @@ describe('mock 변환기 레이아웃 계약', () => {
     expect(tooltip.borderColor).toBeUndefined();
     expect(tooltip.borderWidth).toBe(1);
     expect(tooltip.padding).toBe(10);
-    expect((tooltip.textStyle as Record<string, unknown>).color).toBe('#666666');
-    expect(option.__chartsdkTooltip).toBeUndefined();
+    expect((tooltip.textStyle as Record<string, unknown>).color).toBe('#6D6E73');
+    expect(option.__chartsdkTooltip).toMatchObject({
+      mode: 'fields',
+      chartType,
+      showSeriesColor: true,
+    });
+    expect(Array.isArray((option.__chartsdkTooltip as Record<string, unknown>).fields)).toBe(true);
 
     if (chartType === 'line' || chartType === 'scatter' || chartType === 'geoscatter') {
       expect(series.emphasis).toEqual({ scale: true });
@@ -313,7 +324,7 @@ describe('mock 변환기 레이아웃 계약', () => {
     if (chartType === 'geoscatter') expect((option.geo as Record<string, any>).emphasis).toEqual({ disabled: true });
   });
 
-  it.each(MAJOR_TYPES)('%s 사용자 툴팁 템플릿을 공통 메타데이터로 전달한다', (chartType) => {
+  it.each(MAJOR_TYPES)('%s 레거시 직접 입력 툴팁을 항목 선택 메타데이터로 정규화한다', (chartType) => {
     const option = assembleOption(result, chartType, optionsWithDefaults(chartType, {
       tooltip: {
         trigger: chartType === 'map' || chartType === 'geoscatter' ? undefined : 'axis',
@@ -325,7 +336,13 @@ describe('mock 변환기 레이아웃 계약', () => {
     }));
 
     expect((option.tooltip as Record<string, unknown>).confine).toBe(true);
-    expect(option.__chartsdkTooltip).toEqual({ chartType, template: '{series}: {value}' });
+    const tooltipMetadata = option.__chartsdkTooltip as Record<string, unknown>;
+    expect(tooltipMetadata).toMatchObject({
+      mode: 'fields',
+      chartType,
+      showSeriesColor: true,
+    });
+    expect(Array.isArray(tooltipMetadata.fields)).toBe(true);
   });
 
   it.each(MAJOR_TYPES)('%s 툴팁 스타일을 공통 ECharts 경로로 변환한다', (chartType) => {
@@ -461,6 +478,40 @@ describe('mock 변환기 표본 집계 계약', () => {
     const series = (option.series as Array<Record<string, unknown>>)[0];
     expect(series.map).toMatch(/^chartsdk-dynamic-mock-/);
     expect((option.__chartsdkMaps as unknown[])).toHaveLength(1);
+  });
+
+  it('공간 Point와 Polygon 원본 행에도 같은 표본 SQL·메타데이터를 적용한다', () => {
+    const point: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [], xAxis: null, xAxisBucket: null, yAxis: [],
+      where: [], orderBy: null,
+      sample: { mode: 'manual', rate: 10, seed: 77 },
+      geoPoint: { mode: 'spatial', spatialColumn: 'location', valueColumn: 'amount' },
+    };
+    expect(buildGeneratedSql(point, 'geoscatter')).toContain('TABLESAMPLE SYSTEM (10) REPEATABLE (77)');
+    expect(buildAggregateRows(point, 'geoscatter').sampling).toMatchObject({
+      approximate: true,
+      method: 'SYSTEM',
+      valueMode: 'sample',
+    });
+
+    const area: BuilderConfig = {
+      ...point,
+      sample: { mode: 'manual', rate: 5, seed: 91 },
+      geoPoint: undefined,
+      geoArea: {
+        mode: 'spatial',
+        spatialColumn: 'service_area',
+        nameColumn: 'category',
+        valueColumn: 'amount',
+      },
+    };
+    expect(buildGeneratedSql(area, 'map')).toContain('TABLESAMPLE SYSTEM (5) REPEATABLE (91)');
+    expect(buildAggregateRows(area, 'map').sampling).toMatchObject({
+      approximate: true,
+      method: 'SYSTEM',
+      valueMode: 'sample',
+    });
   });
 
   it.each(samplingCases)('$name', ({ agg, rate, sampledValue, expectedValue, extrapolated }) => {
@@ -864,13 +915,185 @@ describe('개별 데이터 색상 계약', () => {
     const series = (option.series as Array<Record<string, any>>)[0];
 
     expect(series.itemStyle.color).toBe('#123456');
-    expect(series.data[0]).toEqual([126.978, 37.5665]);
+    expect(series.data[0]).toEqual({
+      name: '126.978, 37.5665',
+      value: [126.978, 37.5665, null, null, null],
+    });
     expect(series.data[1]).toEqual({
-      value: [129.0756, 35.1796],
+      name: '129.0756, 35.1796',
+      value: [129.0756, 35.1796, null, null, null],
       itemStyle: { color: '#FFB000' },
     });
     const geo = option.geo as Record<string, any>;
-    expect(geo.itemStyle).toBeUndefined();
+    expect(geo.itemStyle).toEqual({ borderWidth: 5 });
     expect(geo.emphasis).toEqual({ disabled: true });
+  });
+
+  it('포인트 지도 행정구역의 표시와 채우기·윤곽선 모양을 독립적으로 변환한다', () => {
+    const pointResult: QueryResult = {
+      columns: [{ name: 'lng', type: 'number' }, { name: 'lat', type: 'number' }],
+      rows: [[126.978, 37.5665]],
+      rowCount: 1,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const defaults = assembleOption(pointResult, 'geoscatter', {});
+    const hidden = assembleOption(pointResult, 'geoscatter', {
+      map: { boundary: { show: false } },
+    });
+    const styled = assembleOption(pointResult, 'geoscatter', {
+      map: {
+        boundary: {
+          show: true,
+          areaColor: '#112233',
+          borderColor: '#AABBCC',
+          borderWidth: 25,
+        },
+      },
+    });
+
+    expect((defaults.geo as Record<string, any>).show).toBeUndefined();
+    expect((defaults.geo as Record<string, any>).itemStyle).toEqual({ borderWidth: 5 });
+    expect((hidden.geo as Record<string, any>).show).toBe(false);
+    expect((hidden.geo as Record<string, any>).itemStyle).toBeUndefined();
+    expect((styled.geo as Record<string, any>).show).toBeUndefined();
+    expect((styled.geo as Record<string, any>).itemStyle).toEqual({
+      areaColor: '#112233',
+      borderColor: '#AABBCC',
+      borderWidth: 20,
+    });
+  });
+});
+
+describe('ECharts 6.1 지도 계열 계약', () => {
+  const groupedPoints: QueryResult = {
+    columns: [
+      { name: '__chartsdk_longitude', type: 'number' },
+      { name: '__chartsdk_latitude', type: 'number' },
+      { name: '__chartsdk_point_name', type: 'text' },
+      { name: '__chartsdk_point_value', type: 'number' },
+      { name: '__chartsdk_size', type: 'number' },
+      { name: '__chartsdk_color_value', type: 'number' },
+      { name: '__chartsdk_series', type: 'text' },
+    ],
+    rows: [
+      [126.978, 37.5665, '서울점', 120, 10, 30, '온라인'],
+      [129.0756, 35.1796, '부산점', 80, 30, 15, '매장'],
+      [126.5312, 33.4996, '제주점', 55, 20, 24, '온라인'],
+    ],
+    rowCount: 3,
+    truncated: false,
+    elapsedMs: 0,
+  };
+
+  it('영역 지도는 계열 기준별 map 시리즈와 visualMap 대상을 만든다', () => {
+    const groupedAreas: QueryResult = {
+      columns: [
+        { name: '__chartsdk_area_name', type: 'text' },
+        { name: '__chartsdk_area_value', type: 'number' },
+        { name: '__chartsdk_series', type: 'text' },
+      ],
+      rows: [['서울특별시', 120, '온라인'], ['부산광역시', 80, '매장'], ['제주특별자치도', 55, '온라인']],
+      rowCount: 3,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(groupedAreas, 'map', {
+      variant: 'map',
+      colorMap: { 온라인: '#0055AA' },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect(series).toHaveLength(2);
+    expect(series[0]).toMatchObject({
+      id: '__chartsdk_geo_map_0',
+      type: 'map',
+      name: '온라인',
+      itemStyle: { areaColor: '#0055AA' },
+    });
+    expect(series[0].data).toHaveLength(2);
+    expect((option.visualMap as Record<string, any>).seriesTargets).toEqual([
+      { seriesId: '__chartsdk_geo_map_0', dimension: 0 },
+      { seriesId: '__chartsdk_geo_map_1', dimension: 0 },
+    ]);
+  });
+
+  it('map 히트맵은 이름·값·색상값과 계열을 geo heatmap으로 인코딩한다', () => {
+    const option = assembleOption(groupedPoints, 'map', {
+      variant: 'heatmap',
+      map: {
+        name: 'kr-sigungu',
+        heatmapPointSize: 18,
+        heatmapBlurSize: 24,
+        heatmapMinOpacity: 0.1,
+        heatmapMaxOpacity: 0.85,
+      },
+      tooltip: { contentMode: 'custom', template: '{series}: {value}' },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect((option.geo as Record<string, any>).map).toBe('kr-sigungu');
+    const tooltipMetadata = option.__chartsdkTooltip as Record<string, unknown>;
+    expect(tooltipMetadata).toMatchObject({
+      mode: 'fields',
+      chartType: 'map',
+      showSeriesColor: true,
+    });
+    expect(Array.isArray(tooltipMetadata.fields)).toBe(true);
+    expect(series).toHaveLength(2);
+    expect(series[0]).toMatchObject({
+      id: '__chartsdk_geo_heatmap_0',
+      type: 'heatmap',
+      name: '온라인',
+      pointSize: 18,
+      blurSize: 24,
+      minOpacity: 0.1,
+      maxOpacity: 0.85,
+    });
+    expect(series[0].data[0]).toEqual({ name: '서울점', value: [126.978, 37.5665, 120, 30] });
+    expect((option.visualMap as Record<string, any>).seriesTargets).toEqual([
+      { seriesId: '__chartsdk_geo_heatmap_0', dimension: 3 },
+      { seriesId: '__chartsdk_geo_heatmap_1', dimension: 3 },
+    ]);
+  });
+
+  it('효과 포인트는 계열별 색상과 공통 점 스타일을 적용한다', () => {
+    const option = assembleOption(groupedPoints, 'geoscatter', {
+      variant: 'effectScatter',
+      colorMap: { 온라인: '#0055AA' },
+      geoscatter: {
+        symbol: 'triangle',
+        symbolSize: 16,
+        opacity: 0.8,
+        borderColor: '#001122',
+        borderWidth: 2,
+        showEffectOn: 'render',
+        rippleScale: 4,
+        ripplePeriod: 6,
+        rippleBrushType: 'fill',
+      },
+    });
+    const series = option.series as Array<Record<string, any>>;
+
+    expect(series).toHaveLength(2);
+    expect(series[0]).toMatchObject({
+      id: '__chartsdk_geo_point_0',
+      type: 'effectScatter',
+      name: '온라인',
+      symbol: 'triangle',
+      symbolSize: 16,
+      showEffectOn: 'render',
+      rippleEffect: { scale: 4, period: 6, brushType: 'fill' },
+      itemStyle: { color: '#0055AA', opacity: 0.8, borderColor: '#001122', borderWidth: 2 },
+    });
+    expect(series[0].data[0]).toMatchObject({
+      name: '서울점',
+      value: [126.978, 37.5665, 120, 10, 30],
+      symbolSize: 6,
+    });
+    expect((option.visualMap as Record<string, any>).seriesTargets).toEqual([
+      { seriesId: '__chartsdk_geo_point_0', dimension: 4 },
+      { seriesId: '__chartsdk_geo_point_1', dimension: 4 },
+    ]);
   });
 });

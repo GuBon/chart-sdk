@@ -91,6 +91,20 @@ export function tableRefLabel(t: TableRef | SchemaTable): string {
   return t.schema ? `${t.schema}.${t.name}` : t.name;
 }
 
+export function geoSeriesTypeFor(cfg: BuilderConfig, chartType: ChartType) {
+  if (chartType === 'map') return cfg.geoSeriesType === 'heatmap' ? 'heatmap' : 'map';
+  if (chartType === 'geoscatter') return cfg.geoSeriesType === 'effectScatter' ? 'effectScatter' : 'scatter';
+  return undefined;
+}
+
+export function usesGeoPointInput(cfg: BuilderConfig, chartType: ChartType): boolean {
+  return chartType === 'geoscatter' || (chartType === 'map' && geoSeriesTypeFor(cfg, chartType) === 'heatmap');
+}
+
+export function supportsSeriesByForChart(chartType: ChartType): boolean {
+  return chartType === 'bar' || chartType === 'line' || chartType === 'map' || chartType === 'geoscatter';
+}
+
 /** PostGIS가 타입 수정자와 함께 노출한 Point 컬럼. SRID 없는 generic geometry는 좌표계를 확정할 수 없어 제외한다. */
 export function isSpatialPointType(type: string | undefined): boolean {
   if (!type) return false;
@@ -201,12 +215,12 @@ function joinValidationIssue(cfg: BuilderConfig, tables: SchemaTable[]): string 
 }
 
 export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: ChartType): BuilderConfig {
-  const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
+  const supportsSeriesBy = supportsSeriesByForChart(chartType);
   cfg = {
     ...cfg,
     seriesBy: supportsSeriesBy ? cfg.seriesBy ?? null : null,
     seriesOrder: supportsSeriesBy ? cfg.seriesOrder ?? 'asc' : 'asc',
-    yAxis: supportsSeriesBy && cfg.seriesBy ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    yAxis: (chartType === 'bar' || chartType === 'line') && cfg.seriesBy ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
   };
   if (chartType === 'scatter') {
     return {
@@ -223,8 +237,11 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
       yAxis: cfg.yAxis.slice(0, 1).map((y) => ({ ...y, agg: 'none' })),
     };
   }
-  // 지도 포인트: X=경도, Y1=위도(+선택 Y2=크기값) 원본 좌표 → 집계 없음·버킷 금지·최대 2컬럼.
-  if (chartType === 'geoscatter') {
+  // 지도 포인트: X=경도, Y=위도. 이름·값·크기·색상값은 전용 역할 컬럼으로 분리한다.
+  if (usesGeoPointInput(cfg, chartType)) {
+    const geoSeriesType = chartType === 'map'
+      ? 'heatmap'
+      : cfg.geoSeriesType === 'effectScatter' ? 'effectScatter' : 'scatter';
     const mode = cfg.geoPoint?.mode ?? 'columns';
     if (mode === 'spatial') {
       return {
@@ -233,11 +250,14 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
         xAxisBucket: null,
         yAxis: [],
         orderBy: null,
-        sample: null,
+        geoSeriesType,
         geoPoint: {
           mode: 'spatial',
           spatialColumn: cfg.geoPoint?.spatialColumn ?? null,
+          nameColumn: cfg.geoPoint?.nameColumn ?? null,
+          valueColumn: cfg.geoPoint?.valueColumn ?? null,
           sizeColumn: cfg.geoPoint?.sizeColumn ?? null,
+          colorColumn: cfg.geoPoint?.colorColumn ?? null,
         },
         geoArea: undefined,
       };
@@ -245,8 +265,15 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     return {
       ...cfg,
       xAxisBucket: null,
-      yAxis: cfg.yAxis.slice(0, 2).map((y) => ({ ...y, agg: 'none' })),
-      geoPoint: { mode: 'columns' },
+      yAxis: cfg.yAxis.slice(0, 1).map((y) => ({ ...y, agg: 'none' })),
+      geoSeriesType,
+      geoPoint: {
+        mode: 'columns',
+        nameColumn: cfg.geoPoint?.nameColumn ?? null,
+        valueColumn: cfg.geoPoint?.valueColumn ?? null,
+        sizeColumn: cfg.geoPoint?.sizeColumn ?? cfg.yAxis[1]?.column ?? null,
+        colorColumn: cfg.geoPoint?.colorColumn ?? null,
+      },
       geoArea: undefined,
     };
   }
@@ -259,7 +286,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
         xAxisBucket: null,
         yAxis: [],
         orderBy: null,
-        sample: null,
+        geoSeriesType: 'map',
         geoPoint: undefined,
         geoArea: {
           mode: 'spatial',
@@ -272,6 +299,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     return {
       ...cfg,
       yAxis: cfg.yAxis.slice(0, 1),
+      geoSeriesType: 'map',
       geoPoint: undefined,
       geoArea: { mode: 'regions' },
     };
@@ -282,6 +310,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
     seriesBy: supportsSeriesBy ? cfg.seriesBy ?? null : null,
     seriesOrder: supportsSeriesBy ? cfg.seriesOrder ?? 'asc' : 'asc',
     yAxis: chartType === 'pie' || ((chartType === 'bar' || chartType === 'line') && cfg.seriesBy) ? cfg.yAxis.slice(0, 1) : cfg.yAxis,
+    geoSeriesType: undefined,
     geoPoint: undefined,
     geoArea: undefined,
   };
@@ -289,8 +318,8 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
 
 /** X/Y 없이 조건·정렬된 행만 조회하는 실행 전용 모드. 공간 차트의 전용 컬럼 구성은 차트 모드로 본다. */
 export function isTableQueryMode(cfg: BuilderConfig, chartType: ChartType): boolean {
-  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
-  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
+  const spatialGeoPoint = usesGeoPointInput(cfg, chartType) && cfg.geoPoint?.mode === 'spatial';
+  const spatialGeoArea = chartType === 'map' && geoSeriesTypeFor(cfg, chartType) === 'map' && cfg.geoArea?.mode === 'spatial';
   return !spatialGeoPoint && !spatialGeoArea && !cfg.xAxis && cfg.yAxis.length === 0;
 }
 
@@ -324,7 +353,10 @@ function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[])
       cfg.seriesBy,
       ...cfg.yAxis.map((y) => y.column),
       cfg.geoPoint?.spatialColumn,
+      cfg.geoPoint?.nameColumn,
+      cfg.geoPoint?.valueColumn,
       cfg.geoPoint?.sizeColumn,
+      cfg.geoPoint?.colorColumn,
       cfg.geoArea?.spatialColumn,
       cfg.geoArea?.nameColumn,
       cfg.geoArea?.valueColumn,
@@ -357,17 +389,19 @@ export function builderExecutionIssue(cfg: BuilderConfig, chartType: ChartType, 
 export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
   const commonIssue = builderCommonValidationIssue(cfg, tables);
   if (commonIssue) return commonIssue;
-  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
-  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
+  const pointInput = usesGeoPointInput(cfg, chartType);
+  const areaInput = chartType === 'map' && geoSeriesTypeFor(cfg, chartType) === 'map';
+  const spatialGeoPoint = pointInput && cfg.geoPoint?.mode === 'spatial';
+  const spatialGeoArea = areaInput && cfg.geoArea?.mode === 'spatial';
   if (!spatialGeoPoint && !spatialGeoArea && !cfg.xAxis) return 'X축 컬럼을 선택하세요.';
   if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.length === 0) return 'Y축을 1개 이상 추가하세요.';
   if (!spatialGeoPoint && !spatialGeoArea && cfg.yAxis.some((y) => !y.column)) return 'Y축 컬럼을 선택하세요.';
-  if (cfg.seriesBy && !(chartType === 'bar' || chartType === 'line')) return '계열 기준은 막대와 선 차트에서만 사용할 수 있습니다.';
-  if (cfg.seriesBy && cfg.yAxis.length !== 1) return '계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.';
+  if (cfg.seriesBy && !supportsSeriesByForChart(chartType)) return '이 차트에서는 계열 기준을 사용할 수 없습니다.';
+  if (cfg.seriesBy && (chartType === 'bar' || chartType === 'line') && cfg.yAxis.length !== 1) return '계열 기준을 사용하면 Y축 값은 1개만 선택할 수 있습니다.';
   if (cfg.seriesBy && cfg.seriesBy === cfg.xAxis) return 'X축과 계열 기준은 서로 다른 컬럼이어야 합니다.';
   if (cfg.seriesBy && !columnType(cfg.seriesBy, cfg, tables)) return '계열 기준 컬럼을 선택하세요.';
   if (chartType === 'pie' && cfg.yAxis.length !== 1) return '원형 차트는 Y축을 1개만 사용할 수 있습니다.';
-  if (chartType === 'map' && !spatialGeoArea && cfg.yAxis.length !== 1) return '지도 차트는 값 컬럼(Y축)을 1개만 사용할 수 있습니다.';
+  if (areaInput && !spatialGeoArea && cfg.yAxis.length !== 1) return '영역 지도는 값 컬럼을 1개만 사용할 수 있습니다.';
   const xType = columnType(cfg.xAxis, cfg, tables);
   const rawSeriesCount = cfg.yAxis.filter((y) => y.agg === 'none').length;
   if (chartType === 'boxplot') {
@@ -375,7 +409,7 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     if (cfg.yAxis.some((y) => y.agg !== 'none')) return '박스 플롯은 집계 없이 원본값만 사용합니다.';
     if (!isNumericType(columnType(cfg.yAxis[0]?.column, cfg, tables))) return '박스 플롯은 숫자 값 컬럼(Y축)이 필요합니다.';
   }
-  if (chartType === 'geoscatter') {
+  if (pointInput) {
     if (spatialGeoPoint) {
       const pointColumn = cfg.geoPoint?.spatialColumn;
       if (!pointColumn) return '공간 Point 컬럼을 선택하세요.';
@@ -385,16 +419,28 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       if (cfg.geoPoint?.sizeColumn && !isNumericType(columnType(cfg.geoPoint.sizeColumn, cfg, tables))) {
         return '포인트 지도의 크기값 컬럼은 숫자여야 합니다.';
       }
+      if (cfg.geoPoint?.valueColumn && !isNumericType(columnType(cfg.geoPoint.valueColumn, cfg, tables))) {
+        return '지도 값 컬럼은 숫자여야 합니다.';
+      }
+      if (cfg.geoPoint?.colorColumn && !isNumericType(columnType(cfg.geoPoint.colorColumn, cfg, tables))) {
+        return '지도 색상값 컬럼은 숫자여야 합니다.';
+      }
       if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
         return '공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
       }
-      if (cfg.sample) return '포인트 지도 공간 컬럼 모드에서는 표본 추출을 사용할 수 없습니다.';
       return null;
     }
-    if (cfg.yAxis.length > 2) return '포인트 지도는 위도(+선택 크기값) 최대 2개 컬럼만 사용할 수 있습니다.';
+    if (cfg.yAxis.length > 1) return '지도 좌표 입력은 위도 컬럼을 1개만 사용할 수 있습니다.';
     if (cfg.yAxis.some((y) => y.agg !== 'none')) return '포인트 지도는 집계 없이 원본 좌표만 사용합니다.';
     if (!isNumericType(xType)) return '포인트 지도는 숫자 경도(X) 컬럼이 필요합니다.';
-    if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '포인트 지도의 위도·크기값 컬럼은 숫자여야 합니다.';
+    if (cfg.yAxis.some((y) => !isNumericType(columnType(y.column, cfg, tables)))) return '포인트 지도의 위도 컬럼은 숫자여야 합니다.';
+    for (const [column, message] of [
+      [cfg.geoPoint?.valueColumn, '지도 값 컬럼은 숫자여야 합니다.'],
+      [cfg.geoPoint?.sizeColumn, '지도 크기값 컬럼은 숫자여야 합니다.'],
+      [cfg.geoPoint?.colorColumn, '지도 색상값 컬럼은 숫자여야 합니다.'],
+    ] as const) {
+      if (column && !isNumericType(columnType(column, cfg, tables))) return message;
+    }
   }
   if (spatialGeoArea) {
     const areaColumn = cfg.geoArea?.spatialColumn;
@@ -410,7 +456,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
       return '공간 Polygon 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
     }
-    if (cfg.sample) return '공간 Polygon 지도에서는 표본 추출을 사용할 수 없습니다.';
     return null;
   }
   if (chartType === 'scatter' && !isNumericType(xType)) return '산점도는 숫자 X축 컬럼이 필요합니다.';

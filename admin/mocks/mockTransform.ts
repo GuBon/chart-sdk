@@ -27,6 +27,10 @@ import {
   resolveSeriesColorMap,
 } from '@chartsdk/chart-options/palettes';
 import {
+  tooltipFieldsFor,
+  visibleTooltipFields,
+} from '@chartsdk/chart-options/tooltip';
+import {
   itemColorSeriesKey,
   itemColorTargetKey,
   normalizeItemColorOverrides,
@@ -134,8 +138,11 @@ function whereSql(w: { column: string; op: string; value?: unknown }): string {
 
 /** 생성된 SQL 문자열(표시용) — 생성규칙 6·7·11장 모사 */
 export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): string {
-  const spatialGeoPoint = chartType === 'geoscatter' && cfg.geoPoint?.mode === 'spatial';
-  const spatialGeoArea = chartType === 'map' && cfg.geoArea?.mode === 'spatial';
+  const geoSeriesType = cfg.geoSeriesType ?? (chartType === 'map' ? 'map' : chartType === 'geoscatter' ? 'scatter' : undefined);
+  const geoPointSeries = chartType === 'geoscatter' || (chartType === 'map' && geoSeriesType === 'heatmap');
+  const geoAreaSeries = chartType === 'map' && geoSeriesType === 'map';
+  const spatialGeoPoint = geoPointSeries && cfg.geoPoint?.mode === 'spatial';
+  const spatialGeoArea = geoAreaSeries && cfg.geoArea?.mode === 'spatial';
   if (!cfg.table) return '';
   // 다중 소스면 페더레이션 → ds 별칭 표기(백엔드 §6 모사).
   const multi = new Set([cfg.table.datasourceId, ...(cfg.joins ?? []).map((j) => j.table.datasourceId)]).size >= 2;
@@ -149,6 +156,38 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + (cfg.seriesBy ? 3 : 2);
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
+  const plan = samplePlanForConfig(cfg);
+  const spatialProjectionSql = (selects: string[], nonNullExpression: string): string => {
+    const spatialWhere = where
+      ? `${where} AND ${nonNullExpression} IS NOT NULL`
+      : ` WHERE ${nonNullExpression} IS NOT NULL`;
+    if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
+      const seedCte = qident('__chartsdk_seed');
+      const population = qident('__chartsdk_population');
+      const sample = qident('__chartsdk_sample');
+      const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
+      return `WITH ${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')}),
+${population} AS (SELECT ${selects.join(', ')}
+FROM ${qtable(cfg.table!, multi)}${joinSql}${spatialWhere}),
+${sample} AS MATERIALIZED (SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize})
+SELECT * FROM ${sample}`;
+    }
+    if (plan?.approximate && plan.method === 'INDEX_RANDOM') {
+      const seed = plan.seed ?? DEFAULT_SAMPLE_SEED;
+      const population = Math.max(1, plan.populationEstimate);
+      const sample = qident('__chartsdk_sample');
+      return `WITH ${qident('__chartsdk_seed')} AS MATERIALIZED (SELECT setseed(${Math.max(-1, Math.min(1, (seed / 2_147_483_647) * 2 - 1))}) AS ${qident('seeded')}),
+${qident('__chartsdk_keys')} AS MATERIALIZED (SELECT 1 + floor(random() * ${population})::bigint AS ${qident('v')} FROM ${qident('__chartsdk_seed')} CROSS JOIN generate_series(1, ${plan.sampleSize})),
+${sample} AS (SELECT ${qident('__chartsdk_base')}.* FROM ${qident('__chartsdk_keys')} JOIN ${qtable(cfg.table!, multi)} ${qident('__chartsdk_base')} ON ${qident('__chartsdk_base')}.${qident('id')} = ${qident('__chartsdk_keys')}.${qident('v')})
+SELECT ${selects.join(', ')}
+FROM ${sample}${spatialWhere}`;
+    }
+    const sampledBase = plan?.approximate && plan.method === 'SYSTEM'
+      ? `${qtable(cfg.table!, multi)} TABLESAMPLE SYSTEM (${plan.executionRate}) REPEATABLE (${plan.seed ?? DEFAULT_SAMPLE_SEED})`
+      : qtable(cfg.table!, multi);
+    return `SELECT ${selects.join(', ')}
+FROM ${sampledBase}${joinSql}${spatialWhere}`;
+  };
   if (spatialGeoArea) {
     if (!cfg.geoArea?.spatialColumn || !cfg.geoArea.nameColumn || !cfg.geoArea.valueColumn) return '';
     const area = qcol(cfg.geoArea.spatialColumn);
@@ -157,9 +196,9 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
       `CAST(${qcol(cfg.geoArea.nameColumn)} AS text) AS ${qident('__chartsdk_area_name')}`,
       `${qcol(cfg.geoArea.valueColumn)} AS ${qident('__chartsdk_area_value')}`,
       `ST_AsGeoJSON(${wgs84}, 6) AS ${qident('__chartsdk_geojson')}`,
+      ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
     ];
-    const spatialWhere = where ? `${where} AND ${area} IS NOT NULL` : ` WHERE ${area} IS NOT NULL`;
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${spatialWhere}`;
+    return spatialProjectionSql(selects, area);
   }
   if (spatialGeoPoint) {
     if (!cfg.geoPoint?.spatialColumn) return '';
@@ -168,15 +207,21 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     const selects = [
       `ST_X(${wgs84}) AS ${qident('__chartsdk_longitude')}`,
       `ST_Y(${wgs84}) AS ${qident('__chartsdk_latitude')}`,
+      ...(cfg.geoPoint.nameColumn ? [`CAST(${qcol(cfg.geoPoint.nameColumn)} AS text) AS ${qident('__chartsdk_point_name')}`] : []),
+      ...(cfg.geoPoint.valueColumn ? [`${qcol(cfg.geoPoint.valueColumn)} AS ${qident('__chartsdk_point_value')}`] : []),
       ...(cfg.geoPoint.sizeColumn ? [`${qcol(cfg.geoPoint.sizeColumn)} AS ${qident('__chartsdk_size')}`] : []),
+      ...(cfg.geoPoint.colorColumn ? [`${qcol(cfg.geoPoint.colorColumn)} AS ${qident('__chartsdk_color_value')}`] : []),
+      ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
     ];
-    const spatialWhere = where
-      ? `${where} AND ${point} IS NOT NULL`
-      : ` WHERE ${point} IS NOT NULL`;
-    return `SELECT ${selects.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${spatialWhere}`;
+    return spatialProjectionSql(selects, point);
   }
   if (!cfg.xAxis || cfg.yAxis.length === 0) return '';
-  const plan = samplePlanForConfig(cfg);
+  const geoPointRoles = [
+    ...(cfg.geoPoint?.nameColumn ? [{ column: cfg.geoPoint.nameColumn, alias: '__chartsdk_point_name', text: true }] : []),
+    ...(cfg.geoPoint?.valueColumn ? [{ column: cfg.geoPoint.valueColumn, alias: '__chartsdk_point_value', text: false }] : []),
+    ...(cfg.geoPoint?.sizeColumn ? [{ column: cfg.geoPoint.sizeColumn, alias: '__chartsdk_size', text: false }] : []),
+    ...(cfg.geoPoint?.colorColumn ? [{ column: cfg.geoPoint.colorColumn, alias: '__chartsdk_color_value', text: false }] : []),
+  ];
   const rawMode = cfg.yAxis.some((y) => y.agg === 'none');
   if (rawMode) {
     if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
@@ -189,6 +234,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
         `${qcol(cfg.xAxis)} AS ${qident(xAlias)}`,
         ...(cfg.seriesBy ? [`${qcol(cfg.seriesBy)} AS ${qident('__chartsdk_series')}`] : []),
         ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
+        ...(geoPointSeries ? geoPointRoles.map((role) => `${role.text ? `CAST(${qcol(role.column)} AS text)` : qcol(role.column)} AS ${qident(role.alias)}`) : []),
       ];
       const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
       const sampleBody = multi
@@ -201,9 +247,10 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
         `${sample} AS MATERIALIZED (${sampleBody})`,
       ];
       const selects = [
-        `${qcol(`__chartsdk_sample.${xAlias}`)} AS ${qident(colName(cfg.xAxis))}`,
-        ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(colName(cfg.seriesBy))}`] : []),
-        ...cfg.yAxis.map((y, i) => `${qcol(`__chartsdk_sample.${yAliases[i]}`)} AS ${qident(aliasOf(y))}`),
+        `${qcol(`__chartsdk_sample.${xAlias}`)} AS ${qident(geoPointSeries ? '__chartsdk_longitude' : geoAreaSeries ? '__chartsdk_area_name' : colName(cfg.xAxis))}`,
+        ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(geoPointSeries || geoAreaSeries ? '__chartsdk_series' : colName(cfg.seriesBy))}`] : []),
+        ...cfg.yAxis.map((y, i) => `${qcol(`__chartsdk_sample.${yAliases[i]}`)} AS ${qident(geoPointSeries ? (i === 0 ? '__chartsdk_latitude' : '__chartsdk_size') : geoAreaSeries && i === 0 ? '__chartsdk_area_value' : aliasOf(y))}`),
+        ...(geoPointSeries ? geoPointRoles.map((role) => `${qcol(`__chartsdk_sample.${role.alias}`)} AS ${qident(role.alias)}`) : []),
       ];
       return `WITH ${ctes.join(',\n')}
 SELECT ${selects.join(', ')}
@@ -213,11 +260,14 @@ FROM ${sample}${orderSql()}`;
     const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
     const sourceColumn = (ref: string) => indexRandom ? qident(colName(ref)) : qcol(ref);
     const selects = [
-      sourceColumn(cfg.xAxis),
-      ...(cfg.seriesBy ? [sourceColumn(cfg.seriesBy)] : []),
-      ...cfg.yAxis.map((y) => (aliasOf(y) === colName(y.column)
-        ? sourceColumn(y.column)
-        : `${sourceColumn(y.column)} AS ${qident(aliasOf(y))}`)),
+      geoPointSeries
+        ? `${sourceColumn(cfg.xAxis)} AS ${qident('__chartsdk_longitude')}`
+        : geoAreaSeries
+          ? `CAST(${sourceColumn(cfg.xAxis)} AS text) AS ${qident('__chartsdk_area_name')}`
+          : sourceColumn(cfg.xAxis),
+      ...(cfg.seriesBy ? [`${geoPointSeries || geoAreaSeries ? `CAST(${sourceColumn(cfg.seriesBy)} AS text)` : sourceColumn(cfg.seriesBy)} AS ${qident(geoPointSeries || geoAreaSeries ? '__chartsdk_series' : colName(cfg.seriesBy))}`] : []),
+      ...cfg.yAxis.map((y, index) => `${sourceColumn(y.column)} AS ${qident(geoPointSeries ? (index === 0 ? '__chartsdk_latitude' : '__chartsdk_size') : geoAreaSeries && index === 0 ? '__chartsdk_area_value' : aliasOf(y))}`),
+      ...(geoPointSeries ? geoPointRoles.map((role) => `${role.text ? `CAST(${sourceColumn(role.column)} AS text)` : sourceColumn(role.column)} AS ${qident(role.alias)}`) : []),
     ];
     if (indexRandom) {
       const seed = plan.seed ?? DEFAULT_SAMPLE_SEED;
@@ -271,7 +321,7 @@ FROM ${sample}${orderSql()}`;
     const sampleX = qcol(`__chartsdk_sample.${xAlias}`);
     const xCol = cfg.xAxisBucket
       ? `DATE_TRUNC('${cfg.xAxisBucket}', ${sampleX}) AS ${qident(colName(cfg.xAxis))}`
-      : `${sampleX} AS ${qident(colName(cfg.xAxis))}`;
+      : `${sampleX} AS ${qident(geoAreaSeries ? '__chartsdk_area_name' : colName(cfg.xAxis))}`;
     const hiddenMoments = cfg.yAxis.flatMap((y, i) => {
       if (!['avg', 'stddev', 'variance'].includes(y.agg)) return [];
       const expr = qcol(`__chartsdk_sample.${yAliases[i]}`);
@@ -283,8 +333,8 @@ FROM ${sample}${orderSql()}`;
     });
     const selects = [
       xCol,
-      ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(colName(cfg.seriesBy))}`] : []),
-      ...cfg.yAxis.map((y, i) => `${aggSql[y.agg](qcol(`__chartsdk_sample.${yAliases[i]}`))} AS ${qident(aliasOf(y))}`),
+      ...(cfg.seriesBy ? [`${qcol('__chartsdk_sample.__chartsdk_series')} AS ${qident(geoAreaSeries ? '__chartsdk_series' : colName(cfg.seriesBy))}`] : []),
+      ...cfg.yAxis.map((y, i) => `${aggSql[y.agg](qcol(`__chartsdk_sample.${yAliases[i]}`))} AS ${qident(geoAreaSeries && i === 0 ? '__chartsdk_area_value' : aliasOf(y))}`),
       `COUNT(*) AS ${qident('__chartsdk_sample_count')}`,
       `(SELECT ${qident('sampled')} FROM ${nCte}) AS ${qident('__chartsdk_sample_total')}`,
       ...hiddenMoments,
@@ -298,7 +348,9 @@ GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${cfg.seriesBy ? `, ${qcol('__chartsd
   const indexRandom = plan?.approximate === true && plan.method === 'INDEX_RANDOM';
   const sourceColumn = (ref: string) => indexRandom ? qident(colName(ref)) : qcol(ref);
   const xSource = sourceColumn(cfg.xAxis);
-  const xCol = cfg.xAxisBucket ? `DATE_TRUNC('${cfg.xAxisBucket}', ${xSource}) AS ${qident(colName(cfg.xAxis))}` : xSource;
+  const xCol = cfg.xAxisBucket
+    ? `DATE_TRUNC('${cfg.xAxisBucket}', ${xSource}) AS ${qident(colName(cfg.xAxis))}`
+    : geoAreaSeries ? `CAST(${xSource} AS text) AS ${qident('__chartsdk_area_name')}` : xSource;
   const hiddenMoments = indexRandom ? cfg.yAxis.flatMap((y, i) => {
     if (!['avg', 'stddev', 'variance'].includes(y.agg)) return [];
     const expr = sourceColumn(y.column);
@@ -310,8 +362,10 @@ GROUP BY ${cfg.xAxisBucket ? '1' : sampleX}${cfg.seriesBy ? `, ${qcol('__chartsd
   }) : [];
   const selects = [
     xCol,
-    ...(cfg.seriesBy ? [sourceColumn(cfg.seriesBy)] : []),
-    ...cfg.yAxis.map((y) => `${aggSql[y.agg](sourceColumn(y.column))} AS ${qident(aliasOf(y))}`),
+    ...(cfg.seriesBy ? [geoAreaSeries
+      ? `CAST(${sourceColumn(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`
+      : sourceColumn(cfg.seriesBy)] : []),
+    ...cfg.yAxis.map((y, index) => `${aggSql[y.agg](sourceColumn(y.column))} AS ${qident(geoAreaSeries && index === 0 ? '__chartsdk_area_value' : aliasOf(y))}`),
     ...(approximate
       ? [
           `COUNT(*) AS ${qident('__chartsdk_sample_count')}`,
@@ -559,24 +613,40 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
     };
   }
-  // 지도: 시·도 라벨 + 값 1개.
-  if (chartType === 'map') {
+  const geoSeriesType = cfg.geoSeriesType ?? (chartType === 'map' ? 'map' : chartType === 'geoscatter' ? 'scatter' : undefined);
+  // 지도: 시·도/Polygon 영역값. seriesBy가 있으면 같은 경계를 여러 ECharts map 계열로 나눈다.
+  if (chartType === 'map' && geoSeriesType === 'map') {
     if (cfg.geoArea?.mode === 'spatial') {
       const columns: Cols = [
         { name: '__chartsdk_area_name', type: 'text' },
         { name: '__chartsdk_area_value', type: 'numeric' },
         { name: '__chartsdk_geojson', type: 'text' },
+        ...(cfg.seriesBy ? [{ name: '__chartsdk_series', type: 'text' }] : []),
       ];
-      const rows: Rows = SAMPLE_SPATIAL_AREAS.map(([name, value, geometry]) => [name, value, JSON.stringify(geometry)]);
-      return { columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 20 };
+      const rows: Rows = SAMPLE_SPATIAL_AREAS.flatMap(([name, value, geometry]) =>
+        cfg.seriesBy
+          ? [['A', 1], ['B', 0.72]].map(([series, ratio]) => [name, Number(value) * Number(ratio), JSON.stringify(geometry), series])
+          : [[name, value, JSON.stringify(geometry)]]);
+      const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+      return {
+        columns,
+        rows,
+        rowCount: rows.length,
+        truncated: false,
+        elapsedMs: sampling?.approximate ? 12 : 20,
+        ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
+      };
     }
-    const valName = cfg.yAxis[0] ? aliasOf(cfg.yAxis[0]) : 'value';
-    const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'region', type: 'text' }, { name: valName, type: 'numeric' }];
+    const columns: Cols = [
+      { name: '__chartsdk_area_name', type: 'text' },
+      { name: '__chartsdk_area_value', type: 'numeric' },
+      ...(cfg.seriesBy ? [{ name: '__chartsdk_series', type: 'text' }] : []),
+    ];
     const sampling = samplingForConfig(cfg, SAMPLE_REGIONS);
-    const rows: Rows = SAMPLE_REGIONS.map((rgn, i) => [
-      rgn,
-      Math.round(500 - i * 32 + (i % 3) * 45),
-    ]);
+    const rows: Rows = SAMPLE_REGIONS.flatMap((region, index) => {
+      const value = Math.round(500 - index * 32 + (index % 3) * 45);
+      return cfg.seriesBy ? [[region, value, 'A'], [region, Math.round(value * 0.72), 'B']] : [[region, value]];
+    });
     return {
       columns,
       rows,
@@ -586,18 +656,31 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       ...(sampling ? { sampling, approximate: sampling.approximate, sampleRate: legacySampleRate(sampling) } : {}),
     };
   }
-  // 지도 포인트: 대한민국 범위 내 경도·위도(+선택 크기값) 원본 좌표.
-  if (chartType === 'geoscatter') {
-    const spatial = cfg.geoPoint?.mode === 'spatial';
-    const hasSize = spatial ? !!cfg.geoPoint?.sizeColumn : cfg.yAxis.length >= 2;
+  // 지도 좌표: map/heatmap 또는 point/scatter·effectScatter가 같은 역할 열 계약을 사용한다.
+  if (chartType === 'geoscatter' || (chartType === 'map' && geoSeriesType === 'heatmap')) {
+    const hasName = !!cfg.geoPoint?.nameColumn;
+    const hasValue = !!cfg.geoPoint?.valueColumn;
+    const hasSize = chartType === 'geoscatter' && !!cfg.geoPoint?.sizeColumn;
+    const hasColor = !!cfg.geoPoint?.colorColumn;
     const columns: Cols = [
-      { name: spatial ? '__chartsdk_longitude' : cfg.xAxis ? colName(cfg.xAxis) : 'lng', type: 'numeric' },
-      { name: spatial ? '__chartsdk_latitude' : cfg.yAxis[0] ? colName(cfg.yAxis[0].column) : 'lat', type: 'numeric' },
-      ...(hasSize ? [{ name: spatial ? '__chartsdk_size' : colName(cfg.yAxis[1].column), type: 'numeric' }] : []),
+      { name: '__chartsdk_longitude', type: 'numeric' },
+      { name: '__chartsdk_latitude', type: 'numeric' },
+      ...(hasName ? [{ name: '__chartsdk_point_name', type: 'text' }] : []),
+      ...(hasValue ? [{ name: '__chartsdk_point_value', type: 'numeric' }] : []),
+      ...(hasSize ? [{ name: '__chartsdk_size', type: 'numeric' }] : []),
+      ...(hasColor ? [{ name: '__chartsdk_color_value', type: 'numeric' }] : []),
+      ...(cfg.seriesBy ? [{ name: '__chartsdk_series', type: 'text' }] : []),
     ];
-    const rows: Rows = SAMPLE_SPATIAL_POINTS.map(([lng, lat, size]) =>
-      hasSize ? [lng, lat, size] : [lng, lat]);
-    const sampling = spatial ? undefined : samplingForConfig(cfg, rows.map((row) => row[0]));
+    const rows: Rows = SAMPLE_SPATIAL_POINTS.map(([longitude, latitude, size], index) => [
+      longitude,
+      latitude,
+      ...(hasName ? [`포인트 ${index + 1}`] : []),
+      ...(hasValue ? [Math.round(Number(size) * 1.7)] : []),
+      ...(hasSize ? [size] : []),
+      ...(hasColor ? [Math.round(Number(size) * 2.3)] : []),
+      ...(cfg.seriesBy ? [index % 2 === 0 ? 'A' : 'B'] : []),
+    ]);
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
     return {
       columns,
       rows,
@@ -938,7 +1021,12 @@ function numericAxisOptions(
 }
 
 /** (rows, chartType, options) → ECharts option (방식 A 모사, MVP 옵션 범위) */
-export function assembleOption(result: QueryResult, chartType: ChartType, options: Record<string, any>): Record<string, unknown> {
+export function assembleOption(
+  result: QueryResult,
+  chartType: ChartType,
+  options: Record<string, any>,
+  builderConfig: Record<string, any> | null = null,
+): Record<string, unknown> {
   // Java 변환기와 동일하게 저장 옵션 마이그레이션과 대분류 기본값 병합을 변환기 진입점에서 수행한다.
   // 호출자가 부분 저장 옵션을 넘겨도 MSW 미리보기와 실제 서버가 같은 결과를 내야 한다.
   const o = optionsWithDefaults(chartType as MajorType, options ?? {});
@@ -960,8 +1048,11 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
   const scatterSeriesCols = chartType === 'scatter' && bubbleColumnIndex >= 0
     ? seriesCols.filter((_column, index) => index + 1 !== bubbleColumnIndex)
     : seriesCols;
+  const geoSeriesIndex = result.columns.findIndex((column) => column.name === '__chartsdk_series');
   const colorNames = chartType === 'pie'
     ? cats.map((category) => String(category))
+    : ((chartType === 'map' || chartType === 'geoscatter') && geoSeriesIndex >= 0)
+      ? [...new Set(displayRows.map((row) => geoRowSeriesName(row, geoSeriesIndex, '미분류')))]
     : (chartType === 'scatter' ? scatterSeriesCols : seriesCols).map((column) => column.name);
   const autoColorMap = resolveSeriesColorMap(
     colorNames,
@@ -994,7 +1085,15 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
       textStyle: chartTextStyle(typography.title, fonts.title),
     };
   }
-  applyCommonTooltip(opt, o, chartType, typography.tooltip, fonts.tooltip);
+  applyCommonTooltip(
+    opt,
+    o,
+    chartType,
+    result.columns,
+    builderConfig,
+    typography.tooltip,
+    fonts.tooltip,
+  );
   if (o.legend?.show !== false) {
     const pos = o.legend?.position ?? 'bottom';
     // 제목이 같은 모서리면 범례를 제목 다음 줄로(규칙 1, 서버 미러).
@@ -1162,109 +1261,226 @@ export function assembleOption(result: QueryResult, chartType: ChartType, option
     return opt;
   }
 
-  // ── 지도 — 지역별 값=색(visualMap). map.name 으로 시도/시군구 선택 ──
-  if (chartType === 'map') {
-    const spatial = result.columns.some((column) => column.name === '__chartsdk_geojson');
+  // ── 영역 지도 — 지역·Polygon 값을 seriesBy별 map 계열로 분리 ──
+  if (chartType === 'map' && variant !== 'heatmap') {
+    const nameIndex = result.columns.findIndex((column) => column.name === '__chartsdk_area_name');
+    const valueIndex = result.columns.findIndex((column) => column.name === '__chartsdk_area_value');
+    const geometryIndex = result.columns.findIndex((column) => column.name === '__chartsdk_geojson');
+    const seriesIndex = result.columns.findIndex((column) => column.name === '__chartsdk_series');
+    const spatial = geometryIndex >= 0;
+    const bySeries = new Map<string, unknown[]>();
     const occurrences = new Map<string, number>();
-    const data = displayRows.map((r) => {
-      const name = String(r[0] ?? '');
+    const values: number[] = [];
+    const featureByName = new Map<string, Record<string, unknown>>();
+    displayRows.forEach((row) => {
+      const name = String(row[nameIndex >= 0 ? nameIndex : 0] ?? '');
+      const value = Number(row[valueIndex >= 0 ? valueIndex : 1]) || 0;
+      const legacyValueName = valueIndex < 0 ? result.columns[1]?.name : undefined;
+      const seriesName = geoRowSeriesName(row, seriesIndex, legacyValueName || '값');
       const dimensions: ItemColorDimension[] = [name];
-      const occurrence = nextMockOccurrence(occurrences, 'map', '', dimensions);
-      return withMockItemColor(
-        { name, value: Number(r[1]) || 0 },
-        itemColorFor(itemColors, 'map', '', dimensions, occurrence),
+      const occurrence = nextMockOccurrence(occurrences, 'map', seriesName, dimensions);
+      const item = withMockItemColor(
+        { name, value },
+        itemColorFor(itemColors, 'map', seriesName, dimensions, occurrence),
         'areaColor',
       );
+      const current = bySeries.get(seriesName) ?? [];
+      current.push(item);
+      bySeries.set(seriesName, current);
+      values.push(value);
+      if (spatial && !featureByName.has(name)) {
+        try {
+          const geometry = JSON.parse(String(row[geometryIndex] ?? '')) as Record<string, unknown>;
+          if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
+            featureByName.set(name, { type: 'Feature', properties: { name }, geometry });
+          }
+        } catch { /* 유효하지 않은 mock geometry는 제외 */ }
+      }
     });
-    const vals = displayRows.map((row) => Number(row[1]) || 0);
-    let min = vals.length ? Math.min(...vals) : 0;
-    let max = vals.length ? Math.max(...vals) : 1;
+    if (bySeries.size === 0) bySeries.set('값', []);
+    let min = values.length ? Math.min(...values) : 0;
+    let max = values.length ? Math.max(...values) : 1;
     if (min === max) max = min + 1;
-    delete opt.legend;
-    opt.visualMap = visualMapConfig(
-      min,
-      max,
-      palette,
-      titleAtBottom(o) ? metrics.titleHeight : 0,
-      typography.legend,
-      fonts.legend,
-      o.colorTheme?.version === 2,
-    );
     let mapName = o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido';
     if (spatial) {
-      const features = displayRows.flatMap((row) => {
-        try {
-          const geometry = JSON.parse(String(row[2] ?? '')) as Record<string, unknown>;
-          if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return [];
-          return [{ type: 'Feature', properties: { name: String(row[0] ?? '') }, geometry }];
-        } catch {
-          return [];
-        }
-      });
+      const features = [...featureByName.values()];
       const fingerprint = JSON.stringify(features);
       let hash = 2166136261;
       for (let i = 0; i < fingerprint.length; i++) hash = Math.imul(hash ^ fingerprint.charCodeAt(i), 16777619);
       mapName = `chartsdk-dynamic-mock-${(hash >>> 0).toString(16)}`;
       opt[EMBEDDED_MAPS_KEY] = [{ name: mapName, geoJSON: { type: 'FeatureCollection', features } }];
     }
-    const series: Record<string, any> = {
-      type: 'map',
-      name: seriesCols[0]?.name ?? '값',
-      map: mapName,
-      roam: o.map?.roam === true,
-      label: {
-        show: o.dataLabel === true,
-        ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
-        ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
-      },
-      ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
-      ...nonCartesianInsets(o, false, true),
-      data,
-    };
-    applySeriesEmphasis(series, o, 'map');
-    opt.series = [series];
+    const mapSeries = [...bySeries.entries()].map(([name, data], index) => {
+      const id = `__chartsdk_geo_map_${index}`;
+      const series: Record<string, any> = {
+        id,
+        type: 'map',
+        name,
+        map: mapName,
+        roam: o.map?.roam === true,
+        itemStyle: {
+          areaColor: o.colorMap?.[name] ?? autoColorMap[name] ?? paletteColor(palette, index),
+        },
+        label: {
+          show: o.dataLabel === true,
+          ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+          ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+        },
+        ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
+        ...nonCartesianInsets(o, bySeries.size > 1, true),
+        data,
+      };
+      applySeriesEmphasis(series, o, 'map');
+      return series;
+    });
+    if (mapSeries.length <= 1) delete opt.legend;
+    opt.visualMap = visualMapConfig(
+      min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
+      typography.legend, fonts.legend, o.colorTheme?.version === 2,
+      mapSeries.map((series) => ({ seriesId: String(series.id), dimension: 0 })),
+    );
+    opt.series = mapSeries;
     opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
 
-  // ── 지도 포인트 — geo 좌표계 + scatter([lng,lat(,크기값)]) (ECharts 공식 effectScatter-map 예제 구조) ──
-  if (chartType === 'geoscatter') {
-    const hasSize = seriesCols.length >= 2;
-    const sizes = hasSize ? displayRows.map((r) => Number(r[2]) || 0) : [];
-    const sMin = sizes.length ? Math.min(...sizes) : 0;
-    const sMax = sizes.length ? Math.max(...sizes) : 1;
+  // ── map/heatmap 및 point/scatter·effectScatter — 공용 geo 역할 열 ──
+  if (chartType === 'geoscatter' || (chartType === 'map' && variant === 'heatmap')) {
+    const longitudeFound = result.columns.findIndex((column) => column.name === '__chartsdk_longitude');
+    const longitudeIndex = Math.max(0, longitudeFound);
+    const latitudeFound = result.columns.findIndex((column) => column.name === '__chartsdk_latitude');
+    const latitudeIndex = latitudeFound >= 0 ? latitudeFound : 1;
+    const nameIndex = result.columns.findIndex((column) => column.name === '__chartsdk_point_name');
+    const valueIndex = result.columns.findIndex((column) => column.name === '__chartsdk_point_value');
+    let sizeIndex = result.columns.findIndex((column) => column.name === '__chartsdk_size');
+    if (chartType === 'geoscatter' && (longitudeFound < 0 || latitudeFound < 0)
+      && sizeIndex < 0 && result.columns.length > 2) sizeIndex = 2;
+    const colorIndex = result.columns.findIndex((column) => column.name === '__chartsdk_color_value');
+    const seriesIndex = result.columns.findIndex((column) => column.name === '__chartsdk_series');
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
-    // JSON 전송이라 symbolSize 콜백 불가 → 포인트별 symbolSize 를 데이터 항목에 계산해 넣는다(6~28px sqrt 스케일).
-    const sizeOf = (v: number) => (sMax === sMin ? base : Math.round(6 + 22 * Math.sqrt((v - sMin) / (sMax - sMin))));
-    delete opt.legend;
+    const sizes = sizeIndex >= 0 ? displayRows.map((row) => Number(row[sizeIndex])).filter(Number.isFinite) : [];
+    const sizeMin = sizes.length ? Math.min(...sizes) : 0;
+    const sizeMax = sizes.length ? Math.max(...sizes) : 1;
+    const sizeOf = (value: unknown) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || sizeMin === sizeMax) return base;
+      return Math.round(6 + 22 * Math.sqrt((numeric - sizeMin) / (sizeMax - sizeMin)));
+    };
+    const bySeries = new Map<string, unknown[]>();
+    const visualValues: number[] = [];
+    const occurrences = new Map<string, number>();
+    displayRows.forEach((row) => {
+      const longitude = Number(row[longitudeIndex]) || 0;
+      const latitude = Number(row[latitudeIndex]) || 0;
+      const seriesName = geoRowSeriesName(row, seriesIndex, chartType === 'map' ? '밀도' : '포인트');
+      const pointName = nameIndex >= 0 && row[nameIndex] != null
+        ? String(row[nameIndex])
+        : `${roundMockCoordinate(longitude)}, ${roundMockCoordinate(latitude)}`;
+      const value = valueIndex >= 0 ? row[valueIndex] : chartType === 'map' ? 1 : null;
+      const intensity = chartType === 'map' && typeof value === 'number' && Number.isFinite(value) ? value : 1;
+      const rawColorValue = colorIndex >= 0 ? row[colorIndex] : chartType === 'map' ? intensity : value;
+      const colorValue = typeof rawColorValue === 'number' && Number.isFinite(rawColorValue)
+        ? rawColorValue
+        : chartType === 'map' ? intensity : Number.NaN;
+      if (Number.isFinite(colorValue)) visualValues.push(colorValue);
+      const dimensions: ItemColorDimension[] = [roundMockCoordinate(longitude), roundMockCoordinate(latitude)];
+      const occurrence = nextMockOccurrence(occurrences, 'geoscatter', seriesName, dimensions);
+      const itemColor = itemColorFor(itemColors, 'geoscatter', seriesName, dimensions, occurrence);
+      const point: Record<string, unknown> = {
+        name: pointName,
+        value: chartType === 'map'
+          ? [longitude, latitude, intensity, Number.isFinite(colorValue) ? colorValue : intensity]
+          : [longitude, latitude, value, sizeIndex >= 0 ? row[sizeIndex] : null, colorIndex >= 0 ? row[colorIndex] : null],
+        ...(chartType === 'geoscatter' && sizeIndex >= 0 ? { symbolSize: sizeOf(row[sizeIndex]) } : {}),
+      };
+      const current = bySeries.get(seriesName) ?? [];
+      current.push(withMockItemColor(point, itemColor, 'color'));
+      bySeries.set(seriesName, current);
+    });
+    if (bySeries.size === 0) bySeries.set(chartType === 'map' ? '밀도' : '포인트', []);
+    const boundary = o.map?.boundary ?? {};
+    const boundaryItemStyle: Record<string, unknown> = {};
+    if (typeof boundary.areaColor === 'string') boundaryItemStyle.areaColor = boundary.areaColor;
+    if (typeof boundary.borderColor === 'string') boundaryItemStyle.borderColor = boundary.borderColor;
+    if (typeof boundary.borderWidth === 'number') {
+      boundaryItemStyle.borderWidth = clampNumber(boundary.borderWidth, 0, 20, 5);
+    }
     opt.geo = {
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
       roam: o.map?.roam === true,
-      ...nonCartesianInsets(o, false),
+      clip: true,
+      ...nonCartesianInsets(o, bySeries.size > 1, chartType === 'map' || colorIndex >= 0),
       label: { show: false },
-      // 포인트 지도에서 강조 대상은 점 시리즈뿐이다. 배경 행정구역 hover 강조는 항상 차단한다.
+      ...(boundary.show === false ? { show: false } : {}),
+      ...(boundary.show !== false && Object.keys(boundaryItemStyle).length > 0
+        ? { itemStyle: boundaryItemStyle }
+        : {}),
       emphasis: { disabled: true },
     };
-    const occurrences = new Map<string, number>();
-    const series: Record<string, any> = {
-      type: 'scatter',
-      coordinateSystem: 'geo',
-      name: seriesCols[0]?.name ?? '포인트',
-      symbolSize: base,
-      itemStyle: { color: paletteColor(palette, 0) },
-      data: displayRows.map((r) => {
-        const lng = Number(r[0]) || 0;
-        const lat = Number(r[1]) || 0;
-        const dimensions: ItemColorDimension[] = [roundMockCoordinate(lng), roundMockCoordinate(lat)];
-        const occurrence = nextMockOccurrence(occurrences, 'geoscatter', '', dimensions);
-        const itemColor = itemColorFor(itemColors, 'geoscatter', '', dimensions, occurrence);
-        if (!hasSize) return withMockItemColor([lng, lat], itemColor, 'color');
-        const v = Number(r[2]) || 0;
-        return withMockItemColor({ value: [lng, lat, v], symbolSize: sizeOf(v) }, itemColor, 'color');
-      }),
-    };
-    applySeriesEmphasis(series, o, 'scatter');
-    opt.series = [series];
+    const pointSeries = [...bySeries.entries()].map(([name, data], index) => {
+      const type = chartType === 'map' ? 'heatmap' : variant === 'effectScatter' ? 'effectScatter' : 'scatter';
+      const id = chartType === 'map'
+        ? `__chartsdk_geo_heatmap_${index}`
+        : `__chartsdk_geo_point_${index}`;
+      const series: Record<string, any> = {
+        id,
+        type,
+        coordinateSystem: 'geo',
+        name,
+        ...(type === 'heatmap' ? {} : { clip: true }),
+        ...(type === 'heatmap'
+          ? {
+              pointSize: o.map?.heatmapPointSize ?? 20,
+              blurSize: o.map?.heatmapBlurSize ?? 30,
+              minOpacity: o.map?.heatmapMinOpacity ?? 0,
+              maxOpacity: o.map?.heatmapMaxOpacity ?? 1,
+            }
+          : {
+              symbol: o.geoscatter?.symbol ?? 'circle',
+              symbolSize: base,
+              itemStyle: {
+                color: o.colorMap?.[name] ?? o.autoColorMap?.[name] ?? paletteColor(palette, index),
+                opacity: o.geoscatter?.opacity ?? 1,
+                borderColor: o.geoscatter?.borderColor ?? '#FFFFFF',
+                borderWidth: o.geoscatter?.borderWidth ?? 0,
+              },
+              label: {
+                show: o.dataLabel === true,
+                formatter: '{b}',
+                ...chartTextStyle(typography.dataLabel, fonts.dataLabel),
+                ...(o.dataLabel === true && labelRotate != null ? { rotate: labelRotate } : {}),
+              },
+              ...(o.dataLabel === true ? { labelLayout: { hideOverlap: true } } : {}),
+              ...(type === 'effectScatter'
+                ? {
+                    showEffectOn: o.geoscatter?.showEffectOn ?? 'render',
+                    rippleEffect: {
+                      scale: o.geoscatter?.rippleScale ?? 2.5,
+                      period: o.geoscatter?.ripplePeriod ?? 4,
+                      brushType: o.geoscatter?.rippleBrushType ?? 'fill',
+                    },
+                  }
+                : {}),
+            }),
+        data,
+      };
+      applySeriesEmphasis(series, o, type === 'heatmap' ? 'heatmap' : 'scatter');
+      return series;
+    });
+    if (pointSeries.length <= 1) delete opt.legend;
+    if (chartType === 'map' || colorIndex >= 0) {
+      let min = visualValues.length ? Math.min(...visualValues) : 0;
+      let max = visualValues.length ? Math.max(...visualValues) : 1;
+      if (min === max) max = min + 1;
+      opt.visualMap = visualMapConfig(
+        min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
+        typography.legend, fonts.legend, o.colorTheme?.version === 2,
+        pointSeries.map((series) => ({ seriesId: String(series.id), dimension: chartType === 'map' ? 3 : 4 })),
+      );
+    } else {
+      delete opt.visualMap;
+    }
+    opt.series = pointSeries;
     opt[MAP_VIEWPORT_KEY] = o.map?.viewport ?? { mode: 'data' };
     return opt;
   }
@@ -1843,6 +2059,8 @@ function applyCommonTooltip(
   option: Record<string, any>,
   source: Record<string, any>,
   chartType: ChartType,
+  columns: QueryResult['columns'],
+  builderConfig: Record<string, any> | null,
   fontSize: number,
   fontFamily: string | null,
 ): void {
@@ -1862,28 +2080,22 @@ function applyCommonTooltip(
   if (config.textColor != null) tooltip.textStyle.color = config.textColor;
   option.tooltip = tooltip;
 
-  if (enabled && config.contentMode === 'custom') {
-    option.__chartsdkTooltip = {
+  if (enabled) {
+    const fields = tooltipFieldsFor({
       chartType,
-      template: config.template ?? tooltipTemplateFor(chartType),
+      columns,
+      options: source,
+      builderConfig,
+    });
+    option.__chartsdkTooltip = {
+      mode: 'fields',
+      chartType,
+      fields: visibleTooltipFields(fields, config.fields),
+      showSeriesColor: config.showSeriesColor !== false,
     };
   } else {
     delete option.__chartsdkTooltip;
   }
-}
-
-function tooltipTemplateFor(chartType: ChartType): string {
-  const templates: Record<ChartType, string> = {
-    bar: '{series}\n{name}: {value}',
-    line: '{series}\n{name}: {value}',
-    pie: '{name}: {value} ({percent}%)',
-    scatter: '{series}\nX: {x}\nY: {y}',
-    boxplot: '{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}',
-    heatmap: 'X: {x}\nY: {y}\n값: {value}',
-    map: '지역: {name}\n값: {value}',
-    geoscatter: '경도: {lng}\n위도: {lat}',
-  };
-  return templates[chartType];
 }
 
 function putNested(target: Record<string, any>, group: string, key: string, value: unknown): void {
@@ -1931,6 +2143,12 @@ function applyGeoEmphasis(geo: Record<string, any>, source: Record<string, any>)
   if (Object.keys(emphasis).length > 0) geo.emphasis = emphasis;
 }
 
+function geoRowSeriesName(row: unknown[], seriesIndex: number, fallback: string): string {
+  if (seriesIndex < 0 || row[seriesIndex] == null) return fallback;
+  const value = String(row[seriesIndex]);
+  return value.trim() === '' ? '미분류' : value;
+}
+
 /** 정렬된 배열에서 p 분위수 — R-7 선형보간(numpy/ECharts dataTool 기본). */
 function quantileSorted(sorted: number[], p: number): number {
   const n = sorted.length;
@@ -1972,6 +2190,7 @@ function visualMapConfig(
   fontSize = 12,
   fontFamily: string | null = null,
   continuousPalette = false,
+  seriesTargets: { seriesId: string; dimension: number }[] = [],
 ): Record<string, unknown> {
   return {
     min,
@@ -1981,6 +2200,7 @@ function visualMapConfig(
     left: 'center',
     bottom, // 제목이 하단이면 그 위로 올려 겹침 방지(규칙 1)
     textStyle: chartTextStyle(fontSize, fontFamily),
+    ...(seriesTargets.length > 0 ? { seriesTargets } : {}),
     inRange: { color: continuousPalette ? [...palette] : ['#f7f7f7', paletteColor(palette, 0)] },
   };
 }

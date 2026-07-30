@@ -4,6 +4,7 @@ import type { SamplingMetadata, SamplingMode } from '@chartsdk/chart-options/sam
 // options JSONB 키는 chart-options/optionRegistry.ts(SSOT)를 따른다 — 여기선 느슨한 맵으로 둔다.
 
 export type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
+export type GeoSeriesType = 'map' | 'heatmap' | 'scatter' | 'effectScatter';
 export type DefineMode = 'builder' | 'sql';
 export type RefreshMode = 'live' | 'ttl' | 'manual';
 
@@ -48,7 +49,10 @@ export interface SampleConfig {
 export interface GeoPointConfig {
   mode: 'columns' | 'spatial';
   spatialColumn?: string | null; // PostGIS geometry/geography(Point, SRID)
-  sizeColumn?: string | null; // 공간 컬럼 모드의 선택적 점 크기 숫자 컬럼
+  nameColumn?: string | null; // 라벨·툴팁에 표시할 선택적 이름
+  valueColumn?: string | null; // 툴팁/데이터 값에 사용할 선택적 숫자
+  sizeColumn?: string | null; // 점 크기에 사용할 선택적 숫자
+  colorColumn?: string | null; // visualMap 색상 강도에 사용할 선택적 숫자
 }
 
 /** 지도 경계 입력. regions는 내장 행정구역, spatial은 DB Polygon/MultiPolygon 컬럼이다. */
@@ -97,8 +101,10 @@ export interface BuilderConfig {
   orderBy: OrderBy | null;
   limit?: number;
   sample?: SampleConfig | null; // 집계·원본값 공용 행 표본. 물리 테이블은 INDEX_RANDOM/SYSTEM, 조인·VIEW는 RESULT_RANDOM.
-  geoPoint?: GeoPointConfig; // geoscatter 전용. 미지정은 레거시 경도(X)+위도(Y) 방식.
-  geoArea?: GeoAreaConfig; // map 전용. 미지정/regions는 내장 행정구역 방식.
+  /** 지도 대분류 안의 실제 ECharts series.type. 구 저장 데이터는 chartType별 기본형으로 해석한다. */
+  geoSeriesType?: GeoSeriesType;
+  geoPoint?: GeoPointConfig; // geoscatter와 map/heatmap 공용. 미지정은 경도(X)+위도(Y) 컬럼 방식.
+  geoArea?: GeoAreaConfig; // map/영역 전용. 미지정/regions는 내장 행정구역 방식.
 }
 
 /** S1 목록 카드 */
@@ -109,7 +115,7 @@ export interface ChartSummary {
   chartType: ChartType;
   datasourceId: number;
   /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 관계별 차트 목록에 사용한다. */
-  mainTable?: ChartMainTable | null;
+  mainTable: ChartMainTable;
   updatedAt: string;
 }
 
@@ -140,7 +146,7 @@ export interface Chart {
   name: string;
   description: string | null;
   datasourceId: number;
-  mainTable?: ChartMainTable | null; // builderConfig.table + 현재 데이터소스 이름에서 파생한 읽기 전용 응답.
+  mainTable: ChartMainTable; // builderConfig.table + 현재 데이터소스 이름에서 파생한 읽기 전용 응답.
   defineMode: DefineMode;
   sqlQuery: string;
   builderConfig: BuilderConfig;

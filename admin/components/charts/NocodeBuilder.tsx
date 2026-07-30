@@ -21,7 +21,9 @@ import {
   isSpatialAreaType,
   isSpatialPointType,
   isTableQueryMode,
+  geoSeriesTypeFor,
   orderTargets,
+  supportsSeriesByForChart,
   tableHandle,
   tableRefKey,
   updateSampleMode,
@@ -50,7 +52,6 @@ interface Props {
   datasources: Datasource[];
   tableSelectionTarget: TableSelectionTarget | null;
   onRequestTableSelection: (target: TableSelectionTarget) => void;
-  onPreviewBaseTable: (table: SchemaTable) => void;
   onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
@@ -60,7 +61,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onPreviewBaseTable, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -69,10 +70,13 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const isBoxplot = chartType === 'boxplot';
   const isMap = chartType === 'map';
   const isGeoScatter = chartType === 'geoscatter';
+  const geoSeriesType = geoSeriesTypeFor(config, chartType);
+  const pointInput = isGeoScatter || (isMap && geoSeriesType === 'heatmap');
+  const areaInput = isMap && geoSeriesType === 'map';
   const geoPointMode = config.geoPoint?.mode ?? 'columns';
-  const spatialGeoPoint = isGeoScatter && geoPointMode === 'spatial';
+  const spatialGeoPoint = pointInput && geoPointMode === 'spatial';
   const geoAreaMode = config.geoArea?.mode ?? 'regions';
-  const spatialGeoArea = isMap && geoAreaMode === 'spatial';
+  const spatialGeoArea = areaInput && geoAreaMode === 'spatial';
   const spatialGeometry = spatialGeoPoint || spatialGeoArea;
   const tableQueryMode = isTableQueryMode(config, chartType);
   const spatialPointOptions = colOptions
@@ -83,18 +87,18 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
   const areaNameOptions = colOptions.filter((column) => !/\b(?:geometry|geography)\b/i.test(column.type));
   const numericOptions = colOptions.filter((column) => isNumericType(column.type));
-  // 시리즈 수 상한(원형·지도·상자수염=1, 지도 포인트=2[위도+크기]).
-  const supportsSeriesBy = chartType === 'bar' || chartType === 'line';
-  const maxSeries = isPie || isMap || isBoxplot || !!config.seriesBy ? 1 : isGeoScatter ? 2 : Infinity;
-  const hideBucket = isScatter || isBoxplot || isGeoScatter;
-  const hideSampleRow = spatialGeometry || tableQueryMode;
-  const xLabel = isMap ? '지역' : isBoxplot ? '카테고리' : isGeoScatter ? '경도' : 'X축';
-  const yLabel = isMap ? '값' : isBoxplot || isPie ? '값' : isGeoScatter ? '위도 · 크기' : 'Y축 값';
+  // 값 축 수 상한. 지도 포인트의 이름·값·크기·색상은 아래 전용 역할 선택기로 받는다.
+  const supportsSeriesBy = supportsSeriesByForChart(chartType);
+  const maxSeries = isPie || areaInput || isBoxplot || !!config.seriesBy || pointInput ? 1 : Infinity;
+  const hideBucket = isScatter || isBoxplot || pointInput;
+  const hideSampleRow = tableQueryMode;
+  const xLabel = areaInput ? '지역' : isBoxplot ? '카테고리' : pointInput ? '경도' : 'X축';
+  const yLabel = areaInput ? '값' : isBoxplot || isPie ? '값' : pointInput ? '위도' : 'Y축 값';
   const yAggChoices = aggChoicesForChart(chartType);
   const executionIssue = builderExecutionIssue(config, chartType, tables);
   const warning = builderWarning(config);
   const canRun = !executionIssue;
-  const firstCol = (isGeoScatter ? numericOptions[0] : colOptions[0])?.value ?? '';
+  const firstCol = (pointInput ? numericOptions[0] : colOptions[0])?.value ?? '';
   const firstValueCol = numericOptions[0]?.value ?? colOptions[0]?.value ?? '';
   const firstValueType = colOptions.find((column) => column.value === firstValueCol)?.type;
 
@@ -104,6 +108,9 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const findByKey = (key: string) => tables.find((t) => tableRefKey(t) === key);
   const dsName = (id: number) => datasources.find((d) => d.id === id)?.name ?? `ds${id}`;
   const baseSchemaTable = config.table ? findByKey(tableRefKey(config.table)) : undefined;
+  const baseTableLabel = config.table
+    ? [config.table.schema, config.table.name].filter(Boolean).join('.')
+    : '원본 테이블을 선택하세요';
 
   const changeXAxis = (xAxis: string) => {
     const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
@@ -166,16 +173,30 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         xAxisBucket: null,
         yAxis: [],
         orderBy: null,
-        sample: null,
         geoPoint: {
           mode: 'spatial',
           spatialColumn: config.geoPoint?.spatialColumn ?? spatialPointOptions[0]?.value ?? null,
+          nameColumn: config.geoPoint?.nameColumn ?? null,
+          valueColumn: config.geoPoint?.valueColumn ?? null,
           sizeColumn: config.geoPoint?.sizeColumn ?? null,
+          colorColumn: config.geoPoint?.colorColumn ?? null,
         },
       });
       return;
     }
-    patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, sample: null, geoPoint: { mode: 'columns' } });
+    patch({
+      xAxis: null,
+      xAxisBucket: null,
+      yAxis: [],
+      orderBy: null,
+      geoPoint: {
+        mode: 'columns',
+        nameColumn: config.geoPoint?.nameColumn ?? null,
+        valueColumn: config.geoPoint?.valueColumn ?? null,
+        sizeColumn: config.geoPoint?.sizeColumn ?? null,
+        colorColumn: config.geoPoint?.colorColumn ?? null,
+      },
+    });
   };
   const changeGeoAreaMode = (mode: 'regions' | 'spatial') => {
     if (mode === 'spatial') {
@@ -184,7 +205,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         xAxisBucket: null,
         yAxis: [],
         orderBy: null,
-        sample: null,
         geoArea: {
           mode: 'spatial',
           spatialColumn: config.geoArea?.spatialColumn ?? spatialAreaOptions[0]?.value ?? null,
@@ -194,7 +214,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       });
       return;
     }
-    patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, sample: null, geoArea: { mode: 'regions' } });
+    patch({ xAxis: null, xAxisBucket: null, yAxis: [], orderBy: null, geoArea: { mode: 'regions' } });
   };
   const unusedTable = !!config.table && tables.some(
     (t) => isRelationSelectable(t) && !activeTables(config).some((ref) => tableRefKey(ref) === tableRefKey(t)),
@@ -218,7 +238,9 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       {/* 구성 헤더 + 내부 정의 모드 탭 */}
       <div className="border-b border-border">
         <div className="flex h-12 items-center gap-3 px-4">
-          <span className="shrink-0 whitespace-nowrap text-sm font-medium text-text-primary">노코드 구성</span>
+          <span className="min-w-0 truncate text-sm font-medium text-text-primary" title={baseTableLabel}>
+            {baseTableLabel}
+          </span>
           <div className="flex-1" />
           {executionIssue ? (
             <span className="min-w-0 truncate text-xs text-danger" title={executionIssue}>{executionIssue}</span>
@@ -231,7 +253,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           <button
             type="button"
             onClick={onCollapse}
-            aria-label="노코드 구성·결과 접기"
+            aria-label="데이터 구성·결과 접기"
             aria-controls="data-builder-workspace"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[11px] font-medium text-text-secondary hover:bg-muted hover:text-text-primary"
           >
@@ -279,18 +301,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
 
       {/* 구성 폼 */}
       <div className="flex flex-col gap-4 p-4">
-        <Row label="원본">
-          <TableSelectionField
-            testId="base-table-selector"
-            label="원본 테이블"
-            table={baseSchemaTable}
-            datasourceName={baseSchemaTable ? dsName(baseSchemaTable.datasourceId) : null}
-            active={tableSelectionTarget?.kind === 'base'}
-            onClick={() => baseSchemaTable ? onPreviewBaseTable(baseSchemaTable) : onRequestTableSelection({ kind: 'base' })}
-            onChangeClick={baseSchemaTable ? () => onRequestTableSelection({ kind: 'base' }) : undefined}
-          />
-        </Row>
-
         {/* 테이블 조인 (생성규칙 11장) — base 다음, 컬럼 참조는 qualified */}
         {config.table && (
           <Row label="조인">
@@ -353,7 +363,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           </Row>
         )}
 
-        {isGeoScatter && (
+        {pointInput && (
           <Row label="좌표 방식">
             <div className="w-60">
               <Select
@@ -370,7 +380,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           </Row>
         )}
 
-        {isMap && (
+        {areaInput && (
           <Row label="지도 경계">
             <div className="w-60">
               <Select
@@ -446,28 +456,15 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               </div>
               <span className="text-[13px] text-text-tertiary">SRID가 지정된 PostGIS Point를 WGS84 경도·위도로 변환합니다</span>
             </Row>
-            <Row label="점 크기">
-              <div className="w-60">
-                <Select
-                  id="builder-spatial-size-column"
-                  aria-label="점 크기 컬럼"
-                  value={config.geoPoint?.sizeColumn ?? ''}
-                  onChange={(e) => patch({ geoPoint: { ...config.geoPoint!, mode: 'spatial', sizeColumn: e.target.value || null } })}
-                  options={numericOptions}
-                  placeholder="사용 안 함"
-                />
-              </div>
-              <span className="text-[13px] text-text-tertiary">선택 사항 · 숫자가 클수록 점을 크게 표시</span>
-            </Row>
           </>
         )}
 
         {!spatialGeometry && <Row label={xLabel}>
           <div className="w-60">
-            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={colOptions} placeholder={isMap ? '지역명 컬럼' : '컬럼 선택'} />
+            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={pointInput ? numericOptions : colOptions} placeholder={areaInput ? '지역명 컬럼' : '컬럼 선택'} />
           </div>
-          {isMap && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시)</span>}
-          {isGeoScatter && <span className="text-[13px] text-text-tertiary">경도(숫자) 컬럼 — 위도는 아래 첫 번째, 점 크기값은 두 번째(선택)</span>}
+          {areaInput && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시)</span>}
+          {pointInput && <span className="text-[13px] text-text-tertiary">WGS84 경도 숫자 컬럼 — 위도는 아래에서 선택합니다</span>}
           {isDateType(xType) && !hideBucket && (
             <div className="flex items-center gap-2">
               <span className="text-[13px] text-text-secondary">묶기</span>
@@ -488,7 +485,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
                 <div className="w-44">
-                  <Select id={`builder-y-column-${i}`} name={`builderYColumn${i}`} value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
+                  <Select id={`builder-y-column-${i}`} name={`builderYColumn${i}`} value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={pointInput ? numericOptions : colOptions} placeholder="컬럼" />
                 </div>
                 <div className="w-36">
                   <Select
@@ -520,14 +517,83 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           </div>
         </Row>}
 
-        {!spatialGeometry && supportsSeriesBy && <Row label="계열(그룹) 기준">
+        {pointInput && (
+          <>
+            <Row label="이름">
+              <div className="w-60">
+                <Select
+                  id="builder-geo-point-name"
+                  aria-label="지도 포인트 이름 컬럼"
+                  value={config.geoPoint?.nameColumn ?? ''}
+                  onChange={(event) => patch({ geoPoint: { ...config.geoPoint, mode: geoPointMode, nameColumn: event.target.value || null } })}
+                  options={areaNameOptions}
+                  placeholder="사용 안 함"
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">라벨과 툴팁에 표시할 이름입니다</span>
+            </Row>
+            <Row label="값">
+              <div className="w-60">
+                <Select
+                  id="builder-geo-point-value"
+                  aria-label="지도 포인트 값 컬럼"
+                  value={config.geoPoint?.valueColumn ?? ''}
+                  onChange={(event) => patch({ geoPoint: { ...config.geoPoint, mode: geoPointMode, valueColumn: event.target.value || null } })}
+                  options={numericOptions}
+                  placeholder={geoSeriesType === 'heatmap' ? '행마다 1 사용' : '사용 안 함'}
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">{geoSeriesType === 'heatmap' ? '히트맵 강도값이며, 미선택 시 각 행을 1로 계산합니다' : '툴팁과 데이터 값에 사용할 숫자입니다'}</span>
+            </Row>
+            {geoSeriesType !== 'heatmap' && (
+              <Row label="크기값">
+                <div className="w-60">
+                  <Select
+                    id="builder-geo-point-size"
+                    aria-label="지도 포인트 크기값 컬럼"
+                    value={config.geoPoint?.sizeColumn ?? ''}
+                    onChange={(event) => patch({ geoPoint: { ...config.geoPoint, mode: geoPointMode, sizeColumn: event.target.value || null } })}
+                    options={numericOptions}
+                    placeholder="사용 안 함"
+                  />
+                </div>
+                <span className="text-[13px] text-text-tertiary">선택하면 값 범위에 따라 점 크기를 조절합니다</span>
+              </Row>
+            )}
+            <Row label="색상값">
+              <div className="w-60">
+                <Select
+                  id="builder-geo-point-color"
+                  aria-label="지도 포인트 색상값 컬럼"
+                  value={config.geoPoint?.colorColumn ?? ''}
+                  onChange={(event) => patch({ geoPoint: { ...config.geoPoint, mode: geoPointMode, colorColumn: event.target.value || null } })}
+                  options={numericOptions}
+                  placeholder={geoSeriesType === 'heatmap' ? '값 컬럼 사용' : '사용 안 함'}
+                />
+              </div>
+              <span className="text-[13px] text-text-tertiary">visualMap 색상 강도에 사용할 숫자입니다</span>
+            </Row>
+          </>
+        )}
+
+        {supportsSeriesBy && <Row label="계열(그룹) 기준">
           <div className="w-60">
             <Select
               id="builder-series-by"
               aria-label="계열 그룹 기준"
               value={config.seriesBy ?? ''}
               onChange={(event) => changeSeriesBy(event.target.value)}
-              options={colOptions.filter((column) => column.value !== config.xAxis)}
+              options={colOptions.filter((column) => ![
+                config.xAxis,
+                config.yAxis[0]?.column,
+                config.geoPoint?.nameColumn,
+                config.geoPoint?.valueColumn,
+                config.geoPoint?.sizeColumn,
+                config.geoPoint?.colorColumn,
+                config.geoArea?.nameColumn,
+                config.geoArea?.valueColumn,
+                config.geoArea?.spatialColumn,
+              ].includes(column.value))}
               placeholder="사용 안 함"
             />
           </div>
@@ -545,7 +611,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               />
             </div>
           )}
-          <span className="text-[13px] text-text-tertiary">예: 지역(X) · 인구수(Y) · 연도(계열)</span>
+          <span className="text-[13px] text-text-tertiary">{pointInput ? '카테고리마다 별도 지도 계열과 스타일을 만듭니다' : '예: 지역(X) · 인구수(Y) · 연도(계열)'}</span>
         </Row>}
 
         <Row label="조건">

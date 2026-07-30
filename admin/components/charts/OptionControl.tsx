@@ -25,6 +25,11 @@ import {
   normalizeItemColorOverrides,
   type ColorSelection,
 } from '@chartsdk/chart-options/colorOverrides';
+import {
+  tooltipFieldVisible,
+  tooltipFieldsFor,
+  updateTooltipFieldVisibility,
+} from '@chartsdk/chart-options/tooltip';
 import { AnalysisAnnotationsControl } from './AnalysisAnnotationsControl';
 import {
   BoxplotOutliersControl,
@@ -60,8 +65,10 @@ export function OptionControl({
   def,
   value,
   chartType,
+  chartOptions,
   columns,
   rows,
+  builderConfig,
   colorTargets,
   hasResult,
   disabled: disabledProp,
@@ -82,14 +89,17 @@ export function OptionControl({
   onColorPickingChange,
   onApplySelectedColor,
   onClearSelectedColor,
+  onPaletteReversedChange,
   onDeleteSelectedChartItem,
   onClearAllChartItems,
 }: {
   def: OptionDef;
   value: unknown;
   chartType: MajorType;
+  chartOptions: Record<string, any>;
   columns: { name: string; type: string }[];
   rows: unknown[][];
+  builderConfig: Record<string, any> | null;
   colorTargets: ColorSelection[];
   hasResult: boolean;
   disabled: boolean;
@@ -118,6 +128,7 @@ export function OptionControl({
   onColorPickingChange: (picking: boolean) => void;
   onApplySelectedColor: (color: string) => void;
   onClearSelectedColor: () => void;
+  onPaletteReversedChange: (reversed: boolean) => void;
   onDeleteSelectedChartItem: () => void;
   onClearAllChartItems: () => void;
 }) {
@@ -173,7 +184,7 @@ export function OptionControl({
           value={String(value ?? '')}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled}
-          rows={def.key === 'tooltip.template' ? 5 : 2}
+          rows={2}
           className="w-full resize-none rounded-md border border-border bg-bg-panel px-3 py-2 text-[13px] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-50"
         />
         {def.help && <span className="text-[11px] leading-4 text-text-tertiary">{def.help}</span>}
@@ -201,6 +212,46 @@ export function OptionControl({
             </div>
           ))}
         </div>
+      </Labeled>
+    );
+  }
+
+  if (def.control === 'tooltipFields') {
+    const fields = tooltipFieldsFor({
+      chartType,
+      columns,
+      options: chartOptions,
+      builderConfig,
+    });
+    return (
+      <Labeled label={def.label} stack>
+        {fields.length === 0 ? (
+          <span className="text-xs text-text-tertiary">표시할 수 있는 차트 데이터가 없습니다.</span>
+        ) : (
+          <div className="flex flex-col gap-1.5" data-testid="tooltip-field-list">
+            {fields.map((item) => (
+              <div
+                key={item.key}
+                data-testid={`tooltip-field-${item.key}`}
+                className="flex min-h-8 items-center gap-2 rounded-md border border-border/70 bg-bg-panel px-2.5 py-1.5"
+              >
+                <span className="min-w-0 flex-1 truncate text-[13px] text-text-secondary" title={item.label}>
+                  {item.label}
+                </span>
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-text-tertiary">
+                  {item.role}
+                </span>
+                <Switch
+                  checked={tooltipFieldVisible(item, value)}
+                  disabled={disabled}
+                  aria-label={`${item.label} 툴팁 표시`}
+                  onChange={(checked) => onChange(updateTooltipFieldVisibility(value, item, checked))}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        {def.help && <span className="text-[11px] leading-4 text-text-tertiary">{def.help}</span>}
       </Labeled>
     );
   }
@@ -306,29 +357,43 @@ export function OptionControl({
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Switch checked={value === true} onChange={onChange} aria-label={def.label} /></div>;
       break;
     case 'color': {
-      const automaticBorderColor = def.key === 'tooltip.borderColor' && value == null;
+      const resettableColor = def.default === null;
+      const automaticColor = resettableColor && value == null;
+      const automaticColorLabel = def.key === 'tooltip.borderColor' ? '데이터 색상' : '자동';
+      const fallbackColor = def.key === 'map.boundary.areaColor'
+        ? '#EAEDF5'
+        : def.key === 'map.boundary.borderColor'
+          ? '#B7B9BE'
+          : '#FFFFFF';
+      const colorInput = (
+        <input
+          id={fieldId}
+          name={fieldName}
+          aria-label={def.label}
+          type="color"
+          value={normalizeHex(String(value ?? fallbackColor))}
+          onChange={(event) => onChange(event.target.value.toUpperCase())}
+          disabled={disabled}
+          className="h-7 w-10 rounded border border-border disabled:opacity-50"
+        />
+      );
       control = (
         <div className="flex items-center gap-2">
-          <input
-            id={fieldId}
-            name={fieldName}
-            aria-label={def.label}
-            type="color"
-            value={normalizeHex(String(value ?? '#FFFFFF'))}
-            onChange={(event) => onChange(event.target.value.toUpperCase())}
-            disabled={disabled}
-            className="h-7 w-10 rounded border border-border disabled:opacity-50"
-          />
-          {def.key === 'tooltip.borderColor' && (
-            <button
-              type="button"
-              disabled={disabled || automaticBorderColor}
-              onClick={() => onChange(null)}
-              className="text-[11px] text-text-tertiary hover:text-text-primary disabled:opacity-50"
-            >
-              {automaticBorderColor ? '데이터 색상' : '자동'}
-            </button>
-          )}
+          {resettableColor ? (
+            <>
+              <div className={disabled ? 'pointer-events-none opacity-50' : undefined}>
+                <Segmented
+                  value={automaticColor ? 'auto' : 'custom'}
+                  options={[
+                    { value: 'auto', label: automaticColorLabel },
+                    { value: 'custom', label: '직접 지정' },
+                  ]}
+                  onChange={(mode) => onChange(mode === 'auto' ? null : normalizeHex(fallbackColor).toUpperCase())}
+                />
+              </div>
+              {!automaticColor && colorInput}
+            </>
+          ) : colorInput}
         </div>
       );
       break;
@@ -349,6 +414,7 @@ export function OptionControl({
           continuous={continuousPalette}
           onApply={onApplySelectedColor}
           onClear={onClearSelectedColor}
+          onReversedChange={onPaletteReversedChange}
         />
       );
       break;
@@ -660,6 +726,7 @@ function PaletteControl({
   continuous,
   onApply,
   onClear,
+  onReversedChange,
 }: {
   value: unknown;
   selectedColor: string | null;
@@ -672,6 +739,7 @@ function PaletteControl({
   continuous: boolean;
   onApply: (color: string) => void;
   onClear: () => void;
+  onReversedChange: (reversed: boolean) => void;
 }) {
   const palette = normalizePalette(value);
   const displayPalette = sequential && reversed ? [...palette].reverse() : palette;
@@ -692,7 +760,7 @@ function PaletteControl({
   };
 
   return (
-    <div className={cn('flex flex-col gap-2', unavailable && 'opacity-50')}>
+    <div className="flex flex-col gap-2">
       {sequential && (
         <div className="flex items-center gap-2 text-[10px] text-text-tertiary">
           <span className="shrink-0">낮은 값</span>
@@ -706,7 +774,7 @@ function PaletteControl({
           <span className="shrink-0">높은 값</span>
         </div>
       )}
-      <div className="flex flex-wrap gap-1.5">
+      <div className={cn('flex flex-wrap gap-1.5', unavailable && 'opacity-50')}>
         {displayPalette.map((color, index) => {
           const swatch = normalizeHex(color);
           const active = normalizedSelected === swatch;
@@ -725,8 +793,20 @@ function PaletteControl({
           );
         })}
       </div>
-      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
-        <span data-testid="selected-color-target" className="mr-auto min-w-0 truncate text-[11px] text-text-tertiary">
+      {sequential && (
+        <div className={cn('flex min-h-7 items-center justify-between gap-2', disabled && 'opacity-50')}>
+          <span className="text-[13px] text-text-secondary">색상 방향 반전</span>
+          <div className={disabled ? 'pointer-events-none' : undefined}>
+            <Switch
+              checked={reversed}
+              onChange={onReversedChange}
+              aria-label="색상 방향 반전"
+            />
+          </div>
+        </div>
+      )}
+      <div className={cn('flex min-h-7 flex-wrap items-center gap-1.5', unavailable && 'opacity-50')}>
+        <span data-testid="selected-color-target" className="mr-auto min-w-0 truncate text-xs font-medium text-text-primary">
           {selectedTarget ? `선택: ${selectedTarget.label}` : '시리즈 또는 차트 요소를 선택하세요'}
         </span>
         <div className="relative shrink-0">
@@ -761,7 +841,7 @@ function PaletteControl({
           지정 해제
         </button>
       </div>
-      <p className="text-[10px] leading-4 text-text-tertiary">직접 지정한 색은 테마를 바꿔도 유지됩니다.</p>
+      <p className="text-right text-[10px] leading-4 text-text-tertiary">직접 지정한 색은 테마를 바꿔도 유지됩니다.</p>
     </div>
   );
 }
