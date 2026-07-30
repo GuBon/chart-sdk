@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { datasourcesApi } from '@/lib/api';
 import type { Datasource } from '@/lib/api';
 import { ChartListView } from '@/components/charts/ChartListView';
-import { dataSourcePath } from '@/lib/chartRoutes';
+import { chartDatasourcePath } from '@/lib/chartRoutes';
 
 export default function Page() {
   return (
@@ -21,6 +21,8 @@ function ChartList() {
   const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [datasourcesLoaded, setDatasourcesLoaded] = useState(false);
   const legacyDatasourceId = params.get('datasourceId');
+  const legacyDatasourceName = params.get('datasource');
+  const hasLegacyDatasource = legacyDatasourceId !== null || legacyDatasourceName !== null;
 
   useEffect(() => {
     let alive = true;
@@ -37,16 +39,19 @@ function ChartList() {
   }, []);
 
   useEffect(() => {
-    if (!datasourcesLoaded || legacyDatasourceId === null) return;
-    const selected = datasources.find((item) => item.id === Number(legacyDatasourceId));
+    if (!datasourcesLoaded || !hasLegacyDatasource) return;
+    const selected = legacyDatasourceId !== null
+      ? datasources.find((item) => item.id === Number(legacyDatasourceId))
+      : datasources.find((item) => item.name === legacyDatasourceName);
     const next = new URLSearchParams(params.toString());
     next.delete('datasourceId');
+    next.delete('datasource');
     next.delete('page');
     const query = next.toString();
-    const path = selected ? dataSourcePath(selected.name) : '/';
+    const path = selected ? chartDatasourcePath(selected.name) : '/';
     router.replace(query ? `${path}?${query}` : path, { scroll: false });
-  }, [datasources, datasourcesLoaded, legacyDatasourceId, params, router]);
+  }, [datasources, datasourcesLoaded, hasLegacyDatasource, legacyDatasourceId, legacyDatasourceName, params, router]);
 
-  if (legacyDatasourceId !== null) return null;
+  if (hasLegacyDatasource) return null;
   return <ChartListView datasources={datasources} />;
 }

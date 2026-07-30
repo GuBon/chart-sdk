@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import { ChevronRight, Database, Layers3, Search, Table2 } from 'lucide-react';
 import { datasourcesApi, schemaApi } from '@/lib/api';
 import type { Datasource, RelationType, SchemaTable } from '@/lib/api';
-import { dataRelationPath, dataSchemaPath, dataSourcePath } from '@/lib/chartRoutes';
+import { chartDatasourcePath, chartRelationPath, chartSchemaPath } from '@/lib/chartRoutes';
 import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ChartListView } from '@/components/charts/ChartListView';
@@ -24,7 +24,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
   const [relations, setRelations] = useState<SchemaTable[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [relationQuery, setRelationQuery] = useState('');
-  const needsCatalog = schema != null || view === 'schema';
+  const needsCatalog = view !== 'charts';
 
   useEffect(() => {
     let alive = true;
@@ -97,6 +97,26 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
     );
   }
 
+  if (view === 'charts') {
+    const scopePath = relation == null
+      ? schema == null
+        ? chartDatasourcePath(datasource.name)
+        : chartSchemaPath(datasource.name, schema)
+      : chartRelationPath({ datasourceName: datasource.name, schema: schema ?? 'public', name: relation });
+    const catalogView = relation == null ? (schema == null ? 'schema' : 'relations') : 'columns';
+    return (
+      <Suspense fallback={null}>
+        <ChartListView
+          datasources={datasources}
+          selectedDatasource={datasource}
+          schema={schema}
+          relation={relation}
+          catalogHref={`${scopePath}?view=${catalogView}`}
+        />
+      </Suspense>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1240px]">
       <DataBreadcrumb datasource={datasource} schema={schema} relation={relation} />
@@ -110,7 +130,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
             description={`${datasource.databaseName} · ${datasource.host}:${datasource.port}`}
           />
           <ScopeViewTabs
-            basePath={dataSourcePath(datasource.name)}
+            basePath={chartDatasourcePath(datasource.name)}
             activeDetail={view === 'schema'}
             detailView="schema"
             detailLabel="스키마 탐색"
@@ -124,7 +144,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
               ) : (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                   {schemas.map(([name, count]) => (
-                    <Link key={name} href={`${dataSchemaPath(datasource.name, name)}?view=relations`} className="flex items-center gap-3 rounded-[10px] border border-border bg-bg-panel p-4 transition-colors hover:border-text-tertiary">
+                    <Link key={name} href={`${chartSchemaPath(datasource.name, name)}?view=relations`} className="flex items-center gap-3 rounded-[10px] border border-border bg-bg-panel p-4 transition-colors hover:border-text-tertiary">
                       <Layers3 className="size-5 text-text-tertiary" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-text-primary">{name}</p>
@@ -150,7 +170,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
             description={`${datasource.name} 데이터소스의 TABLE·View·Materialized View`}
           />
           <ScopeViewTabs
-            basePath={dataSchemaPath(datasource.name, schema)}
+            basePath={chartSchemaPath(datasource.name, schema)}
             activeDetail={view === 'relations'}
             detailView="relations"
             detailLabel="관계 탐색"
@@ -191,7 +211,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
                       {visibleSchemaRelations.map((item) => (
                         <tr key={item.name} className="h-[52px] border-t border-border text-[13px]">
                           <td className="pl-5 font-medium">
-                            <Link href={`${dataRelationPath({ datasourceName: datasource.name, schema: item.schema, name: item.name })}?view=columns`} className="text-text-primary hover:text-primary hover:underline">{item.name}</Link>
+                            <Link href={`${chartRelationPath({ datasourceName: datasource.name, schema: item.schema, name: item.name })}?view=columns`} className="text-text-primary hover:text-primary hover:underline">{item.name}</Link>
                           </td>
                           <td><RelationBadge type={item.relationType} populated={item.populated} /></td>
                           <td className="text-text-secondary">{item.columns.length}개</td>
@@ -215,7 +235,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
           icon={<Database className="size-8 text-text-tertiary" />}
           title="관계를 찾을 수 없습니다"
           description={`${schema}.${relation}이 현재 카탈로그에 없습니다.`}
-          action={<Link href={dataSchemaPath(datasource.name, schema)} className="text-[13px] text-primary hover:underline">관계 목록으로</Link>}
+          action={<Link href={`${chartSchemaPath(datasource.name, schema)}?view=relations`} className="text-[13px] text-primary hover:underline">관계 목록으로</Link>}
         />
       ) : (
         <>
@@ -225,7 +245,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
             description={`${selectedRelation.schema} · ${relationTypeLabel(selectedRelation.relationType)}${selectedRelation.estimatedRowCount == null ? '' : ` · 약 ${selectedRelation.estimatedRowCount.toLocaleString()}행`}`}
           />
           <ScopeViewTabs
-            basePath={dataRelationPath({ datasourceName: datasource.name, schema, name: relation })}
+            basePath={chartRelationPath({ datasourceName: datasource.name, schema, name: relation })}
             activeDetail={view === 'columns'}
             detailView="columns"
             detailLabel="컬럼 정보"
@@ -285,8 +305,8 @@ function DataBreadcrumb({ datasource, schema, relation }: { datasource: Datasour
     <nav aria-label="데이터 경로" className="mb-4 flex flex-wrap items-center gap-1.5 text-xs text-text-tertiary">
       <Link href="/datasources" className="hover:text-text-primary">데이터소스</Link>
       <ChevronRight className="size-3" />
-      {schema == null ? <span className="text-text-secondary">{datasource.name}</span> : <Link href={dataSourcePath(datasource.name)} className="hover:text-text-primary">{datasource.name}</Link>}
-      {schema != null && <><ChevronRight className="size-3" />{relation == null ? <span className="text-text-secondary">{schema}</span> : <Link href={dataSchemaPath(datasource.name, schema)} className="hover:text-text-primary">{schema}</Link>}</>}
+      {schema == null ? <span className="text-text-secondary">{datasource.name}</span> : <Link href={`${chartDatasourcePath(datasource.name)}?view=schema`} className="hover:text-text-primary">{datasource.name}</Link>}
+      {schema != null && <><ChevronRight className="size-3" />{relation == null ? <span className="text-text-secondary">{schema}</span> : <Link href={`${chartSchemaPath(datasource.name, schema)}?view=relations`} className="hover:text-text-primary">{schema}</Link>}</>}
       {relation != null && <><ChevronRight className="size-3" /><span className="text-text-secondary">{relation}</span></>}
     </nav>
   );

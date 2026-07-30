@@ -34,7 +34,8 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valid = name.trim() && host.trim() && databaseName.trim() && dbUser.trim() && (mode === 'edit' || dbPassword.trim());
+  const reservedName = name.trim().toLocaleLowerCase('en-US') === 'new';
+  const valid = !reservedName && name.trim() && host.trim() && databaseName.trim() && dbUser.trim() && (mode === 'edit' || dbPassword.trim());
 
   const buildInput = (): DatasourceInput => ({
     name: name.trim(),
@@ -91,6 +92,7 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
       <div className="flex flex-col gap-3.5">
         <Field label="이름">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="analytics-db" />
+          {reservedName && <p className="mt-1 text-xs text-danger">new는 차트 생성 경로에 사용되어 데이터소스 이름으로 등록할 수 없습니다.</p>}
         </Field>
 
         <div className="flex gap-3">

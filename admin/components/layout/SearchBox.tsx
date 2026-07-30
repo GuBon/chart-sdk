@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 
-// AppBar 차트 검색 — URL ?q 에 반영(S1 목록이 읽어 필터). useSearchParams 라 Suspense 안에서 렌더.
+// 차트 목록 검색 — 현재 목록 범위를 유지하면서 URL ?q 에 반영한다.
 export function SearchBox() {
   const router = useRouter();
   const pathname = usePathname();
@@ -34,8 +34,7 @@ export function SearchBox() {
         next.delete('view');
         next.delete('datasourceId');
         const query = next.toString();
-        const targetPath = /^\/data\/[^/]+\/?$/.test(pathname) ? pathname : '/';
-        router.replace(query ? `${targetPath}?${query}` : targetPath);
+        router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
       }}
     />
   );

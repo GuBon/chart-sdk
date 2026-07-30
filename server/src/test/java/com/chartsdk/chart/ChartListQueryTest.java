@@ -10,7 +10,7 @@ class ChartListQueryTest {
         ChartListQuery defaults = new ChartListQuery(null, null, null, null, null, null, null, null);
         ChartListQuery oversized = new ChartListQuery(null, null, null, null, null, null, 99, 500);
 
-        assertThat(defaults.resolvedPageSize()).isEqualTo(12);
+        assertThat(defaults.resolvedPageSize()).isEqualTo(8);
         assertThat(defaults.resolvedPage(3)).isEqualTo(1);
         assertThat(oversized.resolvedPageSize()).isEqualTo(60);
         assertThat(oversized.resolvedPage(4)).isEqualTo(4);

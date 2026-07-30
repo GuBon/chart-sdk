@@ -1,6 +1,6 @@
 import { DataCatalogPage } from '@/components/data/DataCatalogPage';
 
-export default async function DatasourceCatalogPage({
+export default async function DatasourceChartPage({
   params,
   searchParams,
 }: {

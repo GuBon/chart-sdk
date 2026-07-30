@@ -24,7 +24,7 @@ public record ChartListQuery(
     }
 
     public int resolvedPageSize() {
-        return clamp(pageSize == null ? 12 : pageSize, 1, 60);
+        return clamp(pageSize == null ? 8 : pageSize, 1, 60);
     }
 
     public int resolvedPage(int totalPages) {

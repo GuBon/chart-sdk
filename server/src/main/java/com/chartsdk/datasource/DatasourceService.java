@@ -155,6 +155,9 @@ public class DatasourceService {
         if (input == null || blank(input.name()) || blank(input.host()) || blank(input.databaseName()) || blank(input.dbUser())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Required datasource fields are missing.");
         }
+        if ("new".equalsIgnoreCase(input.name().trim())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_NAME_RESERVED", "Datasource name 'new' is reserved.");
+        }
         if (requirePassword && blank(input.dbPassword())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Password is required.");
         }

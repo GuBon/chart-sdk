@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BarChart3, Plus } from 'lucide-react';
 import type { ChartSort, ChartSummary, ChartType, Datasource } from '@/lib/api';
-import { dataSourcePath } from '@/lib/chartRoutes';
+import { chartDatasourcePath } from '@/lib/chartRoutes';
 import { CHART_TYPE_FILTER_OPTIONS } from '@/lib/chartTypes';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -15,8 +15,9 @@ import { ChartCard } from './ChartCard';
 import { DeleteChartModal } from './DeleteChartModal';
 import { EmbedModal } from './EmbedModal';
 import { useChartPage } from './useChartPage';
+import { SearchBox } from '@/components/layout/SearchBox';
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE = 8;
 
 const SORT_OPTIONS = [
   { value: 'updated_desc', label: '최신 수정순' },
@@ -30,10 +31,11 @@ interface Props {
   selectedDatasource?: Datasource | null;
   schema?: string;
   relation?: string;
+  catalogHref?: string;
 }
 
 /** 홈과 데이터소스·스키마·관계 경로가 공유하는 차트 목록·필터·정렬 UI. */
-export function ChartListView({ datasources, selectedDatasource = null, schema, relation }: Props) {
+export function ChartListView({ datasources, selectedDatasource = null, schema, relation, catalogHref }: Props) {
   const pathname = usePathname();
   const router = useRouter();
   const params = useSearchParams();
@@ -64,7 +66,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
     navigate(pathname, next);
   }, [navigate, pathname]);
 
-  const { charts, previewOptions, total, totalPages, reload } = useChartPage(
+  const { charts, previewOptions, totalPages, reload } = useChartPage(
     {
       q,
       type,
@@ -91,8 +93,9 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
     const next = new URLSearchParams(pendingParamsRef.current);
     next.delete('page');
     next.delete('view');
+    next.delete('datasource');
     next.delete('datasourceId');
-    navigate(name === 'all' ? '/' : dataSourcePath(name), next);
+    navigate(name === 'all' ? '/' : chartDatasourcePath(name), next);
   };
 
   const clearFilters = () => router.replace('/', { scroll: false });
@@ -125,11 +128,12 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
           <Select id="chart-sort" name="chartSort" aria-label="정렬" value={sort} options={SORT_OPTIONS} onChange={(event) => setParam('sort', event.target.value)} />
         </div>
         <div className="flex-1" />
-        {charts && (
-          <span className="text-[13px] text-text-secondary">
-            {hasFilter ? `${total}건` : `전체 ${total}개`}
-          </span>
+        {catalogHref && (
+          <Link href={catalogHref} className="whitespace-nowrap text-[13px] font-medium text-text-secondary hover:text-text-primary">
+            데이터 탐색
+          </Link>
         )}
+        <SearchBox />
       </div>
 
       {charts && charts.length === 0 ? (

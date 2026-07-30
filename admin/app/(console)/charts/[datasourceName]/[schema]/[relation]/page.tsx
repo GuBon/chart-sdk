@@ -1,6 +1,6 @@
 import { DataCatalogPage } from '@/components/data/DataCatalogPage';
 
-export default async function RelationCatalogPage({ params, searchParams }: {
+export default async function RelationChartPage({ params, searchParams }: {
   params: Promise<{ datasourceName: string; schema: string; relation: string }>;
   searchParams: Promise<{ view?: string }>;
 }) {

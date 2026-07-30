@@ -58,6 +58,17 @@ class DatasourceServiceTest {
     }
 
     @Test
+    void createRejectsNameReservedByChartCreationRoute() {
+        DatasourceInput input = new DatasourceInput("NEW", "localhost", 5432, "analytics", "reader", "secret", 5);
+
+        assertThatThrownBy(() -> service.create(input))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("DATASOURCE_NAME_RESERVED");
+        verifyNoInteractions(jdbc, codec);
+    }
+
+    @Test
     void deleteReportsHowManyChartsReferenceDatasource() {
         when(jdbc.queryForObject(anyString(), eq(Integer.class), eq(7L))).thenReturn(3);
 

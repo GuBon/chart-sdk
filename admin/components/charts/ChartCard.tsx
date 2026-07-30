@@ -7,7 +7,7 @@ import { CHART_TYPE_META } from '@/lib/chartTypes';
 import { Button } from '@/components/ui/Button';
 import { chartEditPath } from '@/lib/chartRoutes';
 
-// S1 차트 카드(183:29) — 썸네일 + 제목·배지·설명·#id·수정일 + 편집/임베드.
+// S1 차트 카드(183:29) — 썸네일 + 제목·배지·설명·수정일 + 편집/임베드.
 import { MiniChart } from './MiniChart';
 
 function formatDate(iso: string) {
@@ -51,9 +51,7 @@ export function ChartCard({
           </span>
         </div>
         <p className="line-clamp-2 min-h-8 text-xs text-text-secondary">{chart.description ?? ''}</p>
-        <p className="text-xs text-text-tertiary">
-          #{chart.id} · 수정 {formatDate(chart.updatedAt)}
-        </p>
+        <p className="text-xs text-text-tertiary">수정 {formatDate(chart.updatedAt)}</p>
         <div className="flex gap-2">
           <Link href={chartEditPath(chart.id, chart.mainTable)} className="flex-1">
             <Button variant="secondary" size="sm" className="h-7 w-full">
