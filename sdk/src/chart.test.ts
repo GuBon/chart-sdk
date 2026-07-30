@@ -6,7 +6,16 @@ const ec = vi.hoisted(() => {
   return { instance, init: vi.fn(() => instance) };
 });
 vi.mock('echarts/core', () => ({ use: vi.fn(), init: ec.init }));
-vi.mock('echarts/charts', () => ({ BarChart: {}, LineChart: {}, PieChart: {}, ScatterChart: {}, BoxplotChart: {}, HeatmapChart: {}, MapChart: {} }));
+vi.mock('echarts/charts', () => ({
+  BarChart: {},
+  LineChart: {},
+  PieChart: {},
+  ScatterChart: {},
+  EffectScatterChart: {},
+  BoxplotChart: {},
+  HeatmapChart: {},
+  MapChart: {},
+}));
 vi.mock('echarts/components', () => ({
   DataZoomComponent: {},
   GeoComponent: {},

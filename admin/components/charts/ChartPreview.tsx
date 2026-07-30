@@ -146,14 +146,25 @@ export function ChartPreview({
     chart.on('georoam', reportRoamedMapBounds);
     chart.on('click', selectChartItem);
     chart.on('datazoom', reportDataZoom);
-    const ro = new ResizeObserver(() => {
-      chart.resize();
-      if (hasTitleRef.current) chart.setOption(responsiveTitlePatch(el.clientWidth));
-      reportMapBounds('sync');
-    });
+    let resizeFrame: number | null = null;
+    const resizeWhenStable = () => {
+      if (resizeFrame != null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        const size = renderableElementSize(el);
+        if (!size || !hasRenderedRef.current || chart.isDisposed() || chartRef.current !== chart) return;
+        // ECharts 6.1 Geo는 0px 컨테이너에서 역행렬이 null이 될 수 있다.
+        // 양수 크기를 명시해 도킹 전환 중간 프레임의 관측값이 들어가지 않게 한다.
+        chart.resize(size);
+        if (hasTitleRef.current) chart.setOption(responsiveTitlePatch(size.width));
+        reportMapBounds('sync');
+      });
+    };
+    const ro = new ResizeObserver(resizeWhenStable);
     ro.observe(el);
     return () => {
       ro.disconnect();
+      if (resizeFrame != null) cancelAnimationFrame(resizeFrame);
       if (roamFrameRef.current != null) cancelAnimationFrame(roamFrameRef.current);
       chart.off('georoam', reportRoamedMapBounds);
       chart.off('click', selectChartItem);
@@ -168,6 +179,7 @@ export function ChartPreview({
     const el = elRef.current;
     if (!chart || !el) return;
     let cancelled = false;
+    let sizeWait: ReturnType<typeof waitForRenderableElementSize> | null = null;
     if (option) {
       const isMapChart = chartType === 'map' || chartType === 'geoscatter';
       const preserveCurrentCamera = isMapChart
@@ -195,14 +207,28 @@ export function ChartPreview({
       if (mapCamera) applyMapCamera(renderOption, mapCamera);
       applyColorEditorState(renderOption, colorPickingRef.current);
       hasTitleRef.current = usesResponsiveTitle(renderOption);
+      // 새 옵션을 준비하는 동안 ResizeObserver가 직전 Geo 모델을 0px로 리사이즈하지 못하게 한다.
+      hasRenderedRef.current = false;
       void (async () => {
         await ensureChartWebFonts(renderOption, `${window.location.origin}/`);
         if (cancelled || chart.isDisposed()) return;
-        chart.setOption(withResponsiveTitle(renderOption, el.clientWidth), true);
+        let size = renderableElementSize(el);
+        if (!size) {
+          sizeWait = waitForRenderableElementSize(el);
+          size = await sizeWait.promise;
+        }
+        if (!size || cancelled || chart.isDisposed() || chartRef.current !== chart) return;
+        // init 시점도 0px일 수 있으므로 setOption보다 먼저 ECharts 내부 캔버스를 정상 크기로 맞춘다.
+        chart.resize(size);
+        chart.setOption(withResponsiveTitle(renderOption, size.width), true);
         setPreviewZoomed(false);
         hasRenderedRef.current = true;
         renderedMapViewportRevisionRef.current = mapViewportRevision;
-        requestAnimationFrame(() => onMapBoundsChangeRef.current?.(visibleMapBounds(chart), 'sync'));
+        requestAnimationFrame(() => {
+          if (!cancelled && !chart.isDisposed() && chartRef.current === chart) {
+            onMapBoundsChangeRef.current?.(visibleMapBounds(chart), 'sync');
+          }
+        });
       })();
     } else {
       hasTitleRef.current = false;
@@ -214,6 +240,7 @@ export function ChartPreview({
     }
     return () => {
       cancelled = true;
+      sizeWait?.cancel();
     };
   }, [chartType, mapViewportRevision, option, transientDataZoom]);
 
@@ -578,6 +605,47 @@ function asObjects(value: unknown): Record<string, unknown>[] {
   const list = Array.isArray(value) ? value : value ? [value] : [];
   return list.filter((item): item is Record<string, unknown> =>
     !!item && typeof item === 'object' && !Array.isArray(item));
+}
+
+interface RenderableElementSize {
+  width: number;
+  height: number;
+}
+
+function renderableElementSize(element: HTMLElement): RenderableElementSize | null {
+  const width = element.clientWidth;
+  const height = element.clientHeight;
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+    ? { width, height }
+    : null;
+}
+
+function waitForRenderableElementSize(element: HTMLElement): {
+  promise: Promise<RenderableElementSize | null>;
+  cancel: () => void;
+} {
+  let observer: ResizeObserver | null = null;
+  let settle: (size: RenderableElementSize | null) => void = () => {};
+  const promise = new Promise<RenderableElementSize | null>((resolve) => {
+    let settled = false;
+    settle = (size) => {
+      if (settled) return;
+      settled = true;
+      observer?.disconnect();
+      resolve(size);
+    };
+    const check = () => {
+      const size = renderableElementSize(element);
+      if (size) settle(size);
+    };
+    observer = new ResizeObserver(check);
+    observer.observe(element);
+    check();
+  });
+  return {
+    promise,
+    cancel: () => settle(null),
+  };
 }
 
 function chartPointFromClient(

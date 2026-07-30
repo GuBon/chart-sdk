@@ -1,6 +1,6 @@
 // ECharts core + 필요한 차트/컴포넌트/렌더러만 등록(임베드 SDK 번들 최소화).
 import * as echarts from 'echarts/core';
-import { BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart } from 'echarts/charts';
+import { BarChart, LineChart, PieChart, ScatterChart, EffectScatterChart, BoxplotChart, HeatmapChart, MapChart } from 'echarts/charts';
 import { DataZoomComponent, GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent } from 'echarts/components';
 import { LabelLayout } from 'echarts/features';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -11,7 +11,7 @@ import { hydrateValueFormat } from '@chartsdk/chart-options/valueFormat';
 // GeoComponent: 지도 포인트(geoscatter)가 독립 geo 좌표계(option.geo)를 쓰므로 명시 등록.
 // (map 시리즈 단독은 MapChart 의 installGeo 로 충분하지만, option.geo 컴포넌트는 별도 등록 필요)
 echarts.use([
-  BarChart, LineChart, PieChart, ScatterChart, BoxplotChart, HeatmapChart, MapChart,
+  BarChart, LineChart, PieChart, ScatterChart, EffectScatterChart, BoxplotChart, HeatmapChart, MapChart,
   DataZoomComponent, GeoComponent, GridComponent, TooltipComponent, LegendComponent, TitleComponent, VisualMapComponent,
   LabelLayout,
   CanvasRenderer,
