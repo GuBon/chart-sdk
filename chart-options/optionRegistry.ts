@@ -14,7 +14,7 @@
  *   - tier  : 구현 시급도 (언제 만드는가) → T1 = MVP 기본 품질, T2 = 자주, T3 = 고급
  *
  * 관련 문서: PRD v1.6 (7.2 전환규칙 · 9.2 options 키) / 화면설계서 v2.4 (4.4 옵션 패널)
- * 대상 라이브러리: Apache ECharts v5.6.0
+ * 대상 라이브러리: Apache ECharts v6.1.0
  */
 
 import {
@@ -71,6 +71,7 @@ export type Control =
   | 'colorMap'   // 항목별 컬러 피커 (실행 후 동적)
   | 'columnRef'  // 결과 컬럼 참조 셀렉트 (버블 크기 등, 실행 후 동적)
   | 'seriesTypes' // 시리즈별 막대/선 지정 (혼합 차트, 실행 후 동적)
+  | 'tooltipFields' // 현재 차트에 연결된 실제 필드별 툴팁 표시 여부
   | 'analysisAnnotations' // 기준선·기준 범위·목표점 목록
   | 'boxplotOutliers' // 박스플롯 IQR 이상치 표시
   | 'movingAverage' // 시간축 단순 이동평균
@@ -154,7 +155,7 @@ export const VARIANTS: Record<MajorType, VariantDef[]> = {
     { value: 'scatter', label: '산점도' },
     { value: 'bubble',  label: '버블', flags: { bubble: true }, help: '버블 크기 컬럼을 symbolSize 로 인코딩' },
   ],
-  // 신규 3종은 MVP 기본형 1개씩 (중분류 없음).
+  // 통계·행렬형은 기본형 하나, 지도 대분류는 ECharts 지리 시리즈별 중분류를 제공한다.
   boxplot: [
     { value: 'basic', label: '기본', help: '카테고리별 5수 요약(min·Q1·중앙값·Q3·max) 박스 플롯' },
   ],
@@ -162,10 +163,12 @@ export const VARIANTS: Record<MajorType, VariantDef[]> = {
     { value: 'basic', label: '기본', help: 'X·Y 카테고리 매트릭스를 색 강도로 인코딩(visualMap)' },
   ],
   map: [
-    { value: 'basic', label: '영역 지도', help: '지역명별 값을 대한민국 지도에 색으로 인코딩(visualMap)' },
+    { value: 'map', label: '영역', type: 'map', help: '지역명 또는 Polygon/MultiPolygon별 값을 색으로 인코딩' },
+    { value: 'heatmap', label: '히트맵', type: 'heatmap', help: '경도·위도 또는 Point 밀도를 지도 위 색 강도로 표시' },
   ],
   geoscatter: [
-    { value: 'basic', label: '포인트', help: '경도·위도 좌표를 지도 위 점으로 표시(선택: 값 컬럼으로 점 크기 인코딩)' },
+    { value: 'scatter', label: '포인트', type: 'scatter', help: '지도 위에 일반 포인트를 표시' },
+    { value: 'effectScatter', label: '효과 포인트', type: 'effectScatter', help: '지도 위 포인트에 ECharts 파동 효과를 표시' },
   ],
 };
 
@@ -202,7 +205,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
   {
     key: 'variant', zone: 'common', section: '기본', label: '중분류',
     control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
-    defaultByType: { bar: 'basic', line: 'basic', pie: 'pie', scatter: 'scatter', boxplot: 'basic', heatmap: 'basic', map: 'basic', geoscatter: 'basic' },
+    defaultByType: { bar: 'basic', line: 'basic', pie: 'pie', scatter: 'scatter', boxplot: 'basic', heatmap: 'basic', map: 'map', geoscatter: 'scatter' },
     echarts: '@variant',
     help: '선택지는 VARIANTS[chartType] 에서 동적으로 채운다 (대분류 종속)',
   },
@@ -306,7 +309,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
   {
     key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
-    control: 'toggle', appliesTo: ['heatmap', 'map'], default: false,
+    control: 'toggle', appliesTo: ['heatmap', 'map', 'geoscatter'], default: false,
     echarts: '@visualMap.inRange.color.reverse',
     help: '낮은 값과 높은 값에 적용되는 순차형 팔레트의 방향을 서로 바꿉니다.',
   },
@@ -318,15 +321,15 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 범례 ──
-  // heatmap·map 은 visualMap 이 범례를 대체하므로 범례 def 제외.
+  // 단일 heatmap·map은 visualMap이 값 범례를 담당하고, 지도 계열이 둘 이상이면 계열 범례도 함께 사용한다.
   {
     key: 'legend.show', zone: 'common', section: '범례', label: '범례 표시',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: true,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'map', 'geoscatter'], default: true,
     echarts: 'legend.show',
   },
   {
     key: 'legend.position', zone: 'common', section: '범례', label: '위치',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: 'bottom',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'map', 'geoscatter'], default: 'bottom',
     showIf: (o) => o.legend?.show !== false,
     echarts: '@legend.position',
     choices: [
@@ -337,27 +340,27 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
   {
     key: 'legend.scroll', zone: 'common', section: '범례', label: '좌·우 범례 스크롤',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot'], default: false, tier: 'T2',
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'map', 'geoscatter'], default: false, tier: 'T2',
     showIf: (o) => o.legend?.show !== false && (o.legend?.position === 'left' || o.legend?.position === 'right'),
     echarts: '@legend.type',
     help: '상·하 범례는 단일행을 보장하기 위해 항상 scroll. 좌·우만 이 토글로 페이지네이션을 켠다',
   },
   {
     key: 'typography.legendFontFamily', zone: 'common', section: '범례', label: '글꼴',
-    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map'], default: 'default',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'default',
     echarts: 'legend.textStyle.fontFamily',
     choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
     help: '행렬 히트맵·영역 지도에서는 색상 범례 글꼴에 적용됩니다.',
   },
   {
     key: 'typography.legendFontSize', zone: 'common', section: '범례', label: '글자 크기',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map'], default: null,
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: null,
     min: 8, max: 32, step: 1, unit: 'px', echarts: 'legend.textStyle.fontSize',
     help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다. 행렬 히트맵·영역 지도에서는 색상 범례 글자에 적용됩니다.',
   },
 
   // ── 툴팁 ──
-  // '자동'은 해당 키를 ECharts에 전달하지 않아 설치 버전(5.6)의 기본 동작을 그대로 보존한다.
+  // '자동'은 해당 키를 ECharts에 전달하지 않아 설치 버전(6.1)의 기본 동작을 그대로 사용한다.
   {
     key: 'tooltip.enabled', zone: 'common', section: '툴팁', label: '툴팁 표시',
     control: 'toggle', appliesTo: MAJOR_TYPES, default: true,
@@ -397,14 +400,14 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'color', appliesTo: MAJOR_TYPES, default: '#FFFFFF',
     showIf: (o) => o.tooltip?.enabled !== false,
     echarts: 'tooltip.backgroundColor',
-    help: 'ECharts 5.6 기본값은 흰색(#FFFFFF)입니다.',
+    help: 'ECharts 6.1 기본값은 흰색(#FFFFFF)입니다.',
   },
   {
     key: 'tooltip.textColor', zone: 'common', section: '툴팁', label: '글자색',
-    control: 'color', appliesTo: MAJOR_TYPES, default: '#666666',
+    control: 'color', appliesTo: MAJOR_TYPES, default: '#6D6E73',
     showIf: (o) => o.tooltip?.enabled !== false,
     echarts: 'tooltip.textStyle.color',
-    help: 'ECharts 5.6 기본값은 #666666입니다.',
+    help: 'ECharts 6.1 기본값은 #6D6E73입니다.',
   },
   {
     key: 'tooltip.borderColor', zone: 'common', section: '툴팁', label: '테두리 색상',
@@ -441,29 +444,18 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
   },
   {
-    key: 'tooltip.contentMode', zone: 'common', section: '툴팁', label: '내용',
-    control: 'segment', appliesTo: MAJOR_TYPES, default: 'auto',
+    key: 'tooltip.fields', zone: 'common', section: '툴팁', label: '표시할 데이터',
+    control: 'tooltipFields', appliesTo: MAJOR_TYPES, default: {},
     showIf: (o) => o.tooltip?.enabled !== false,
-    echarts: '@tooltip.template',
-    choices: [{ value: 'auto', label: '자동' }, { value: 'custom', label: '직접 지정' }],
-    help: '자동은 차트별 ECharts 기본 툴팁 내용을 그대로 사용합니다.',
+    echarts: '@tooltip.fields',
+    help: '별칭이 있으면 별칭을 사용하고, 새로 연결된 필드는 자동으로 표시합니다.',
   },
   {
-    key: 'tooltip.template', zone: 'common', section: '툴팁', label: '툴팁 내용',
-    control: 'textarea', appliesTo: MAJOR_TYPES,
-    defaultByType: {
-      bar: '{series}\n{name}: {value}',
-      line: '{series}\n{name}: {value}',
-      pie: '{name}: {value} ({percent}%)',
-      scatter: '{series}\nX: {x}\nY: {y}',
-      boxplot: '{name}\n하한 수염: {min}\nQ1: {q1}\n중앙값: {median}\nQ3: {q3}\n상한 수염: {max}',
-      heatmap: 'X: {x}\nY: {y}\n값: {value}',
-      map: '지역: {name}\n값: {value}',
-      geoscatter: '경도: {lng}\n위도: {lat}',
-    },
-    showIf: (o) => o.tooltip?.enabled !== false && o.tooltip?.contentMode === 'custom',
-    echarts: '@tooltip.template',
-    help: '공통: {series}, {name}, {value}. 차트에 따라 {x}, {y}, {percent}, {min}, {q1}, {median}, {q3}, {max}, {lng}, {lat}을 사용할 수 있습니다.',
+    key: 'tooltip.showSeriesColor', zone: 'common', section: '툴팁', label: '계열 색상 표시',
+    control: 'toggle', appliesTo: MAJOR_TYPES, default: true,
+    showIf: (o) => o.tooltip?.enabled !== false,
+    echarts: '@tooltip.marker',
+    help: '여러 계열이나 조각을 구분하는 작은 색상 표시입니다.',
   },
 
   // ── 강조 ──
@@ -505,7 +497,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'toggle', appliesTo: ['line', 'pie', 'scatter', 'boxplot', 'geoscatter'], default: true,
     showIf: (o) => o.emphasis?.enabled !== false,
     echarts: 'series.emphasis.scale',
-    help: 'ECharts 5.6에서 선·원형·산점도·박스 플롯의 기본값은 켜짐입니다.',
+    help: 'ECharts 6.1에서 선·원형·산점도·박스 플롯의 기본값은 켜짐입니다.',
   },
   {
     key: 'emphasis.scaleSize', zone: 'common', section: '강조', label: '원형 확대 크기',
@@ -525,26 +517,26 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'slider', appliesTo: ['boxplot'], default: 2,
     showIf: (o) => o.emphasis?.enabled !== false,
     min: 0, max: 10, step: 1, unit: 'px', echarts: 'series.emphasis.itemStyle.borderWidth',
-    help: 'ECharts 5.6 박스 플롯 기본값은 2px입니다.',
+    help: 'ECharts 6.1 박스 플롯 기본값은 2px입니다.',
   },
 
   // ── 계열 ──
   {
     key: 'dataLabel', zone: 'common', section: '계열', label: '데이터 라벨 표시',
-    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: false,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map', 'geoscatter'], default: false,
     echarts: 'series.label.show',
     help: 'heatmap = 셀 값, map = 지역명 라벨',
   },
   {
     key: 'typography.dataLabelFontFamily', zone: 'common', section: '계열', label: '라벨 글꼴',
-    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 'default',
+    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map', 'geoscatter'], default: 'default',
     showIf: (o) => o.dataLabel === true,
     echarts: 'series.label.fontFamily',
     choices: FONT_FAMILY_CHOICES.map((choice) => ({ value: choice.value, label: choice.label })),
   },
   {
     key: 'typography.dataLabelFontSize', zone: 'common', section: '계열', label: '라벨 글자 크기',
-    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: null,
+    control: 'slider', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map', 'geoscatter'], default: null,
     showIf: (o) => o.dataLabel === true,
     min: 8, max: 32, step: 1, unit: 'px', echarts: 'series.label.fontSize',
     help: '비워 두면 설계 크기와 전체 글자 크기 배율을 따릅니다.',
@@ -561,7 +553,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
   {
     key: 'labelRotate', zone: 'common', section: '계열', label: '라벨 텍스트 방향',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map'], default: 0, tier: 'T2',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'heatmap', 'map', 'geoscatter'], default: 0, tier: 'T2',
     showIf: (o) => o.dataLabel === true,
     echarts: 'series.label.rotate',
     choices: [{ value: 0, label: '가로' }, { value: 90, label: '세로' }],
@@ -1067,7 +1059,13 @@ export const OPTION_REGISTRY: OptionDef[] = [
 
   // ── 지도 (map=코로플레스 · geoscatter=위경도 포인트 공용) ──
   {
-    key: 'map.name', zone: 'type', section: '지도', label: '행정 경계',
+    key: 'map.boundary.show', zone: 'type', section: '지도', label: '행정구역 표시',
+    control: 'toggle', appliesTo: ['geoscatter'], default: true,
+    echarts: 'geo.show',
+    help: '끄면 배경 행정구역의 채움과 윤곽선을 숨기고 포인트만 표시합니다.',
+  },
+  {
+    key: 'map.name', zone: 'type', section: '지도', label: '경계 수준',
     control: 'segment', appliesTo: ['map', 'geoscatter'], default: 'kr-sido',
     echarts: '@map.name',
     choices: [
@@ -1075,6 +1073,28 @@ export const OPTION_REGISTRY: OptionDef[] = [
       { value: 'kr-sigungu', label: '시·군·구' },
     ],
     help: '데이터의 지역명 수준과 같은 내장 행정 경계를 선택합니다.',
+  },
+  {
+    key: 'map.boundary.areaColor', zone: 'type', section: '지도', label: '채우기 색상',
+    control: 'color', appliesTo: ['geoscatter'], default: null,
+    showIf: (o) => o.map?.boundary?.show !== false,
+    echarts: 'geo.itemStyle.areaColor',
+    help: '자동은 현재 차트의 행정구역 채우기 색상을 사용합니다.',
+  },
+  {
+    key: 'map.boundary.borderColor', zone: 'type', section: '지도', label: '윤곽선 색상',
+    control: 'color', appliesTo: ['geoscatter'], default: null,
+    showIf: (o) => o.map?.boundary?.show !== false,
+    echarts: 'geo.itemStyle.borderColor',
+    help: '자동은 현재 차트의 행정구역 윤곽선 색상을 사용합니다.',
+  },
+  {
+    key: 'map.boundary.borderWidth', zone: 'type', section: '지도', label: '윤곽선 너비',
+    control: 'slider', appliesTo: ['geoscatter'], default: 5,
+    showIf: (o) => o.map?.boundary?.show !== false,
+    min: 0, max: 20, step: 0.5, unit: 'px',
+    echarts: 'geo.itemStyle.borderWidth',
+    help: 'ChartSDK 기본값은 5px이며 최대 20px까지 지정할 수 있습니다.',
   },
   {
     key: 'map.viewport', zone: 'type', section: '지도', label: '표시 영역',
@@ -1089,10 +1109,94 @@ export const OPTION_REGISTRY: OptionDef[] = [
     help: '켜면 마우스 휠 확대·드래그 이동 허용',
   },
   {
-    key: 'geoscatter.symbolSize', zone: 'type', section: '지도', label: '점 크기',
+    key: 'map.heatmapPointSize', zone: 'type', section: '히트맵', label: '점 반경',
+    control: 'slider', appliesTo: ['map'], default: 20,
+    min: 2, max: 80, step: 1, unit: 'px',
+    showIf: (o) => o.variant === 'heatmap',
+    echarts: 'series.pointSize',
+    help: 'ECharts 6.1 geo heatmap의 pointSize입니다.',
+  },
+  {
+    key: 'map.heatmapBlurSize', zone: 'type', section: '히트맵', label: '번짐 크기',
+    control: 'slider', appliesTo: ['map'], default: 30,
+    min: 0, max: 100, step: 1, unit: 'px',
+    showIf: (o) => o.variant === 'heatmap',
+    echarts: 'series.blurSize',
+    help: 'ECharts 6.1 geo heatmap의 blurSize입니다.',
+  },
+  {
+    key: 'map.heatmapMinOpacity', zone: 'type', section: '히트맵', label: '최소 불투명도',
+    control: 'slider', appliesTo: ['map'], default: 0,
+    min: 0, max: 1, step: 0.05,
+    showIf: (o) => o.variant === 'heatmap',
+    echarts: 'series.minOpacity',
+  },
+  {
+    key: 'map.heatmapMaxOpacity', zone: 'type', section: '히트맵', label: '최대 불투명도',
+    control: 'slider', appliesTo: ['map'], default: 1,
+    min: 0, max: 1, step: 0.05,
+    showIf: (o) => o.variant === 'heatmap',
+    echarts: 'series.maxOpacity',
+  },
+  {
+    key: 'geoscatter.symbol', zone: 'type', section: '점', label: '점 모양',
+    control: 'select', appliesTo: ['geoscatter'], default: 'circle',
+    echarts: 'series.symbol',
+    choices: [
+      { value: 'circle', label: '원' }, { value: 'rect', label: '사각' },
+      { value: 'roundRect', label: '둥근 사각' }, { value: 'triangle', label: '삼각' },
+      { value: 'diamond', label: '마름모' }, { value: 'pin', label: '핀' },
+      { value: 'arrow', label: '화살표' },
+    ],
+  },
+  {
+    key: 'geoscatter.symbolSize', zone: 'type', section: '점', label: '점 크기',
     control: 'slider', appliesTo: ['geoscatter'], default: 10,
     min: 2, max: 40, step: 1, unit: 'px', echarts: 'series.symbolSize',
-    help: '크기 값 컬럼(두 번째 Y)을 추가하면 값에 비례한 크기로 대체된다',
+    help: '크기값 역할 컬럼을 선택하면 값에 비례한 크기로 대체됩니다.',
+  },
+  {
+    key: 'geoscatter.opacity', zone: 'type', section: '점', label: '불투명도',
+    control: 'slider', appliesTo: ['geoscatter'], default: 1,
+    min: 0, max: 1, step: 0.05, echarts: 'series.itemStyle.opacity',
+  },
+  {
+    key: 'geoscatter.borderColor', zone: 'type', section: '점', label: '테두리 색상',
+    control: 'color', appliesTo: ['geoscatter'], default: '#FFFFFF',
+    echarts: 'series.itemStyle.borderColor',
+  },
+  {
+    key: 'geoscatter.borderWidth', zone: 'type', section: '점', label: '테두리 굵기',
+    control: 'slider', appliesTo: ['geoscatter'], default: 0,
+    min: 0, max: 10, step: 0.5, unit: 'px', echarts: 'series.itemStyle.borderWidth',
+  },
+  {
+    key: 'geoscatter.showEffectOn', zone: 'type', section: '점', label: '효과 표시',
+    control: 'segment', appliesTo: ['geoscatter'], default: 'render',
+    showIf: (o) => o.variant === 'effectScatter',
+    echarts: 'series.showEffectOn',
+    choices: [{ value: 'render', label: '항상' }, { value: 'emphasis', label: '강조 시' }],
+  },
+  {
+    key: 'geoscatter.rippleScale', zone: 'type', section: '점', label: '파동 크기',
+    control: 'slider', appliesTo: ['geoscatter'], default: 2.5,
+    min: 1, max: 10, step: 0.5,
+    showIf: (o) => o.variant === 'effectScatter',
+    echarts: 'series.rippleEffect.scale',
+  },
+  {
+    key: 'geoscatter.ripplePeriod', zone: 'type', section: '점', label: '파동 주기',
+    control: 'slider', appliesTo: ['geoscatter'], default: 4,
+    min: 1, max: 20, step: 0.5, unit: '초',
+    showIf: (o) => o.variant === 'effectScatter',
+    echarts: 'series.rippleEffect.period',
+  },
+  {
+    key: 'geoscatter.rippleBrushType', zone: 'type', section: '점', label: '파동 표현',
+    control: 'segment', appliesTo: ['geoscatter'], default: 'fill',
+    showIf: (o) => o.variant === 'effectScatter',
+    echarts: 'series.rippleEffect.brushType',
+    choices: [{ value: 'fill', label: '채움' }, { value: 'stroke', label: '윤곽' }],
   },
   // boxplot·heatmap 은 기본형 1개이며, 박스플롯 이상치는 공통 분석 표시 옵션으로 구성한다.
 ];
@@ -1152,10 +1256,16 @@ export const OPTION_EDITOR_TAB_LABELS: Record<OptionEditorTab, string> = {
   data: '데이터',
 };
 
-const CARTESIAN_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'axis', 'style', 'interaction', 'data'];
-const MAP_EDITOR_TABS: OptionEditorTab[] = ['basic', 'style', 'area', 'series', 'interaction', 'data'];
-const GEO_SCATTER_EDITOR_TABS: OptionEditorTab[] = ['basic', 'style', 'area', 'interaction', 'data'];
-const PIE_EDITOR_TABS: OptionEditorTab[] = ['basic', 'series', 'style', 'interaction', 'data'];
+/** 모든 차트가 공유하는 탭 상대 순서. 적용할 옵션이 없는 탭만 유형별로 생략한다. */
+const OPTION_EDITOR_TAB_ORDER: OptionEditorTab[] = [
+  'basic',
+  'series',
+  'axis',
+  'area',
+  'style',
+  'interaction',
+  'data',
+];
 const TOOLTIP_APPEARANCE_KEYS = new Set([
   'tooltip.backgroundColor',
   'tooltip.textColor',
@@ -1165,14 +1275,23 @@ const TOOLTIP_APPEARANCE_KEYS = new Set([
   'typography.tooltipFontFamily',
   'typography.tooltipFontSize',
 ]);
-const MAP_AREA_KEYS = new Set(['map.name', 'map.viewport', 'map.roam']);
+const MAP_BOUNDARY_KEYS = new Set([
+  'map.name',
+  'map.boundary.show',
+  'map.boundary.areaColor',
+  'map.boundary.borderColor',
+  'map.boundary.borderWidth',
+]);
+const MAP_VIEWPORT_KEYS = new Set(['map.viewport', 'map.roam']);
+const MAP_AREA_KEYS = new Set([...MAP_BOUNDARY_KEYS, ...MAP_VIEWPORT_KEYS]);
 
 /** 차트 대분류에 맞는 편집 탭을 사용자 작업 순서대로 반환한다. */
 export function optionEditorTabsFor(chartType: MajorType): OptionEditorTab[] {
-  if (chartType === 'map') return [...MAP_EDITOR_TABS];
-  if (chartType === 'geoscatter') return [...GEO_SCATTER_EDITOR_TABS];
-  if (chartType === 'pie') return [...PIE_EDITOR_TABS];
-  return [...CARTESIAN_EDITOR_TABS];
+  const usesArea = chartType === 'map' || chartType === 'geoscatter';
+  const usesAxis = chartType !== 'pie' && !usesArea;
+  return OPTION_EDITOR_TAB_ORDER.filter(
+    (tab) => (tab !== 'axis' || usesAxis) && (tab !== 'area' || usesArea),
+  );
 }
 
 /** 레지스트리 옵션 하나가 편집 화면에서 속할 작업 탭. */
@@ -1206,8 +1325,8 @@ export function optionEditorTabOf(def: OptionDef): OptionEditorTab {
 
 /** 저장 레지스트리의 섹션명을 편집 화면의 사용자 용어로 변환한다. */
 export function optionEditorSectionOf(def: OptionDef): string {
-  if (MAP_AREA_KEYS.has(def.key)) return '표시 영역';
-  if (def.key === 'geoscatter.symbolSize') return '점';
+  if (MAP_BOUNDARY_KEYS.has(def.key)) return '행정 경계';
+  if (MAP_VIEWPORT_KEYS.has(def.key)) return '표시 영역';
   if (def.key === 'pie.labelPosition') return '라벨 · 정렬';
   if (TOOLTIP_APPEARANCE_KEYS.has(def.key)) return '툴팁 모양';
   if (def.section === '계열') return '라벨 · 정렬';
@@ -1224,6 +1343,7 @@ const STYLE_SECTION_ORDER: Partial<Record<MajorType, string[]>> = {
   line: ['선'],
   pie: ['원형'],
   scatter: ['산점도'],
+  map: ['히트맵'],
   geoscatter: ['점'],
 };
 
@@ -1233,7 +1353,7 @@ export function optionEditorSectionOrder(chartType: MajorType, tab: OptionEditor
     case 'basic':
       return ['기본'];
     case 'area':
-      return ['표시 영역'];
+      return ['행정 경계', '표시 영역'];
     case 'series':
       return [...(SERIES_SECTION_ORDER[chartType] ?? []), '분석 표시', '라벨 · 정렬', '범례'];
     case 'axis':
@@ -1330,13 +1450,65 @@ function migrateLegacyTypographyFontFamily(next: Options): void {
 }
 
 /**
+ * 제거된 지도 계열별 스타일을 현재 계약으로 승격한다.
+ * 색상은 계열별 colorMap으로 보존하고, 포인트 외형은 첫 저장 계열의 값을 공통 점 옵션으로 옮긴다.
+ */
+function migrateLegacyGeoSeriesStyles(next: Options, chartType: MajorType): void {
+  if (!next.geoSeriesStyles || typeof next.geoSeriesStyles !== 'object' || Array.isArray(next.geoSeriesStyles)) return;
+  const styles = next.geoSeriesStyles as Record<string, unknown>;
+  const colorMap = next.colorMap && typeof next.colorMap === 'object' && !Array.isArray(next.colorMap)
+    ? { ...next.colorMap }
+    : {};
+  const point = next.geoscatter && typeof next.geoscatter === 'object' && !Array.isArray(next.geoscatter)
+    ? { ...next.geoscatter }
+    : {};
+  const pointKeys = [
+    'opacity',
+    'borderColor',
+    'borderWidth',
+    'symbol',
+    'symbolSize',
+    'showEffectOn',
+    'rippleScale',
+    'ripplePeriod',
+    'rippleBrushType',
+  ] as const;
+
+  for (const [seriesName, rawStyle] of Object.entries(styles)) {
+    if (!rawStyle || typeof rawStyle !== 'object' || Array.isArray(rawStyle)) continue;
+    const style = rawStyle as Record<string, unknown>;
+    if (colorMap[seriesName] == null && typeof style.color === 'string' && style.color.trim() !== '') {
+      colorMap[seriesName] = style.color;
+    }
+    if (chartType === 'geoscatter') {
+      for (const key of pointKeys) {
+        if (!(key in point) && style[key] != null) point[key] = style[key];
+      }
+    }
+  }
+
+  if (Object.keys(colorMap).length > 0) next.colorMap = colorMap;
+  if (chartType === 'geoscatter' && Object.keys(point).length > 0) next.geoscatter = point;
+  delete next.geoSeriesStyles;
+}
+
+/**
  * 지도 전용이던 상호작용 설정을 공통 계약으로 승격한다.
  * 서버에도 같은 규칙이 있어, 편집기를 거치지 않는 구 저장 데이터도 호환된다.
  */
 export function migrateLegacyInteractionOptions(options: Options, chartType: MajorType): Options {
   const next: Options = structuredClone(options ?? {});
+  if (chartType === 'map' && (next.variant == null || next.variant === 'basic')) next.variant = 'map';
+  if (chartType === 'geoscatter' && (next.variant == null || next.variant === 'basic')) next.variant = 'scatter';
   migrateLegacyTypographyMode(next);
   migrateLegacyTypographyFontFamily(next);
+  migrateLegacyGeoSeriesStyles(next, chartType);
+  if (next.tooltip && typeof next.tooltip === 'object' && !Array.isArray(next.tooltip)) {
+    const tooltip = { ...next.tooltip };
+    delete tooltip.contentMode;
+    delete tooltip.template;
+    next.tooltip = tooltip;
+  }
   const isCartesian = ['bar', 'line', 'scatter', 'boxplot', 'heatmap'].includes(chartType);
   if (isCartesian) {
     const metadata = next._chartsdk && typeof next._chartsdk === 'object' ? { ...next._chartsdk } : {};
@@ -1369,10 +1541,8 @@ export function migrateLegacyInteractionOptions(options: Options, chartType: Maj
   const emphasis = next.emphasis && typeof next.emphasis === 'object' ? { ...next.emphasis } : {};
 
   if (!('enabled' in tooltip) && 'enabled' in legacyTooltip) tooltip.enabled = legacyTooltip.enabled;
-  if (!('template' in tooltip) && 'template' in legacyTooltip) {
-    tooltip.contentMode = 'custom';
-    tooltip.template = legacyTooltip.template;
-  }
+  delete tooltip.contentMode;
+  delete tooltip.template;
   if (!('enabled' in emphasis) && 'enabled' in legacyEmphasis) emphasis.enabled = legacyEmphasis.enabled;
   if (!('color' in emphasis) && 'color' in legacyEmphasis) {
     emphasis.colorMode = 'custom';

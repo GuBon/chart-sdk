@@ -103,6 +103,27 @@ describe('ensureMapsRegistered', () => {
     expect(option.__chartsdkMapViewport).toBeUndefined();
   });
 
+  it('여러 map 계열에 흩어진 지역을 모두 합쳐 데이터 경계를 계산한다', async () => {
+    ec.getMap.mockReturnValue({ geoJSON: GEO });
+    const { ensureMapsRegistered } = await import('./geo');
+    const option: Record<string, unknown> = {
+      __chartsdkMapViewport: { mode: 'data' },
+      series: [
+        { type: 'map', map: 'kr-sido', name: '온라인', data: [{ name: '서울특별시', value: 10 }] },
+        { type: 'map', map: 'kr-sido', name: '매장', data: [{ name: '부산광역시', value: 20 }] },
+      ],
+    };
+
+    await ensureMapsRegistered('http://api', option);
+
+    for (const series of option.series as Array<Record<string, any>>) {
+      expect(series.boundingCoords[0][0]).toBeCloseTo(126.6);
+      expect(series.boundingCoords[0][1]).toBeCloseTo(38.032);
+      expect(series.boundingCoords[1][0]).toBeCloseTo(129.5);
+      expect(series.boundingCoords[1][1]).toBeCloseTo(34.668);
+    }
+  });
+
   it('지도 포인트 데이터 전체 경계를 geo boundingCoords로 적용한다', async () => {
     ec.getMap.mockReturnValue({ geoJSON: GEO });
     const { ensureMapsRegistered } = await import('./geo');

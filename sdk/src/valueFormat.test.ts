@@ -2,6 +2,80 @@ import { describe, expect, it } from 'vitest';
 import { hydrateValueFormat, verticalizeAxisLabel } from '@chartsdk/chart-options/valueFormat';
 
 describe('공통 툴팁 hydration', () => {
+  it('선택한 실제 필드 레이블과 계열 색상 마커만 축 툴팁에 렌더링한다', () => {
+    const marker = '<span style="background:#5470c6"></span>';
+    const option: Record<string, any> = {
+      __chartsdkValueFormat: { tooltip: 'comma', yAxis: 'raw', unit: '원' },
+      __chartsdkTooltip: {
+        mode: 'fields',
+        chartType: 'bar',
+        showSeriesColor: true,
+        fields: [
+          { key: 'x:sales.region', label: 'region', role: '가로축', kind: 'category', defaultVisible: true },
+          { key: 'measure:sum:sales.amount:0', label: '월 매출', role: '합계', kind: 'measure', defaultVisible: true },
+        ],
+      },
+      tooltip: {},
+    };
+
+    hydrateValueFormat(option);
+
+    expect(option.tooltip.formatter([
+      { seriesName: '월 매출', axisValueLabel: '서울', name: '서울', value: 1234, marker },
+    ])).toBe(`${marker}region: 서울<br/>월 매출: 1,234원`);
+  });
+
+  it('원형의 구성비와 색상 마커를 각각 독립적으로 제외할 수 있다', () => {
+    const option: Record<string, any> = {
+      __chartsdkTooltip: {
+        mode: 'fields',
+        chartType: 'pie',
+        showSeriesColor: false,
+        fields: [
+          { key: 'category:product', label: 'product', role: '항목', kind: 'category', defaultVisible: true },
+          { key: 'derived:percent', label: '구성비', role: '계산값', kind: 'percent', defaultVisible: true },
+        ],
+      },
+      tooltip: {},
+    };
+
+    hydrateValueFormat(option);
+
+    expect(option.tooltip.formatter({
+      name: '<의류>',
+      value: 42,
+      percent: 37.25,
+      marker: '<span>marker</span>',
+    })).toBe('product: &lt;의류&gt;<br/>구성비: 37.3%');
+  });
+
+  it('박스플롯의 5수 요약과 이상치 필드를 데이터 종류에 맞게 구분한다', () => {
+    const fields = [
+      { key: 'category:group', label: 'group', role: '카테고리', kind: 'category', defaultVisible: true },
+      { key: 'box:min:value', label: 'value 최솟값', role: '계산값', kind: 'boxMin', defaultVisible: true },
+      { key: 'box:median:value', label: 'value 중앙값', role: '계산값', kind: 'boxMedian', defaultVisible: true },
+      { key: 'box:max:value', label: 'value 최댓값', role: '계산값', kind: 'boxMax', defaultVisible: true },
+      { key: 'box:outlier:value', label: 'value 이상치', role: '계산값', kind: 'boxOutlier', defaultVisible: true },
+    ];
+    const option: Record<string, any> = {
+      __chartsdkValueFormat: { tooltip: 'comma', yAxis: 'raw', unit: '' },
+      __chartsdkTooltip: { mode: 'fields', chartType: 'boxplot', fields },
+      tooltip: {},
+    };
+
+    hydrateValueFormat(option);
+
+    expect(option.tooltip.formatter({
+      name: 'A',
+      value: [0, 10, 20, 30, 40, 50],
+    })).toBe('group: A<br/>value 최솟값: 10<br/>value 중앙값: 30<br/>value 최댓값: 50');
+    expect(option.tooltip.formatter({
+      seriesId: '__chartsdk_boxplot_outliers',
+      name: 'A',
+      value: ['A', 1000],
+    })).toBe('group: A<br/>value 이상치: 1,000');
+  });
+
   it('지도 템플릿의 필드를 값 포맷과 함께 안전한 HTML로 복원한다', () => {
     const option: Record<string, any> = {
       __chartsdkValueFormat: { tooltip: 'comma', yAxis: 'raw', unit: '원' },

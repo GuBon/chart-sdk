@@ -90,7 +90,9 @@ export function applyMapViewport(
       bounds = viewport.bounds;
       preserveExactBounds = true;
     } else {
-      const names = viewport.mode === 'regions' ? viewport.regionKeys : mapDataNames(series.data);
+      const names = viewport.mode === 'regions'
+        ? viewport.regionKeys
+        : [...new Set(mapSeries.flatMap((item) => mapDataNames(item.data)))];
       bounds = boundsFromRegisteredMap(resolveMap(mapName), names);
       if (!bounds && viewport.mode === 'regions') bounds = viewport.bounds ?? null;
     }

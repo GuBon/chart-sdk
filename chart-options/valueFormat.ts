@@ -1,11 +1,15 @@
 import type { MajorType } from './optionRegistry';
+import type { TooltipFieldDescriptor } from './tooltip';
 
 export type ValueFormat = 'raw' | 'comma' | 'decimal0' | 'decimal1' | 'percent';
 
 type FormatMetadata = { tooltip?: ValueFormat; yAxis?: ValueFormat; unit?: string };
 type TooltipMetadata = {
+  mode?: 'custom' | 'fields';
   chartType?: MajorType;
   template?: string;
+  fields?: TooltipFieldDescriptor[];
+  showSeriesColor?: boolean;
 };
 type VerticalAxisRole = 'x' | 'y';
 
@@ -15,6 +19,8 @@ type TooltipParams = {
   name?: unknown;
   value?: unknown;
   percent?: unknown;
+  marker?: unknown;
+  axisValueLabel?: unknown;
 };
 
 /** Server JSON metadata를 ECharts formatter 함수로 복원하고 내부 키를 제거한다. */
@@ -36,7 +42,17 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
   }
   hydrateVerticalAxisLabels(option, metadata);
 
-  if (option.tooltip && tooltipMetadata?.template && tooltipMetadata.chartType) {
+  if (option.tooltip && tooltipMetadata?.chartType && tooltipMetadata.mode === 'fields') {
+    const valueFormatter = typeof option.tooltip.valueFormatter === 'function'
+      ? option.tooltip.valueFormatter as (value: unknown) => string
+      : (value: unknown) => String(value ?? '');
+    option.tooltip.formatter = (params: TooltipParams | TooltipParams[]) => renderFieldTooltip(
+      tooltipMetadata,
+      params,
+      valueFormatter,
+      option,
+    );
+  } else if (option.tooltip && tooltipMetadata?.template && tooltipMetadata.chartType) {
     const valueFormatter = typeof option.tooltip.valueFormatter === 'function'
       ? option.tooltip.valueFormatter as (value: unknown) => string
       : (value: unknown) => String(value ?? '');
@@ -54,6 +70,152 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
     };
   }
   return option;
+}
+
+function renderFieldTooltip(
+  metadata: TooltipMetadata,
+  params: TooltipParams | TooltipParams[],
+  valueFormatter: (value: unknown) => string,
+  option: Record<string, any>,
+): string {
+  const items = (Array.isArray(params) ? params : [params]).filter(Boolean);
+  const fields = Array.isArray(metadata.fields) ? metadata.fields : [];
+  if (items.length === 0 || fields.length === 0) return '';
+
+  const category = fields.find((item) => item.kind === 'category');
+  const blocks: string[] = [];
+  if (category && items.length > 1) {
+    const categoryValue = fieldValue(category, items[0], metadata.chartType!, option);
+    if (categoryValue != null) blocks.push(renderFieldLine(category.label, categoryValue, false, valueFormatter));
+  }
+
+  for (const item of items) {
+    const lines: string[] = [];
+    for (const descriptor of fields) {
+      if (descriptor === category && items.length > 1) continue;
+      if (!fieldAppliesToItem(descriptor, item, metadata.chartType!, option)) continue;
+      const value = fieldValue(descriptor, item, metadata.chartType!, option);
+      if (value == null || value === '') continue;
+      lines.push(renderFieldLine(
+        descriptor.label,
+        value,
+        isFormattedValue(descriptor.kind),
+        valueFormatter,
+        descriptor.kind === 'percent',
+      ));
+    }
+    if (lines.length === 0) continue;
+    const marker = metadata.showSeriesColor !== false && typeof item.marker === 'string'
+      ? item.marker
+      : '';
+    blocks.push(`${marker}${lines.join('<br/>')}`);
+  }
+  return blocks.join('<br/>');
+}
+
+function fieldAppliesToItem(
+  descriptor: TooltipFieldDescriptor,
+  params: TooltipParams,
+  chartType: MajorType,
+  option: Record<string, any>,
+): boolean {
+  if (!descriptor.seriesName) return true;
+  if (chartType === 'heatmap') {
+    const values = Array.isArray(params.value) ? params.value : [];
+    const yAxis = Array.isArray(option.yAxis) ? option.yAxis[0] : option.yAxis;
+    const current = Array.isArray(yAxis?.data)
+      ? yAxis.data[Number(values[1])] ?? values[1]
+      : values[1];
+    return String(current ?? '') === descriptor.seriesName;
+  }
+  return String(params.seriesName ?? '') === descriptor.seriesName;
+}
+
+function fieldValue(
+  descriptor: TooltipFieldDescriptor,
+  params: TooltipParams,
+  chartType: MajorType,
+  option: Record<string, any>,
+): unknown {
+  const values = Array.isArray(params.value) ? params.value : [];
+  const xAxis = Array.isArray(option.xAxis) ? option.xAxis[0] : option.xAxis;
+  const boxValues = values.slice(-5);
+  const outlier = chartType === 'boxplot'
+    && typeof params.seriesId === 'string'
+    && params.seriesId.startsWith('__chartsdk_boxplot_outliers');
+
+  switch (descriptor.kind) {
+    case 'category':
+      if (chartType === 'heatmap' && Array.isArray(xAxis?.data)) {
+        return xAxis.data[Number(values[0])] ?? values[0];
+      }
+      return params.axisValueLabel ?? params.name ?? values[0];
+    case 'series':
+      return params.seriesName;
+    case 'measure':
+      if (Array.isArray(params.value)) {
+        if (chartType === 'heatmap') return values[2];
+        if (descriptor.valueIndex != null && descriptor.valueIndex < values.length) {
+          return values[descriptor.valueIndex];
+        }
+        return values.at(-1);
+      }
+      return params.value;
+    case 'percent':
+      if (params.percent != null) return params.percent;
+      return typeof params.value === 'number' ? params.value * 100 : null;
+    case 'x':
+      return values[0];
+    case 'y':
+      return values[1] ?? params.value;
+    case 'bubbleSize':
+      return values[2];
+    case 'boxMin':
+      return outlier ? null : boxValues[0];
+    case 'boxQ1':
+      return outlier ? null : boxValues[1];
+    case 'boxMedian':
+      return outlier ? null : boxValues[2];
+    case 'boxQ3':
+      return outlier ? null : boxValues[3];
+    case 'boxMax':
+      return outlier ? null : boxValues[4];
+    case 'boxOutlier':
+      return outlier ? values[1] ?? values.at(-1) : null;
+    case 'geoName':
+      return params.name;
+    case 'geoValue':
+      return values[descriptor.valueIndex ?? 2] ?? params.value;
+    case 'geoSize':
+      return values[descriptor.valueIndex ?? 3];
+    case 'geoColor':
+      return values[descriptor.valueIndex ?? 4];
+    case 'longitude':
+      return values[descriptor.valueIndex ?? 0];
+    case 'latitude':
+      return values[descriptor.valueIndex ?? 1];
+    default:
+      return null;
+  }
+}
+
+function isFormattedValue(kind: TooltipFieldDescriptor['kind']): boolean {
+  return !['category', 'series', 'geoName', 'longitude', 'latitude', 'percent'].includes(kind);
+}
+
+function renderFieldLine(
+  label: string,
+  value: unknown,
+  formatted: boolean,
+  valueFormatter: (value: unknown) => string,
+  percent = false,
+): string {
+  const rendered = percent
+    ? `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 1 }).format(Number(value))}%`
+    : formatted
+      ? valueFormatter(value)
+      : String(value ?? '');
+  return `${escapeHtml(label)}: ${escapeHtml(rendered)}`;
 }
 
 /**
