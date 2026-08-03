@@ -18,7 +18,9 @@ public record SchemaCatalog(
         Map<Key, Map<String, String>> byTable,
         Map<Key, RelationType> relationTypes,
         Map<Key, Long> estimatedRowCounts,
-        Map<Key, Boolean> populated
+        Map<Key, Boolean> populated,
+        Map<Key, String> relationDisplayNames,
+        Map<Key, Map<String, String>> columnDisplayNames
 ) implements Catalog {
 
     public static final String DEFAULT_SCHEMA = "public";
@@ -32,7 +34,17 @@ public record SchemaCatalog(
 
     /** 기존 테스트·호출부 호환: 별도 메타데이터가 없으면 모두 일반 TABLE로 본다. */
     public SchemaCatalog(Map<Key, Map<String, String>> byTable) {
-        this(byTable, defaultTypes(byTable), Map.of(), Map.of());
+        this(byTable, defaultTypes(byTable), Map.of(), Map.of(), Map.of(), Map.of());
+    }
+
+    /** 관계 종류·통계까지만 제공하던 기존 생성자 호환. */
+    public SchemaCatalog(
+            Map<Key, Map<String, String>> byTable,
+            Map<Key, RelationType> relationTypes,
+            Map<Key, Long> estimatedRowCounts,
+            Map<Key, Boolean> populated
+    ) {
+        this(byTable, relationTypes, estimatedRowCounts, populated, Map.of(), Map.of());
     }
 
     /** 스키마 없는 테이블 맵을 public 카탈로그로 만든다(스키마 미지정 = public, §1.2 하위호환). */
@@ -99,6 +111,15 @@ public record SchemaCatalog(
 
     public boolean isQueryable(String schema, String table) {
         return relationType(schema, table) != RelationType.MATERIALIZED_VIEW || isPopulated(schema, table);
+    }
+
+    public String relationDisplayName(String schema, String table) {
+        return relationDisplayNames.get(new Key(schema, table));
+    }
+
+    public String columnDisplayName(String schema, String table, String column) {
+        Map<String, String> names = columnDisplayNames.get(new Key(schema, table));
+        return names == null ? null : names.get(column);
     }
 
     public Set<Key> tableKeys() {

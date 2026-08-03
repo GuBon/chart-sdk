@@ -34,6 +34,9 @@ public record QueryRows(
         }
         List<List<Object>> rows = new ArrayList<>();
         while (rs.next()) {
+            // Some JDBC drivers (notably DuckDB) accept setMaxRows but do not enforce it. Stop
+            // materialization here as the engine-independent memory boundary.
+            if (maxRows > 0 && rows.size() >= maxRows) break;
             List<Object> row = new ArrayList<>();
             for (int i = 1; i <= colCount; i++) row.add(rs.getObject(i));
             rows.add(row);

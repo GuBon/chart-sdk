@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 class SchemaControllerTest {
 
     @Test
+    @SuppressWarnings("unchecked")
     void exposesTableViewAndMaterializedViewMetadataInOneCatalogResponse() {
         QueryExecutor queries = mock(QueryExecutor.class);
         SchemaCatalog.Key table = new SchemaCatalog.Key("public", "sales");
@@ -31,7 +32,9 @@ class SchemaControllerTest {
                 Map.of(table, RelationType.TABLE, view, RelationType.VIEW,
                         materialized, RelationType.MATERIALIZED_VIEW),
                 Map.of(table, 5_000_000L, materialized, 24L),
-                Map.of(materialized, true));
+                Map.of(materialized, true),
+                Map.of(table, "매출"),
+                Map.of(table, Map.of("id", "매출 ID")));
         when(queries.catalog(7L)).thenReturn(catalog);
 
         @SuppressWarnings("unchecked")
@@ -41,6 +44,12 @@ class SchemaControllerTest {
         assertThat(relations).extracting(row -> row.get("relationType"))
                 .containsExactly("TABLE", "VIEW", "MATERIALIZED_VIEW");
         assertThat(relations.get(0)).containsEntry("estimatedRowCount", 5_000_000L);
+        assertThat(relations.get(0)).containsEntry("name", "sales").containsEntry("displayName", "매출");
+        List<Map<String, Object>> tableColumns =
+                (List<Map<String, Object>>) relations.get(0).get("columns");
+        assertThat(tableColumns.get(0))
+                .containsEntry("name", "id")
+                .containsEntry("displayName", "매출 ID");
         assertThat(relations.get(1)).doesNotContainKey("estimatedRowCount").doesNotContainKey("populated");
         assertThat(relations.get(2)).containsEntry("estimatedRowCount", 24L).containsEntry("populated", true);
     }
