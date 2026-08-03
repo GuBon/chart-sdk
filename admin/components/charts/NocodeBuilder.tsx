@@ -13,9 +13,11 @@ import {
   aggChoicesForChart,
   builderExecutionIssue,
   builderWarning,
+  columnDisplayName,
   columnsForBuilder,
   createSampleConfig,
   createSampleSeed,
+  fieldDisplayNameForRef,
   isDateType,
   isNumericType,
   isSpatialAreaType,
@@ -23,6 +25,7 @@ import {
   isTableQueryMode,
   geoSeriesTypeFor,
   orderTargets,
+  relationDisplayName,
   supportsSeriesByForChart,
   tableHandle,
   tableRefKey,
@@ -161,7 +164,11 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const colsOf = (ref: TableRef) => tables.find((t) => tableRefKey(t) === tableRefKey(ref))?.columns ?? [];
   // 조인 컬럼 참조는 테이블 핸들로 qualified — 백엔드가 핸들을 소스로 해석(§11.2). 동명 테이블은 핸들이 달라 구분됨.
   const qualOpts = (refs: TableRef[]) =>
-    refs.flatMap((ref) => colsOf(ref).map((c) => ({ value: `${tableHandle(ref)}.${c.name}`, label: `${tableHandle(ref)}.${c.name}` })));
+    refs.flatMap((ref) => colsOf(ref).map((c) => {
+      const value = `${tableHandle(ref)}.${c.name}`;
+      const displayName = columnDisplayName(c);
+      return { value, label: displayName === c.name ? value : `${displayName} (${value})` };
+    }));
   const setJoin = (i: number, p: Partial<JoinSpec>) => patch({ joins: joins.map((j, idx) => (idx === i ? { ...j, ...p } : j)) });
   const setJoinOn = (i: number, side: 'leftColumn' | 'rightColumn', col: string) => setJoin(i, { on: { ...joins[i].on, [side]: col } });
   const removeJoin = (i: number) => patch({ joins: joins.filter((_, idx) => idx !== i) });
@@ -226,7 +233,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       : sampleTotalHint(baseSchemaTable?.estimatedRowCount);
   const sortTargets = tableQueryMode
     ? colOptions.map((column) => ({ value: `column:${column.value}`, label: `${column.label} (원본)` }))
-    : orderTargets(config);
+    : orderTargets(config, tables);
 
   return (
     <div
@@ -497,9 +504,15 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                     options={yAggChoices}
                   />
                 </div>
-                <span className="text-[13px] text-text-secondary">별칭</span>
+                <span className="text-[13px] text-text-secondary">표시 이름</span>
                 <div className="w-28">
-                  <Input size="sm" value={y.alias ?? ''} onChange={(e) => setY(i, { alias: e.target.value })} placeholder="(자동)" />
+                  <Input
+                    size="sm"
+                    value={y.alias ?? ''}
+                    onChange={(e) => setY(i, { alias: e.target.value })}
+                    placeholder={fieldDisplayNameForRef(y.column, config, tables) || '자동'}
+                    aria-label={`Y축 ${i + 1} 표시 이름`}
+                  />
                 </div>
                 <button type="button" aria-label="값 제거" onClick={() => removeY(i)} className="text-text-tertiary hover:text-danger">
                   <X className="size-3.5" />
@@ -768,7 +781,9 @@ function TableSelectionField({
         aria-label={`${label} ${table && onChangeClick ? '원본 데이터 보기' : table ? '변경' : '선택'}`}
         aria-pressed={active}
         onClick={onClick}
-        title={table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : label}
+        title={table && datasourceName
+          ? `${relationDisplayName(table)} · ${datasourceName} · ${table.schema}.${table.name}`
+          : label}
         className={cn(
           'relative flex h-8 items-center rounded-md border bg-bg-panel pl-3 text-left text-[13px] text-text-primary outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20',
           compact ? 'w-48' : 'w-72',
@@ -776,7 +791,9 @@ function TableSelectionField({
         )}
       >
         <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-          {table && datasourceName ? `${datasourceName} · ${table.schema}.${table.name}` : '테이블·View 선택'}
+          {table && datasourceName
+            ? `${relationDisplayName(table)} · ${datasourceName}`
+            : '테이블·View 선택'}
         </span>
         {active ? (
           <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium text-primary">선택 중</span>

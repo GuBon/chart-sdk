@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsLeft, Filter, Search, Table2, X } from 'lucide-react';
 import type { Datasource, SchemaTable } from '@/lib/api';
-import { tableRefKey } from '@/lib/builder';
+import { columnDisplayName, relationDisplayName, tableRefKey } from '@/lib/builder';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -16,6 +16,7 @@ import { Pagination } from '@/components/ui/Pagination';
 // 대형 스키마(수백 테이블) 대비 — 데이터는 전부 로드(빌더 컬럼해석 유지)하고 표시만 페이지로 자른다.
 const PAGE_SIZE = 50;
 type SortMode = 'schema' | 'name_asc' | 'name_desc';
+type NameMode = 'display' | 'physical';
 const SORT_CHOICES: { value: SortMode; label: string }[] = [
   { value: 'schema', label: '스키마순' },
   { value: 'name_asc', label: '이름 오름차순' },
@@ -65,6 +66,7 @@ export function SchemaExplorer({
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<SortMode>('schema');
+  const [nameMode, setNameMode] = useState<NameMode>('physical');
   const [sortOpen, setSortOpen] = useState(false);
   const [schemaFilter, setSchemaFilter] = useState<string | null>(null); // null = 전체
   const [page, setPage] = useState(1);
@@ -79,8 +81,10 @@ export function SchemaExplorer({
     ? tables.filter(
         (t) =>
           t.name.toLowerCase().includes(q) ||
+          t.displayName?.toLowerCase().includes(q) ||
           t.schema.toLowerCase().includes(q) ||
-          t.columns.some((c) => c.name.toLowerCase().includes(q)),
+          t.columns.some((c) =>
+            c.name.toLowerCase().includes(q) || c.displayName?.toLowerCase().includes(q)),
       )
     : tables;
   // 스키마 필터(팝오버) — 검색과 독립 적용.
@@ -91,7 +95,9 @@ export function SchemaExplorer({
     sort === 'schema'
       ? filtered
       : [...filtered].sort((a, b) => {
-          const c = a.name.localeCompare(b.name, 'ko');
+          const left = nameMode === 'display' ? relationDisplayName(a) : a.name;
+          const right = nameMode === 'display' ? relationDisplayName(b) : b.name;
+          const c = left.localeCompare(right, 'ko');
           return sort === 'name_asc' ? c : -c;
         });
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
@@ -99,7 +105,7 @@ export function SchemaExplorer({
   const pageItems = sorted.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE);
 
   // 검색·정렬·소스 변경 시 1페이지로 리셋.
-  useEffect(() => setPage(1), [query, sort, schemaFilter, datasourceId]);
+  useEffect(() => setPage(1), [query, sort, schemaFilter, datasourceId, nameMode]);
   // 소스가 바뀌면 이전 소스의 스키마 필터는 무효 — 전체로 리셋.
   useEffect(() => setSchemaFilter(null), [datasourceId]);
   useEffect(() => {
@@ -218,6 +224,10 @@ export function SchemaExplorer({
                     ))}
                   </>
                 )}
+                <div className="my-1 h-px bg-border" />
+                <p className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium tracking-wide text-text-tertiary">필드 이름</p>
+                <MenuItem label="표시 이름" active={nameMode === 'display'} onClick={() => { setNameMode('display'); setSortOpen(false); }} />
+                <MenuItem label="실제 이름" active={nameMode === 'physical'} onClick={() => { setNameMode('physical'); setSortOpen(false); }} />
               </div>
             </>
           )}
@@ -236,6 +246,10 @@ export function SchemaExplorer({
             const alreadyUsed = disabledTableKeys.has(key);
             const disabled = unavailable || alreadyUsed;
             const relationLabel = t.relationType === 'TABLE' ? null : relationBadgeLabel(t);
+            const relationPrimary = nameMode === 'display' ? relationDisplayName(t) : t.name;
+            const relationSecondary = t.displayName
+              ? nameMode === 'display' ? t.name : t.displayName
+              : null;
             return (
               <div key={key}>
                 <button
@@ -266,7 +280,14 @@ export function SchemaExplorer({
                     {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                   </span>
                   <Table2 className="size-3.5 shrink-0 text-text-secondary" />
-                  <span className="min-w-0 truncate" title={t.name}>{t.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate" title={relationPrimary}>{relationPrimary}</span>
+                    {relationSecondary && (
+                      <span className="block truncate text-[10px] font-normal text-text-tertiary" title={relationSecondary}>
+                        {relationSecondary}
+                      </span>
+                    )}
+                  </span>
                   <span className="ml-auto flex shrink-0 items-center gap-1">
                     {relationLabel && (
                       <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">
@@ -279,12 +300,21 @@ export function SchemaExplorer({
                   </span>
                 </button>
                 {open &&
-                  t.columns.map((c) => (
+                  t.columns.map((c) => {
+                    const primary = nameMode === 'display' ? columnDisplayName(c) : c.name;
+                    const secondary = c.displayName
+                      ? nameMode === 'display' ? c.name : c.displayName
+                      : null;
+                    return (
                     <div key={c.name} className="flex items-center gap-2 py-1 pl-9 pr-2 text-[13px]">
-                      <span className="min-w-0 truncate text-text-primary" title={c.name}>{c.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-text-primary" title={primary}>{primary}</span>
+                        {secondary && <span className="block truncate text-[10px] text-text-tertiary">{secondary}</span>}
+                      </span>
                       <span className="shrink-0 text-xs text-text-tertiary">{c.type}</span>
                     </div>
-                  ))}
+                    );
+                  })}
               </div>
             );
           })

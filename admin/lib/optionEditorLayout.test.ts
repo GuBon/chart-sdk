@@ -25,6 +25,20 @@ function visibleSections(chartType: MajorType, tab: OptionEditorTab): string[] {
 }
 
 describe('차트 옵션 편집 정보 구조', () => {
+  it('툴팁 표시 기준은 중복되는 자동 없이 항목과 축만 제공한다', () => {
+    const trigger = visibleDefs('bar', defaultsFor('bar'))
+      .find((definition) => definition.key === 'tooltip.trigger');
+
+    expect(trigger).toMatchObject({
+      label: '표시 기준',
+      default: 'item',
+      choices: [
+        { value: 'item', label: '항목' },
+        { value: 'axis', label: '축' },
+      ],
+    });
+  });
+
   it.each(MAJOR_TYPES)('%s의 모든 옵션은 노출 가능한 작업 탭에 속한다', (chartType) => {
     const tabs = optionEditorTabsFor(chartType);
     const definitions = visibleDefs(chartType, defaultsFor(chartType));

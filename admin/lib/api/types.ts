@@ -34,7 +34,7 @@ export interface OrderBy {
 }
 
 /**
- * 표본 설정 (생성규칙 3C v6) — 무편향 표본은 절대 갯수(size)가 추정 정밀도를 결정한다.
+ * 표본 설정 (생성규칙 3C v7) — 무편향 표본은 목표 갯수(size)가 추정 정밀도를 결정한다.
  * auto: 서버가 방식·크기 결정 / manual: size(갯수) 지정. rate·method 는 레거시 SYSTEM 핀 전용.
  */
 export interface SampleConfig {
@@ -105,6 +105,11 @@ export interface BuilderConfig {
   geoSeriesType?: GeoSeriesType;
   geoPoint?: GeoPointConfig; // geoscatter와 map/heatmap 공용. 미지정은 경도(X)+위도(Y) 컬럼 방식.
   geoArea?: GeoAreaConfig; // map/영역 전용. 미지정/regions는 내장 행정구역 방식.
+  /**
+   * 필드를 차트에 연결했을 때의 데이터소스 표시 이름 스냅샷.
+   * 키는 실제 컬럼 참조이며 SQL 생성에는 사용하지 않는다.
+   */
+  fieldDisplayNames?: Record<string, string>;
 }
 
 /** S1 목록 카드 */
@@ -116,6 +121,8 @@ export interface ChartSummary {
   datasourceId: number;
   /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 관계별 차트 목록에 사용한다. */
   mainTable: ChartMainTable;
+  /** owner가 없는 레거시 차트는 null. */
+  authorName: string | null;
   updatedAt: string;
 }
 
@@ -215,15 +222,16 @@ export interface SchemaTable {
   datasourceId: number;
   schema: string;
   name: string;
+  displayName?: string;
   relationType: RelationType;
   populated?: boolean; // MATERIALIZED_VIEW 전용. false이면 REFRESH 전까지 조회할 수 없다.
   estimatedRowCount?: number; // pg_class.reltuples 기반 계획용 추정치 — 표본 계획·전량 폴백·UI 안내에만 사용
-  columns: { name: string; type: string }[];
+  columns: { name: string; displayName?: string; type: string }[];
 }
 
 /** query/run · run-builder · 테이블 미리보기 공통 결과 */
 export interface QueryResult {
-  columns: { name: string; type: string }[];
+  columns: { name: string; displayName?: string; type: string }[];
   rows: unknown[][];
   rowCount: number;
   truncated: boolean;
@@ -242,7 +250,7 @@ export interface ChartDataResponse {
   rowCount?: number;
   truncated?: boolean;
   /** 단건 편집 미리보기에서만 제공. 목록 batch는 payload 절감을 위해 생략한다. */
-  columns?: { name: string; type: string }[];
+  columns?: { name: string; displayName?: string; type: string }[];
   rows?: unknown[][];
   elapsedMs?: number;
   sampling?: SamplingMetadata;

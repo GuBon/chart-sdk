@@ -148,6 +148,15 @@ describe('차트 논리 크기와 글꼴 계약', () => {
     });
   });
 
+  it('구 툴팁 자동 트리거는 동일한 실제 동작인 항목으로 승격한다', () => {
+    const migrated = migrateLegacyInteractionOptions(
+      { tooltip: { trigger: 'auto' } },
+      'bar',
+    );
+
+    expect(migrated.tooltip?.trigger).toBe('item');
+  });
+
   it('구 지도 계열별 스타일은 계열 색상과 포인트 공통 스타일로 이관한다', () => {
     const migrated = migrateLegacyInteractionOptions({
       colorMap: { 매장: '#ABCDEF' },

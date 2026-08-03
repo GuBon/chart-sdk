@@ -10,6 +10,7 @@ import {
   normalizeSampleSize,
   type SamplingMode,
 } from '@chartsdk/chart-options/sampling';
+import { measureDisplayName } from '@chartsdk/chart-options/fieldDisplayNames';
 
 // 노코드 빌더 UI 상수 — 생성규칙 3·3A·4장의 라벨.
 export const AGG_CHOICES: { value: AggType; label: string }[] = [
@@ -91,6 +92,20 @@ export function tableRefLabel(t: TableRef | SchemaTable): string {
   return t.schema ? `${t.schema}.${t.name}` : t.name;
 }
 
+export function relationDisplayName(table: Pick<SchemaTable, 'name' | 'displayName'>): string {
+  return table.displayName?.trim() || table.name;
+}
+
+export function columnDisplayName(column: { name: string; displayName?: string }): string {
+  return column.displayName?.trim() || column.name;
+}
+
+function columnOptionLabel(column: { name: string; displayName?: string }, qualifiedRef?: string): string {
+  const displayName = columnDisplayName(column);
+  const physicalName = qualifiedRef ?? column.name;
+  return displayName === column.name ? physicalName : `${displayName} (${physicalName})`;
+}
+
 export function geoSeriesTypeFor(cfg: BuilderConfig, chartType: ChartType) {
   if (chartType === 'map') return cfg.geoSeriesType === 'heatmap' ? 'heatmap' : 'map';
   if (chartType === 'geoscatter') return cfg.geoSeriesType === 'effectScatter' ? 'effectScatter' : 'scatter';
@@ -169,10 +184,71 @@ export function parseColumn(ref: string, baseTableName: string | null): { table:
 
 /** 빌더 컬럼 셀렉트 옵션 — 조인 시 활성 테이블 전부 "핸들.컬럼", 미조인 시 base "컬럼" (11.2, 백엔드는 핸들을 소스로 해석) */
 export function columnsForBuilder(cfg: BuilderConfig, tables: SchemaTable[]): { value: string; label: string; type: string }[] {
-  if (!hasJoins(cfg)) return columnsOf(tables, cfg.table).map((c) => ({ value: c.name, label: c.name, type: c.type }));
+  if (!hasJoins(cfg)) {
+    return columnsOf(tables, cfg.table).map((c) => ({
+      value: c.name,
+      label: columnOptionLabel(c),
+      type: c.type,
+    }));
+  }
   return activeTables(cfg).flatMap((ref) =>
-    columnsOf(tables, ref).map((c) => ({ value: `${tableHandle(ref)}.${c.name}`, label: `${tableHandle(ref)}.${c.name}`, type: c.type })),
+    columnsOf(tables, ref).map((c) => {
+      const value = `${tableHandle(ref)}.${c.name}`;
+      return { value, label: columnOptionLabel(c, value), type: c.type };
+    }),
   );
+}
+
+/** 현재 데이터 카탈로그와 차트 스냅샷을 사용해 컬럼 참조의 표시 이름을 해석한다. */
+export function fieldDisplayNameForRef(
+  ref: string | null | undefined,
+  cfg: BuilderConfig,
+  tables: SchemaTable[],
+): string {
+  if (!ref) return '';
+  const snapshot = cfg.fieldDisplayNames?.[ref]?.trim();
+  if (snapshot) return snapshot;
+  const column = columnsOf(tables, refTable(cfg, ref)).find((item) => item.name === colName(ref));
+  return column ? columnDisplayName(column) : colName(ref);
+}
+
+/**
+ * 새로 연결한 필드의 표시 이름만 스냅샷으로 채운다.
+ * 기존 스냅샷은 유지해 데이터소스 표시 이름 변경이 배포 차트를 조용히 바꾸지 않게 한다.
+ */
+export function withFieldDisplayNameSnapshots(cfg: BuilderConfig, tables: SchemaTable[]): BuilderConfig {
+  const references = new Set([
+    cfg.xAxis,
+    cfg.seriesBy,
+    ...cfg.yAxis.map((item) => item.column),
+    ...cfg.where.map((item) => item.column),
+    cfg.orderBy?.target.startsWith('column:') ? cfg.orderBy.target.slice('column:'.length) : null,
+    cfg.geoPoint?.spatialColumn,
+    cfg.geoPoint?.nameColumn,
+    cfg.geoPoint?.valueColumn,
+    cfg.geoPoint?.sizeColumn,
+    cfg.geoPoint?.colorColumn,
+    cfg.geoArea?.spatialColumn,
+    cfg.geoArea?.nameColumn,
+    cfg.geoArea?.valueColumn,
+    ...(cfg.joins ?? []).flatMap((join) => [join.on.leftColumn, join.on.rightColumn]),
+  ].filter((value): value is string => !!value));
+
+  const next: Record<string, string> = {};
+  for (const ref of references) {
+    const existing = cfg.fieldDisplayNames?.[ref]?.trim();
+    if (existing) {
+      next[ref] = existing;
+      continue;
+    }
+    const column = columnsOf(tables, refTable(cfg, ref)).find((item) => item.name === colName(ref));
+    const displayName = column ? columnDisplayName(column) : colName(ref);
+    if (displayName) next[ref] = displayName;
+  }
+  return {
+    ...cfg,
+    ...(Object.keys(next).length > 0 ? { fieldDisplayNames: next } : { fieldDisplayNames: undefined }),
+  };
 }
 
 /** 컬럼 참조의 타입 해석 (조인 qualified·단일 모두) */
@@ -548,10 +624,26 @@ export function migrateBuilderConfig(cfg: BuilderConfig, primaryDatasourceId: nu
 }
 
 /** orderBy 대상 라벨 (x = X축, y{i} = i번째 시리즈 별칭) */
-export function orderTargets(cfg: BuilderConfig): { value: string; label: string }[] {
-  const targets = [{ value: 'x', label: cfg.xAxis ? `${cfg.xAxis} (X)` : 'X축' }];
+export function orderTargets(cfg: BuilderConfig, tables: SchemaTable[] = []): { value: string; label: string }[] {
+  const targets = [{
+    value: 'x',
+    label: cfg.xAxis ? `${fieldDisplayNameForRef(cfg.xAxis, cfg, tables)} (X)` : 'X축',
+  }];
   cfg.yAxis.forEach((y, i) => {
-    targets.push({ value: `y${i}`, label: `${y.alias || (y.agg === 'none' ? y.column : `${y.agg}_${y.column}`)} (Y${i + 1})` });
+    targets.push({
+      value: `y${i}`,
+      label: `${measureDisplayName(
+        {
+          ...cfg,
+          fieldDisplayNames: {
+            ...cfg.fieldDisplayNames,
+            [y.column]: fieldDisplayNameForRef(y.column, cfg, tables),
+          },
+        },
+        y,
+        y.column,
+      )} (Y${i + 1})`,
+    });
   });
   return targets;
 }

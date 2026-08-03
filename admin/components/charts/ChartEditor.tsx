@@ -8,7 +8,20 @@ import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
 import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, GeoSeriesType, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
-import { activeTables, builderExecutionIssue, builderValidationIssue, emptyBuilder, emptyJoin, isTableQueryMode, migrateBuilderConfig, normalizeBuilder, normalizeBuilderForChartType, tableRefKey, withUniqueHandle } from '@/lib/builder';
+import {
+  activeTables,
+  builderExecutionIssue,
+  builderValidationIssue,
+  emptyBuilder,
+  emptyJoin,
+  isTableQueryMode,
+  migrateBuilderConfig,
+  normalizeBuilder,
+  normalizeBuilderForChartType,
+  tableRefKey,
+  withFieldDisplayNameSnapshots,
+  withUniqueHandle,
+} from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import { chartSaveIssue } from '@/lib/chartSave';
 import { optionDockThresholds, resolveAutoOptionDock } from '@/lib/chartPreviewLayout';
@@ -224,6 +237,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const rawRequestId = useRef(0);
   const runRequestId = useRef(0);
   const optionPreviewRequestId = useRef(0);
+  const requestedCatalogIds = useRef(new Set<number>());
   const editorBodyRef = useRef<HTMLDivElement>(null);
   const builderWorkspaceRef = useRef<HTMLElement>(null);
   const visualWorkspaceRef = useRef<HTMLElement>(null);
@@ -269,11 +283,41 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setTables([]);
       return;
     }
-    let cancelled = false;
-    void Promise.all(datasources.map((d) => schemaApi.tables(d.id).catch(() => [])))
-      .then((lists) => { if (!cancelled) setTables(lists.flat()); });
-    return () => { cancelled = true; };
-  }, [datasources]);
+    const available = new Set(datasources.map((datasource) => datasource.id));
+    const needed = new Set<number>();
+    if (datasourceId != null && available.has(datasourceId)) needed.add(datasourceId);
+    activeTables(builder).forEach((table) => {
+      if (available.has(table.datasourceId)) needed.add(table.datasourceId);
+    });
+    needed.forEach((id) => {
+      if (requestedCatalogIds.current.has(id)) return;
+      requestedCatalogIds.current.add(id);
+      void schemaApi.tables(id)
+        .then((loaded) => {
+          setTables((current) => [
+            ...current.filter((table) => table.datasourceId !== id),
+            ...loaded,
+          ]);
+        })
+        .catch(() => setToast(`ds${id} 스키마를 불러오지 못했습니다.`));
+    });
+  }, [builder, datasourceId, datasources]);
+
+  // Legacy definitions predate field-name snapshots. Adopt the current effective names once,
+  // then include them in the saved baseline so later catalog edits cannot silently rename a chart.
+  useEffect(() => {
+    if (tables.length === 0 || !savedSnapshot) return;
+    if (JSON.stringify(builder) !== JSON.stringify(savedSnapshot.definition.builder)) return;
+    const enriched = withFieldDisplayNameSnapshots(builder, tables);
+    if (JSON.stringify(enriched) === JSON.stringify(builder)) return;
+    setBuilder(enriched);
+    setSavedSnapshot((current) => current
+      ? createEditorSnapshot(
+          { ...current.definition, builder: enriched },
+          current.preview,
+        )
+      : current);
+  }, [builder, savedSnapshot, tables]);
 
   // 기존 차트 진입 → 정의와 마지막 저장 캐시를 함께 복원한다. 고객 DB 쿼리를 자동 재실행하지 않는다.
   // 레거시 문자열 테이블 참조는 TableRef 로 승격한다.
@@ -537,7 +581,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   }, [tableSelectionTarget]);
 
   const applyBuilderChange = (next: BuilderConfig) => {
-    const normalized = normalizeBuilderForChartType(next, chartType);
+    const normalized = withFieldDisplayNameSnapshots(
+      normalizeBuilderForChartType(next, chartType),
+      tables,
+    );
     const rawQueryChanged = rawPreviewSignature(normalized) !== rawPreviewSignature(builder);
     if ((normalized.seriesBy ?? null) !== (builder.seriesBy ?? null)) {
       // The series namespace changes when a grouping dimension is added, removed, or replaced.
@@ -961,11 +1008,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         <Button variant="ghost" size="sm" icon={<ChevronLeft className="size-4" />} onClick={goList}>
           목록
         </Button>
-        {savedId != null && (
-          <Button variant="secondary" size="sm" className="h-8" icon={<Plus className="size-3.5" />} onClick={createChart}>
-            차트 생성
-          </Button>
-        )}
         <div className="w-[280px]">
           <Input
             value={name}
@@ -977,6 +1019,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           />
         </div>
         <div className="flex-1" />
+        {savedId != null && (
+          <>
+            <Button variant="secondary" size="sm" className="h-8" icon={<Plus className="size-3.5" />} onClick={createChart}>
+              새 차트
+            </Button>
+            <div className="h-5 w-px shrink-0 bg-border" aria-hidden />
+          </>
+        )}
         <Button
           variant="secondary"
           size="sm"

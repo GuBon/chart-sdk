@@ -125,7 +125,9 @@ describe('mock 축 없는 조회', () => {
 
     const sql = buildGeneratedSql(config, 'bar');
     expect(sql).toContain('"__chartsdk_population" AS (SELECT');
-    expect(sql).toContain('ORDER BY random() LIMIT 12000');
+    expect(sql).toContain('OFFSET 0)');
+    expect(sql).toContain('WHERE random() < ');
+    expect(sql).not.toMatch(/ORDER BY random\(\)|reservoir\(/);
     expect(sql).toContain('"__chartsdk_sample"."__chartsdk_y_0" AS "amount"');
     expect(sql).not.toMatch(/GROUP BY|__chartsdk_sample_count|__chartsdk_sample_total/);
 
@@ -282,7 +284,9 @@ describe('mock 변환기 레이아웃 계약', () => {
     const series = (option.series as Array<Record<string, any>>)[0];
 
     expect(tooltip.show).toBeUndefined();
-    expect(tooltip.trigger).toBeUndefined();
+    expect(tooltip.trigger).toBe(
+      chartType === 'map' || chartType === 'geoscatter' ? undefined : 'item',
+    );
     expect(tooltip.confine).toBeUndefined();
     expect(tooltip.backgroundColor).toBe('#FFFFFF');
     expect(tooltip.borderColor).toBeUndefined();
@@ -514,6 +518,39 @@ describe('mock 변환기 표본 집계 계약', () => {
     });
   });
 
+  it('공간 RESULT_RANDOM은 JOIN·WHERE 뒤, 공간 변환 앞에서 표본을 뽑는다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'public', name: 'sales' },
+      joins: [{
+        table: { datasourceId: 1, schema: 'public', name: 'orders' },
+        type: 'left',
+        on: { leftColumn: 'sales.id', rightColumn: 'orders.sale_id' },
+      }],
+      xAxis: null,
+      xAxisBucket: null,
+      yAxis: [],
+      where: [{ column: 'orders.amount', op: 'gt', value: 0 }],
+      orderBy: null,
+      sample: { mode: 'manual', size: 10_000, seed: 77 },
+      geoPoint: {
+        mode: 'spatial',
+        spatialColumn: 'sales.location',
+        valueColumn: 'sales.amount',
+      },
+    };
+
+    const sql = buildGeneratedSql(config, 'geoscatter');
+    expect(sql).toContain('WHERE "orders"."amount" > ? OFFSET 0)');
+    expect(sql).toContain('"__chartsdk_sample" AS MATERIALIZED');
+    expect(sql).toContain('WHERE random() < ');
+    expect(sql).toContain('"__chartsdk_spatial" AS MATERIALIZED');
+    expect(sql.indexOf('WHERE random()')).toBeLessThan(sql.indexOf('ST_Transform'));
+    expect(sql.match(/ST_Transform\(/g)).toHaveLength(1);
+    expect(sql).toContain('ST_X("__chartsdk_spatial"."__chartsdk_spatial_value")');
+    expect(sql).toContain('ST_Y("__chartsdk_spatial"."__chartsdk_spatial_value")');
+    expect(sql).not.toContain('ORDER BY random()');
+  });
+
   it.each(samplingCases)('$name', ({ agg, rate, sampledValue, expectedValue, extrapolated }) => {
     expect(sampledValue).toBe(expectedValue);
     expect(extrapolated).toBe(false);
@@ -624,19 +661,21 @@ describe('mock 변환기 표본 집계 계약', () => {
     const sql = buildGeneratedSql(config);
     expect(sql).toContain('"__chartsdk_population" AS (SELECT');
     expect(sql).toContain('LEFT JOIN "orders" ON "sales"."id" = "orders"."sale_id"');
-    expect(sql).toContain('WHERE "orders"."amount" > ?)');
-    expect(sql).toContain('ORDER BY random() LIMIT 12000');
-    expect(sql.indexOf('LEFT JOIN')).toBeLessThan(sql.indexOf('ORDER BY random()'));
+    expect(sql).toContain('WHERE "orders"."amount" > ? OFFSET 0)');
+    expect(sql).toContain('OFFSET 0)');
+    expect(sql).toContain('WHERE random() < ');
+    expect(sql).not.toMatch(/ORDER BY random\(\)|reservoir\(/);
+    expect(sql.indexOf('LEFT JOIN')).toBeLessThan(sql.indexOf('WHERE random()'));
     expect(sql).toContain('AVG("__chartsdk_sample"."__chartsdk_y_0") AS "average"');
 
     expect(buildAggregateRows(config, 'bar').sampling).toMatchObject({
       version: SAMPLING_CONTRACT_VERSION,
       method: 'RESULT_RANDOM',
       sampleSize: 12_000,
-      sampledRowCount: 12_000,
       confidenceLevel: 0.95,
       warnings: ['RESULT_RANDOM_SAMPLE'],
     });
+    expect(buildAggregateRows(config, 'bar').sampling?.sampledRowCount).toBeLessThan(12_000);
   });
 
   it('일반 VIEW는 TABLESAMPLE 대신 조회 결과 행 표본을 사용한다', () => {
@@ -651,7 +690,8 @@ describe('mock 변환기 표본 집계 계약', () => {
     expect(buildGeneratedSql(config)).toContain('"__chartsdk_population" AS');
     expect(buildGeneratedSql(config)).not.toContain('TABLESAMPLE');
     expect(buildAggregateRows(config, 'bar').sampling).toMatchObject({
-      method: 'RESULT_RANDOM', warnings: ['RESULT_RANDOM_SAMPLE', 'SAMPLE_AGGREGATE_ONLY'],
+      method: 'RESULT_RANDOM',
+      warnings: ['RESULT_RANDOM_SAMPLE', 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE', 'SAMPLE_AGGREGATE_ONLY'],
     });
   });
 

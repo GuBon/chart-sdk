@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import type { Datasource } from '@/lib/api/types';
 import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
 import type { User, UserToken } from '@/lib/api';
-import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql, buildTablePreview } from './mockTransform';
+import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql, buildTablePreview, withResultDisplayNames } from './mockTransform';
 import type { BuilderConfig, ChartMainTable, ChartType, TableRef } from '@/lib/api';
 import { builderExecutionIssue } from '@/lib/builder';
 
@@ -114,7 +114,7 @@ export const handlers = [
         errors[String(id)] = 'Preview unavailable.';
         continue;
       }
-      const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+      const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
       previews[String(id)] = {
         chartId: id,
         rowCount: result.rowCount,
@@ -142,7 +142,7 @@ export const handlers = [
     const chart = saved ?? (summary ? chartDetail(summary) : null);
     if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
 
-    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+    const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
     return HttpResponse.json({
       chartId,
       rowCount: result.rowCount,
@@ -160,7 +160,7 @@ export const handlers = [
     const summary = chartList.find((c) => c.id === id);
     const chart = saved ?? (summary ? chartDetail(summary) : null);
     if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
-    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+    const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
     return HttpResponse.json({
       chartId: id,
       columns: result.columns,
@@ -181,7 +181,7 @@ export const handlers = [
     const summary = chartList.find((chart) => chart.id === id);
     const chart = saved ?? (summary ? chartDetail(summary) : null);
     if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
-    const result = buildAggregateRows(chart.builderConfig, chart.chartType);
+    const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
     const computedAt = new Date().toISOString();
     computedAtByChart[id] = computedAt;
     return HttpResponse.json({
@@ -212,14 +212,23 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
     const id = nextChartId++;
-    const builderConfig = body.builderConfig as { table?: unknown } | undefined;
+    const builderConfig = body.builderConfig as Partial<BuilderConfig> | undefined;
     const datasourceId = Number(body.datasourceId) || 1;
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId);
     if (!mainTable) return err(400, 'MAIN_TABLE_REQUIRED', 'A primary table is required to save a chart.');
     const chart = { id, ...body, mainTable, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
-    chartList = [{ id, name: String(body.name ?? ''), description: (body.description as string) ?? null, chartType: body.chartType as never, datasourceId, mainTable, updatedAt: now }, ...chartList];
+    chartList = [{
+      id,
+      name: String(body.name ?? ''),
+      description: (body.description as string) ?? null,
+      chartType: body.chartType as ChartType,
+      datasourceId,
+      mainTable,
+      authorName: seedUsers[0]?.displayName ?? null,
+      updatedAt: now,
+    }, ...chartList];
     return HttpResponse.json(chart, { status: 201 });
   }),
   http.put('/api/v1/charts/:id', async ({ params, request }) => {
@@ -227,7 +236,7 @@ export const handlers = [
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
     const prev = savedCharts[id] as { createdAt?: string } | undefined;
-    const builderConfig = body.builderConfig as { table?: unknown } | undefined;
+    const builderConfig = body.builderConfig as Partial<BuilderConfig> | undefined;
     const current = chartList.find((item) => item.id === id);
     const datasourceId = Number(body.datasourceId) || current?.datasourceId || 1;
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable;
@@ -235,7 +244,15 @@ export const handlers = [
     const chart = { id, ...body, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
-    chartList = chartList.map((c) => (c.id === id ? { ...c, name: String(body.name ?? c.name), description: (body.description as string) ?? null, chartType: (body.chartType as never) ?? c.chartType, datasourceId, mainTable, updatedAt: now } : c));
+    chartList = chartList.map((c) => (c.id === id ? {
+      ...c,
+      name: String(body.name ?? c.name),
+      description: (body.description as string) ?? null,
+      chartType: (body.chartType as ChartType) ?? c.chartType,
+      datasourceId,
+      mainTable,
+      updatedAt: now,
+    } : c));
     return HttpResponse.json(chart);
   }),
 
@@ -272,9 +289,12 @@ export const handlers = [
     }
     datasources[idx] = { ...datasources[idx], ...body, id };
     const nextName = datasources[idx].name;
-    chartList = chartList.map((chart) => chart.mainTable?.datasourceId === id
-      ? { ...chart, mainTable: { ...chart.mainTable, datasourceName: nextName } }
-      : chart);
+    chartList = chartList.map((chart) => ({
+      ...chart,
+      ...(chart.mainTable?.datasourceId === id
+        ? { mainTable: { ...chart.mainTable, datasourceName: nextName } }
+        : {}),
+    }));
     for (const [chartId, saved] of Object.entries(savedCharts)) {
       const mainTable = saved.mainTable as ChartMainTable | null | undefined;
       if (mainTable?.datasourceId === id) {
@@ -300,6 +320,30 @@ export const handlers = [
     return HttpResponse.json({ tables: schemaTables.filter((t) => t.datasourceId === dsId) });
   }),
 
+  http.put('/api/v1/schema/display-name', async ({ request }) => {
+    const body = (await request.json()) as {
+      datasourceId: number;
+      schema?: string;
+      relation: string;
+      column?: string;
+      displayName?: string | null;
+    };
+    const table = schemaTables.find((item) =>
+      item.datasourceId === Number(body.datasourceId)
+      && item.schema === (body.schema || 'public')
+      && item.name === body.relation);
+    if (!table) return err(400, 'INVALID_IDENTIFIER', '관계를 찾을 수 없습니다.');
+    const displayName = body.displayName?.trim() || undefined;
+    if (body.column) {
+      const column = table.columns.find((item) => item.name === body.column);
+      if (!column) return err(400, 'INVALID_IDENTIFIER', '컬럼을 찾을 수 없습니다.');
+      column.displayName = displayName;
+    } else {
+      table.displayName = displayName;
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   http.get('/api/v1/schema/tables/:name/preview', ({ params, request }) => {
     const url = new URL(request.url);
     const schema = url.searchParams.get('schema') ?? 'public';
@@ -316,7 +360,7 @@ export const handlers = [
     if (body.mode === 'rows') {
       return HttpResponse.json({ ...buildRawRows(body.builderConfig), generatedSql: buildRowsSql(body.builderConfig) });
     }
-    const result = buildAggregateRows(body.builderConfig, body.chartType);
+    const result = withResultDisplayNames(buildAggregateRows(body.builderConfig, body.chartType), body.builderConfig);
     const option = assembleOption(result, body.chartType, body.options, body.builderConfig);
     return HttpResponse.json({ ...result, generatedSql: buildGeneratedSql(body.builderConfig, body.chartType), option });
   }),

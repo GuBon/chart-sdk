@@ -6,6 +6,7 @@ import type {
   ChartInput,
   ChartListParams,
   ChartListResponse,
+  ChartSummary,
   ChartPreviewBatchResponse,
   ChartRefreshResponse,
   ConnectionTestResult,
@@ -53,14 +54,24 @@ export const chartsApi = {
 };
 
 function normalizeChartList(res: ChartListResponse | ChartListResponse['charts'], params: ChartListParams): ChartListResponse {
-  if (!Array.isArray(res)) return res;
-  const pageSize = params.pageSize ?? res.length;
+  if (!Array.isArray(res)) {
+    return { ...res, charts: res.charts.map(normalizeChartSummary) };
+  }
+  const charts = res.map(normalizeChartSummary);
+  const pageSize = params.pageSize ?? charts.length;
   return {
-    charts: res,
+    charts,
     page: params.page ?? 1,
     pageSize,
-    total: res.length,
+    total: charts.length,
     totalPages: 1,
+  };
+}
+
+function normalizeChartSummary(chart: ChartSummary): ChartSummary {
+  return {
+    ...chart,
+    authorName: chart.authorName ?? null,
   };
 }
 
@@ -93,6 +104,13 @@ export const schemaApi = {
       .then((r) => r.tables.map((t) => ({ ...t, datasourceId }))),
   preview: (schema: string, tableName: string, datasourceId: number) =>
     request<QueryResult>(`/schema/tables/${encodeURIComponent(tableName)}/preview${qs({ schema, datasourceId })}`),
+  updateDisplayName: (input: {
+    datasourceId: number;
+    schema: string;
+    relation: string;
+    column?: string;
+    displayName: string | null;
+  }) => request<void>('/schema/display-name', { method: 'PUT', body: input }),
 };
 
 export const tokensApi = {

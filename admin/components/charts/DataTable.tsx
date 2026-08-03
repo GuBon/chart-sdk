@@ -13,7 +13,10 @@ export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGro
             <tr>
               {data.columns.map((c, i) => (
                 <th key={i} className="border-b border-border px-4 py-2 text-left font-medium text-text-secondary">
-                  {c.name}
+                  <span className="block">{c.displayName || c.name}</span>
+                  {c.displayName && c.displayName !== c.name && (
+                    <span className="block font-mono text-[10px] font-normal text-text-tertiary">{c.name}</span>
+                  )}
                 </th>
               ))}
               {showSampleCount && (

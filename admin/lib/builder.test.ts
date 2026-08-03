@@ -27,6 +27,8 @@ import {
   tableHandle,
   tableRefKey,
   tableRefLabel,
+  fieldDisplayNameForRef,
+  withFieldDisplayNameSnapshots,
   withUniqueHandle,
 } from './builder';
 
@@ -241,6 +243,44 @@ describe('columnsForBuilder', () => {
   });
 });
 
+describe('field display-name snapshots', () => {
+  it('captures logical names and physical fallbacks without changing field references', () => {
+    const tables: SchemaTable[] = [{
+      ...SALES,
+      displayName: '매출',
+      columns: SALES.columns.map((column) => (
+        column.name === 'amount' ? { ...column, displayName: '매출액' } : column
+      )),
+    }];
+
+    const captured = withFieldDisplayNameSnapshots(bar(), tables);
+
+    expect(captured.xAxis).toBe('category');
+    expect(captured.yAxis[0].column).toBe('amount');
+    expect(captured.fieldDisplayNames).toMatchObject({
+      category: 'category',
+      amount: '매출액',
+    });
+    expect(fieldDisplayNameForRef('amount', captured, tables)).toBe('매출액');
+  });
+
+  it('keeps the captured name when the datasource display name changes later', () => {
+    const captured = {
+      ...bar(),
+      fieldDisplayNames: { category: '상품 분류', amount: '매출액' },
+    };
+    const renamedTables: SchemaTable[] = [{
+      ...SALES,
+      columns: SALES.columns.map((column) => (
+        column.name === 'amount' ? { ...column, displayName: '총매출' } : column
+      )),
+    }];
+
+    expect(fieldDisplayNameForRef('amount', captured, renamedTables)).toBe('매출액');
+    expect(withFieldDisplayNameSnapshots(captured, renamedTables).fieldDisplayNames?.amount).toBe('매출액');
+  });
+});
+
 describe('columnType', () => {
   it('미조인 컬럼 타입을 해석한다', () => {
     expect(columnType('amount', bar(), TABLES)).toBe('numeric');
@@ -367,7 +407,7 @@ describe('orderTargets · 기타', () => {
   it('orderTargets 는 X축과 시리즈 별칭을 대상화한다', () => {
     const targets = orderTargets(bar());
     expect(targets[0]).toEqual({ value: 'x', label: 'category (X)' });
-    expect(targets[1]).toEqual({ value: 'y0', label: 'sum_amount (Y1)' });
+    expect(targets[1]).toEqual({ value: 'y0', label: 'amount 합계 (Y1)' });
   });
   it('hasJoins · emptyJoin · normalizeBuilder 기본형', () => {
     expect(hasJoins(bar())).toBe(false);

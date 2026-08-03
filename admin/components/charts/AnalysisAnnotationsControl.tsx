@@ -21,6 +21,7 @@ interface Props {
   chartType: MajorType;
   columns: { name: string; type: string }[];
   rows: unknown[][];
+  seriesDisplayNames?: Record<string, string>;
   disabled: boolean;
   onChange: (value: AnalysisAnnotations) => void;
 }
@@ -36,11 +37,15 @@ export function AnalysisAnnotationsControl({
   chartType,
   columns,
   rows,
+  seriesDisplayNames = {},
   disabled,
   onChange,
 }: Props) {
   const annotations = analysisAnnotationsOf(value);
-  const series = columns.slice(1).map((column, index) => ({ value: index, label: column.name }));
+  const series = columns.slice(1).map((column, index) => ({
+    value: index,
+    label: seriesDisplayNames[column.name] ?? column.name,
+  }));
   const xValues = uniqueXValues(rows);
   const defaultX = xValues[0] ?? (chartType === 'scatter' ? 0 : '');
 

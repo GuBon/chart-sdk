@@ -6,6 +6,7 @@ const DATASOURCE_NAMES: Record<number, string> = {
   2: 'sales-db',
   3: 'legacy-dw',
 };
+const AUTHOR_NAMES = ['김건영', '이서현', '박지원'] as const;
 
 export const charts: ChartSummary[] = ([
   // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
@@ -25,7 +26,7 @@ export const charts: ChartSummary[] = ([
   { id: 22, name: '요일별 주문', description: '요일별 주문 수', chartType: 'bar', datasourceId: 1, updatedAt: '2026-05-13T09:00:00Z' },
   { id: 23, name: '상품별 재고', description: '상품별 재고량', chartType: 'bar', datasourceId: 2, updatedAt: '2026-05-10T09:00:00Z' },
   { id: 24, name: '월별 순이익', description: '월별 순이익 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-05-05T09:00:00Z' },
-] satisfies Array<Omit<ChartSummary, 'mainTable'>>).map((chart) => ({
+] satisfies Array<Omit<ChartSummary, 'mainTable' | 'authorName'>>).map((chart) => ({
   ...chart,
   mainTable: {
     datasourceId: chart.datasourceId,
@@ -33,6 +34,7 @@ export const charts: ChartSummary[] = ([
     schema: 'public',
     name: 'sales',
   },
+  authorName: chart.id === 15 ? null : AUTHOR_NAMES[chart.id % AUTHOR_NAMES.length],
 }));
 
 export const datasources: Datasource[] = [
@@ -51,14 +53,15 @@ export const schemaTables: SchemaTable[] = [
     datasourceId: 1,
     schema: 'public',
     name: 'sales',
+    displayName: '매출',
     relationType: 'TABLE',
     estimatedRowCount: 500_000_000,
     columns: [
       { name: 'id', type: 'int' },
-      { name: 'category', type: 'text' },
-      { name: 'amount', type: 'numeric' },
-      { name: 'dept', type: 'text' },
-      { name: 'date', type: 'date' },
+      { name: 'category', displayName: '상품 분류', type: 'text' },
+      { name: 'amount', displayName: '매출액', type: 'numeric' },
+      { name: 'dept', displayName: '부서', type: 'text' },
+      { name: 'date', displayName: '판매일', type: 'date' },
       { name: 'customer_id', type: 'int' },
       { name: 'location', type: 'geometry(Point,4326)' },
       { name: 'service_area', type: 'geometry(Polygon,4326)' },

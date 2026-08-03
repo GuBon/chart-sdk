@@ -30,6 +30,7 @@ import {
   tooltipFieldsFor,
   updateTooltipFieldVisibility,
 } from '@chartsdk/chart-options/tooltip';
+import { seriesDisplayNames } from '@chartsdk/chart-options/fieldDisplayNames';
 import { AnalysisAnnotationsControl } from './AnalysisAnnotationsControl';
 import {
   BoxplotOutliersControl,
@@ -134,6 +135,10 @@ export function OptionControl({
 }) {
   const fieldName = fieldNameFor(def.key);
   const fieldId = `option-${fieldName}`;
+  const displayNames = seriesDisplayNames(builderConfig, columns);
+  const displayNameOf = (column: { name: string; displayName?: string }) => (
+    displayNames[column.name] ?? column.displayName ?? column.name
+  );
   // 잠긴 옵션은 저장값을 유지한 채 입력만 막는다 — 잠금이 풀리면 이전 값이 그대로 다시 쓰인다.
   const disabled = disabledProp || lockNote != null;
 
@@ -203,7 +208,7 @@ export function OptionControl({
         <div className="flex flex-col gap-2">
           {seriesColumns.map((column) => (
             <div key={column.name} data-testid={`series-type-${column.name}`} className="flex items-center justify-between gap-2">
-              <span className="min-w-0 flex-1 truncate text-[13px] text-text-secondary">{column.name}</span>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-text-secondary">{displayNameOf(column)}</span>
               <Segmented
                 value={String(map[column.name] ?? chartType)}
                 options={[{ value: 'bar', label: '막대' }, { value: 'line', label: '선' }]}
@@ -263,6 +268,7 @@ export function OptionControl({
         chartType={chartType}
         columns={columns}
         rows={rows}
+        seriesDisplayNames={displayNames}
         disabled={disabled}
         onChange={onChange}
       />
@@ -285,6 +291,7 @@ export function OptionControl({
         value={value}
         columns={columns}
         rows={rows}
+        seriesDisplayNames={displayNames}
         disabled={disabled}
         onChange={onChange}
       />
@@ -426,7 +433,7 @@ export function OptionControl({
           ? bubbleSizeColumns(columns)
           : columns;
         control = eligibleColumns.length > 0
-          ? <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={eligibleColumns.map((column) => ({ value: column.name, label: column.name }))} onChange={(event) => onChange(event.target.value)} placeholder="컬럼" /></div>
+          ? <div className="w-36"><Select id={fieldId} name={fieldName} disabled={disabled} value={String(value ?? '')} options={eligibleColumns.map((column) => ({ value: column.name, label: displayNameOf(column) }))} onChange={(event) => onChange(event.target.value)} placeholder="컬럼" /></div>
           : <span className="text-xs text-text-tertiary">크기로 사용할 숫자 컬럼이 없습니다</span>;
       }
       break;

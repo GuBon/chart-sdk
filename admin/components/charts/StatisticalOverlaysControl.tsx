@@ -56,18 +56,23 @@ export function MovingAverageControl({
   value,
   columns,
   rows,
+  seriesDisplayNames = {},
   disabled,
   onChange,
 }: {
   value: unknown;
   columns: { name: string; type: string }[];
   rows: unknown[][];
+  seriesDisplayNames?: Record<string, string>;
   disabled: boolean;
   onChange: (value: MovingAverageOptions) => void;
 }) {
   const config = movingAverageOf(value);
   const temporal = isTemporalColumnType(columns[0]?.type);
-  const series = columns.slice(1).map((column, index) => ({ value: index, label: column.name }));
+  const series = columns.slice(1).map((column, index) => ({
+    value: index,
+    label: seriesDisplayNames[column.name] ?? column.name,
+  }));
   const selectedSeriesIndex = Math.min(config.seriesIndex, Math.max(0, series.length - 1));
   const cannotEnable = !temporal || series.length === 0;
 

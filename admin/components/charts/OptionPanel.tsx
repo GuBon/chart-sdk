@@ -33,6 +33,7 @@ import {
   type ColorSelection,
 } from '@chartsdk/chart-options/colorOverrides';
 import { movingAverageOverridesSort } from '@chartsdk/chart-options/statisticalOverlays';
+import { seriesDisplayNames } from '@chartsdk/chart-options/fieldDisplayNames';
 import type { MapViewport, MapViewportMode } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -144,7 +145,12 @@ export function OptionPanel({
     ? availableTabs.filter((tab) => definitions.some((definition) => optionEditorTabOf(definition) === tab))
     : activeTab ? [activeTab] : [];
   const typography = resolveChartTypography(options);
-  const colorTargets = staticColorSelections(chartType, columns, rows, options);
+  const seriesLabels = seriesDisplayNames(builderConfig, columns);
+  const colorTargets = staticColorSelections(chartType, columns, rows, options).map((target) => (
+    target.scope === 'series' && seriesLabels[target.seriesName]
+      ? { ...target, label: seriesLabels[target.seriesName] }
+      : target
+  ));
   // 자동 선택은 실제 시리즈에만 적용한다. 원형 조각·지도 지역·점 같은 항목은
   // 반드시 차트에서 고른 뒤 팔레트/직접 지정 색상을 적용한다.
   const effectiveColorSelection = colorSelection

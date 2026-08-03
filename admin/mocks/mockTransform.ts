@@ -31,6 +31,13 @@ import {
   visibleTooltipFields,
 } from '@chartsdk/chart-options/tooltip';
 import {
+  AXIS_DISPLAY_NAMES_KEY,
+  SERIES_DISPLAY_NAMES_KEY,
+  fieldDisplayName,
+  measureDisplayName,
+  seriesDisplayNames,
+} from '@chartsdk/chart-options/fieldDisplayNames';
+import {
   itemColorSeriesKey,
   itemColorTargetKey,
   normalizeItemColorOverrides,
@@ -50,10 +57,10 @@ import {
   movingAverageOverridesSort,
 } from '@chartsdk/chart-options/statisticalOverlays';
 import { optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
-import { columnsForBuilder } from '@/lib/builder';
+import { columnsForBuilder, fieldDisplayNameForRef } from '@/lib/builder';
 import { schemaTables } from './seed';
 
-type Cols = { name: string; type: string }[];
+type Cols = { name: string; type: string; displayName?: string }[];
 type Rows = unknown[][];
 
 const SAMPLE_CATS = ['의류', '식품', '가전', '도서', '생활'];
@@ -157,21 +164,31 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
   const plan = samplePlanForConfig(cfg);
+  const resultRandomSpatialSql = (
+    spatialExpression: string,
+    projected: string[],
+    finalSelects: string[],
+  ): string => {
+    const population = qident('__chartsdk_population');
+    const sample = qident('__chartsdk_sample');
+    const spatial = qident('__chartsdk_spatial');
+    const sourceAlias = qident('__chartsdk_spatial_source');
+    const valueAlias = qident('__chartsdk_spatial_value');
+    const sampleSource = `${sample}.${sourceAlias}`;
+    const probability = resultBernoulliProbability(plan!);
+    const barrier = (cfg.joins?.length ?? 0) > 0 ? ' OFFSET 0' : '';
+    const populationSelects = [`${spatialExpression} AS ${sourceAlias}`, ...projected];
+    return `WITH ${population} AS (SELECT ${populationSelects.join(', ')}
+FROM ${qtable(cfg.table!, multi)}${joinSql}${where}${barrier}),
+${sample} AS MATERIALIZED (SELECT ${population}.* FROM ${population} WHERE random() < ${probability}),
+${spatial} AS MATERIALIZED (SELECT ST_Transform((${sampleSource})::geometry, 4326) AS ${valueAlias}, ${sample}.* FROM ${sample} WHERE ${sampleSource} IS NOT NULL)
+SELECT ${finalSelects.join(', ')}
+FROM ${spatial}`;
+  };
   const spatialProjectionSql = (selects: string[], nonNullExpression: string): string => {
     const spatialWhere = where
       ? `${where} AND ${nonNullExpression} IS NOT NULL`
       : ` WHERE ${nonNullExpression} IS NOT NULL`;
-    if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
-      const seedCte = qident('__chartsdk_seed');
-      const population = qident('__chartsdk_population');
-      const sample = qident('__chartsdk_sample');
-      const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
-      return `WITH ${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')}),
-${population} AS (SELECT ${selects.join(', ')}
-FROM ${qtable(cfg.table!, multi)}${joinSql}${spatialWhere}),
-${sample} AS MATERIALIZED (SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize})
-SELECT * FROM ${sample}`;
-    }
     if (plan?.approximate && plan.method === 'INDEX_RANDOM') {
       const seed = plan.seed ?? DEFAULT_SAMPLE_SEED;
       const population = Math.max(1, plan.populationEstimate);
@@ -191,6 +208,21 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
   if (spatialGeoArea) {
     if (!cfg.geoArea?.spatialColumn || !cfg.geoArea.nameColumn || !cfg.geoArea.valueColumn) return '';
     const area = qcol(cfg.geoArea.spatialColumn);
+    if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
+      const spatial = qident('__chartsdk_spatial');
+      const projected = [
+        `CAST(${qcol(cfg.geoArea.nameColumn)} AS text) AS ${qident('__chartsdk_area_name')}`,
+        `${qcol(cfg.geoArea.valueColumn)} AS ${qident('__chartsdk_area_value')}`,
+        ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
+      ];
+      const finalSelects = [
+        `${spatial}.${qident('__chartsdk_area_name')} AS ${qident('__chartsdk_area_name')}`,
+        `${spatial}.${qident('__chartsdk_area_value')} AS ${qident('__chartsdk_area_value')}`,
+        `ST_AsGeoJSON(${spatial}.${qident('__chartsdk_spatial_value')}, 6) AS ${qident('__chartsdk_geojson')}`,
+        ...(cfg.seriesBy ? [`${spatial}.${qident('__chartsdk_series')} AS ${qident('__chartsdk_series')}`] : []),
+      ];
+      return resultRandomSpatialSql(area, projected, finalSelects);
+    }
     const wgs84 = `ST_Transform((${area})::geometry, 4326)`;
     const selects = [
       `CAST(${qcol(cfg.geoArea.nameColumn)} AS text) AS ${qident('__chartsdk_area_name')}`,
@@ -203,6 +235,26 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
   if (spatialGeoPoint) {
     if (!cfg.geoPoint?.spatialColumn) return '';
     const point = qcol(cfg.geoPoint.spatialColumn);
+    if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
+      const spatial = qident('__chartsdk_spatial');
+      const projected = [
+        ...(cfg.geoPoint.nameColumn ? [`CAST(${qcol(cfg.geoPoint.nameColumn)} AS text) AS ${qident('__chartsdk_point_name')}`] : []),
+        ...(cfg.geoPoint.valueColumn ? [`${qcol(cfg.geoPoint.valueColumn)} AS ${qident('__chartsdk_point_value')}`] : []),
+        ...(cfg.geoPoint.sizeColumn ? [`${qcol(cfg.geoPoint.sizeColumn)} AS ${qident('__chartsdk_size')}`] : []),
+        ...(cfg.geoPoint.colorColumn ? [`${qcol(cfg.geoPoint.colorColumn)} AS ${qident('__chartsdk_color_value')}`] : []),
+        ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
+      ];
+      const finalSelects = [
+        `ST_X(${spatial}.${qident('__chartsdk_spatial_value')}) AS ${qident('__chartsdk_longitude')}`,
+        `ST_Y(${spatial}.${qident('__chartsdk_spatial_value')}) AS ${qident('__chartsdk_latitude')}`,
+        ...(cfg.geoPoint.nameColumn ? [`${spatial}.${qident('__chartsdk_point_name')} AS ${qident('__chartsdk_point_name')}`] : []),
+        ...(cfg.geoPoint.valueColumn ? [`${spatial}.${qident('__chartsdk_point_value')} AS ${qident('__chartsdk_point_value')}`] : []),
+        ...(cfg.geoPoint.sizeColumn ? [`${spatial}.${qident('__chartsdk_size')} AS ${qident('__chartsdk_size')}`] : []),
+        ...(cfg.geoPoint.colorColumn ? [`${spatial}.${qident('__chartsdk_color_value')} AS ${qident('__chartsdk_color_value')}`] : []),
+        ...(cfg.seriesBy ? [`${spatial}.${qident('__chartsdk_series')} AS ${qident('__chartsdk_series')}`] : []),
+      ];
+      return resultRandomSpatialSql(point, projected, finalSelects);
+    }
     const wgs84 = `ST_Transform((${point})::geometry, 4326)`;
     const selects = [
       `ST_X(${wgs84}) AS ${qident('__chartsdk_longitude')}`,
@@ -227,7 +279,6 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
     if (plan?.approximate && plan.method === 'RESULT_RANDOM') {
       const population = qident('__chartsdk_population');
       const sample = qident('__chartsdk_sample');
-      const seedCte = qident('__chartsdk_seed');
       const xAlias = '__chartsdk_x';
       const yAliases = cfg.yAxis.map((_, i) => `__chartsdk_y_${i}`);
       const projected = [
@@ -236,13 +287,10 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
         ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
         ...(geoPointSeries ? geoPointRoles.map((role) => `${role.text ? `CAST(${qcol(role.column)} AS text)` : qcol(role.column)} AS ${qident(role.alias)}`) : []),
       ];
-      const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
-      const sampleBody = multi
-        ? `SELECT * FROM ${population} USING SAMPLE reservoir(${plan.sampleSize} ROWS) REPEATABLE (${plan.seed})`
-        : `SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize}`;
-      const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
+      const barrier = (cfg.joins?.length ?? 0) > 0 ? ' OFFSET 0' : '';
+      const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${barrier})`;
+      const sampleBody = `SELECT ${population}.* FROM ${population} WHERE random() < ${resultBernoulliProbability(plan)}`;
       const ctes = [
-        ...(!multi ? [`${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')})`] : []),
         populationCte,
         `${sample} AS MATERIALIZED (${sampleBody})`,
       ];
@@ -299,7 +347,6 @@ FROM ${sample}${orderSql()}`;
     const population = qident('__chartsdk_population');
     const sample = qident('__chartsdk_sample');
     const nCte = qident('__chartsdk_n');
-    const seedCte = qident('__chartsdk_seed');
     const xAlias = '__chartsdk_x';
     const yAliases = cfg.yAxis.map((_, i) => `__chartsdk_y_${i}`);
     const projected = [
@@ -307,13 +354,10 @@ FROM ${sample}${orderSql()}`;
       ...(cfg.seriesBy ? [`${qcol(cfg.seriesBy)} AS ${qident('__chartsdk_series')}`] : []),
       ...cfg.yAxis.map((y, i) => `${qcol(y.column)} AS ${qident(yAliases[i])}`),
     ];
-    const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where})`;
-    const sampleBody = multi
-      ? `SELECT * FROM ${population} USING SAMPLE reservoir(${plan.sampleSize} ROWS) REPEATABLE (${plan.seed})`
-      : `SELECT ${population}.* FROM ${population} CROSS JOIN ${seedCte} ORDER BY random() LIMIT ${plan.sampleSize}`;
-    const pgSeed = Math.max(-1, Math.min(1, ((plan.seed ?? DEFAULT_SAMPLE_SEED) / 2_147_483_647) * 2 - 1));
+    const barrier = (cfg.joins?.length ?? 0) > 0 ? ' OFFSET 0' : '';
+    const populationCte = `${population} AS (SELECT ${projected.join(', ')}\nFROM ${qtable(cfg.table, multi)}${joinSql}${where}${barrier})`;
+    const sampleBody = `SELECT ${population}.* FROM ${population} WHERE random() < ${resultBernoulliProbability(plan)}`;
     const ctes = [
-      ...(!multi ? [`${seedCte} AS MATERIALIZED (SELECT setseed(${pgSeed}) AS ${qident('seeded')})`] : []),
       populationCte,
       `${sample} AS MATERIALIZED (${sampleBody})`,
       `${nCte} AS (SELECT COUNT(*) AS ${qident('sampled')} FROM ${sample})`,
@@ -435,6 +479,11 @@ type MockSamplePlan = {
   seed?: number;
 };
 
+function resultBernoulliProbability(plan: MockSamplePlan): number {
+  if (plan.populationEstimate <= 0) return 1;
+  return Math.max(0, Math.min(1, plan.sampleSize / plan.populationEstimate));
+}
+
 /** 서버 SamplingPlanner의 관계 종류·크기·레거시 SYSTEM 결정 순서를 미러한다. */
 function samplePlanForConfig(cfg: BuilderConfig): MockSamplePlan | undefined {
   if (!cfg.sample) return undefined;
@@ -446,8 +495,8 @@ function samplePlanForConfig(cfg: BuilderConfig): MockSamplePlan | undefined {
 
   const relation = baseRelationForConfig(cfg);
   const resultPopulation = (cfg.joins?.length ?? 0) > 0 || relation?.relationType === 'VIEW';
-  // JOIN 결과의 행수는 base reltuples로 대신하지 않는다. 별도 COUNT 없이 알 수 없으므로 미상(0)이다.
-  const populationEstimate = resultPopulation ? 0 : relation?.estimatedRowCount ?? 0;
+  // 실제 서버는 JOIN+WHERE를 EXPLAIN한다. mock은 실행기가 없으므로 base 통계를 계획치로 사용한다.
+  const populationEstimate = relation?.estimatedRowCount ?? 0;
   const sampleSize = normalizeSampleSize(cfg.sample.size
     ?? (legacyRate != null && populationEstimate > 0
       ? Math.round(populationEstimate * legacyRate / 100)
@@ -502,11 +551,16 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
 
   const { method, populationEstimate, sampleSize, executionRate } = plan;
   const uniformRandom = method === 'INDEX_RANDOM' || method === 'RESULT_RANDOM';
+  const realizedSampleSize = method === 'RESULT_RANDOM'
+    ? Math.max(0, Math.min(populationEstimate || Number.MAX_SAFE_INTEGER,
+      Math.round(sampleSize - Math.sqrt(sampleSize))))
+    : sampleSize;
   const rowSample = cfg.yAxis.length > 0 && cfg.yAxis.every((y) => y.agg === 'none');
   const groups = rowSample ? [] : labels.map((key, index) => ({
     key,
     sampleCount: uniformRandom
-      ? Math.floor(sampleSize / Math.max(1, labels.length)) + (index < sampleSize % Math.max(1, labels.length) ? 1 : 0)
+      ? Math.floor(realizedSampleSize / Math.max(1, labels.length))
+        + (index < realizedSampleSize % Math.max(1, labels.length) ? 1 : 0)
       : Math.max(1, Math.round((5_000 + index * 350) * (executionRate / 100))),
   }));
   const estimates = cfg.yAxis.map((y) => {
@@ -531,6 +585,9 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
     ? 'BLOCK_SAMPLE_CLUSTERING'
     : method === 'RESULT_RANDOM' ? 'RESULT_RANDOM_SAMPLE' : 'INDEX_RANDOM_SAMPLE';
   const warnings = new Set<SamplingWarningCode>([methodWarning]);
+  if (method === 'RESULT_RANDOM' && populationEstimate <= 0) {
+    warnings.add('RESULT_POPULATION_ESTIMATE_UNAVAILABLE');
+  }
   estimates.forEach((estimate) => { if (estimate.warning) warnings.add(estimate.warning); });
   if (uniformRandom && cfg.yAxis.some((y) => y.agg === 'stddev' || y.agg === 'variance')) {
     warnings.add('STDDEV_CI_NORMALITY_ASSUMED');
@@ -718,7 +775,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   const labels = cfg.xAxisBucket || isTemporalColumnType(xType) ? SAMPLE_MONTHS : SAMPLE_CATS;
   const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: xType }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
   const sampling = samplingForConfig(cfg, labels);
-  // sampling v6: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
+  // sampling v7: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
   const rows: Rows = labels.map((label, i) => [
     label,
     ...cfg.yAxis.map((_y, j) => Math.round(500 - i * 70 + j * 130 + (i % 2) * 40)),
@@ -781,7 +838,15 @@ function matchesCondition(actual: unknown, condition: BuilderConfig['where'][num
 /** X/Y 없는 실행 결과(mode:rows) — 전체 컬럼에 조건·원본 컬럼 정렬을 적용한다. */
 export function buildRawRows(cfg: BuilderConfig): QueryResult {
   const options = columnsForBuilder(cfg, schemaTables);
-  const columns: Cols = options.map((column) => ({ name: column.label, type: column.type }));
+  const columns: Cols = options.map((column) => {
+    const name = colName(column.value);
+    const displayName = fieldDisplayNameForRef(column.value, cfg, schemaTables);
+    return {
+      name,
+      type: column.type,
+      ...(displayName !== name ? { displayName } : {}),
+    };
+  });
   let rows: Rows = Array.from({ length: 12 }, (_, index) => options.map((column) => sampleValue(column.type, index)));
   rows = rows.filter((row) => cfg.where.every((condition) => {
     const columnIndex = options.findIndex((column) => column.value === condition.column);
@@ -809,6 +874,35 @@ export function buildRawRows(cfg: BuilderConfig): QueryResult {
 }
 
 /** 테이블 원본 미리보기(GET schema preview) — 컬럼 타입별 가짜 값 */
+/** Physical result keys remain stable; display names are additive response metadata only. */
+export function withResultDisplayNames(
+  result: QueryResult,
+  cfg: BuilderConfig,
+  pivoted = Boolean(cfg.seriesBy),
+): QueryResult {
+  const columns = result.columns.map((column) => ({ ...column }));
+  if (columns.length === 0) return { ...result, columns };
+
+  const setDisplayName = (index: number, displayName: string) => {
+    const column = columns[index];
+    if (column && displayName && displayName !== column.name) column.displayName = displayName;
+  };
+  setDisplayName(0, fieldDisplayName(cfg, cfg.xAxis, columns[0].name));
+
+  if (pivoted && cfg.seriesBy) return { ...result, columns };
+
+  let measureStart = 1;
+  if (cfg.seriesBy && columns.length > 1) {
+    setDisplayName(1, fieldDisplayName(cfg, cfg.seriesBy, columns[1].name));
+    measureStart = 2;
+  }
+  cfg.yAxis.forEach((field, index) => {
+    const column = columns[measureStart + index];
+    if (column) setDisplayName(measureStart + index, measureDisplayName(cfg, field, column.name));
+  });
+  return { ...result, columns };
+}
+
 export function buildTablePreview(table: SchemaTable): QueryResult {
   const rows: Rows = Array.from({ length: 12 }, (_, i) => table.columns.map((c) => sampleValue(c.type, i)));
   return { columns: table.columns, rows, rowCount: rows.length, truncated: false, elapsedMs: 12 };
@@ -1030,6 +1124,29 @@ export function assembleOption(
   // Java 변환기와 동일하게 저장 옵션 마이그레이션과 대분류 기본값 병합을 변환기 진입점에서 수행한다.
   // 호출자가 부분 저장 옵션을 넘겨도 MSW 미리보기와 실제 서버가 같은 결과를 내야 한다.
   const o = optionsWithDefaults(chartType as MajorType, options ?? {});
+  const fieldLabels = seriesDisplayNames(builderConfig, result.columns);
+  const xField = String(builderConfig?.xAxis ?? '').trim();
+  const fieldSnapshots = builderConfig?.fieldDisplayNames;
+  const hasSnapshot = (fieldRef: unknown) => {
+    const reference = String(fieldRef ?? '').trim();
+    return Boolean(
+      reference
+      && fieldSnapshots
+      && typeof fieldSnapshots === 'object'
+      && !Array.isArray(fieldSnapshots)
+      && String(fieldSnapshots[reference] ?? '').trim(),
+    );
+  };
+  if (xField && hasSnapshot(xField) && !String(o.xAxis?.title ?? '').trim()) {
+    o.xAxis = { ...(o.xAxis ?? {}), title: fieldDisplayName(builderConfig, xField, result.columns[0]?.name ?? 'X') };
+  }
+  const measures = Array.isArray(builderConfig?.yAxis) ? builderConfig.yAxis : [];
+  if (measures.length === 1 && hasSnapshot(measures[0]?.column) && !String(o.yAxis?.title ?? '').trim()) {
+    o.yAxis = {
+      ...(o.yAxis ?? {}),
+      title: measureDisplayName(builderConfig, measures[0], result.columns[1]?.name ?? '값'),
+    };
+  }
   const movingAverage = movingAverageOf(o.analysis?.movingAverage);
   const movingAverageEligible = movingAverageOverridesSort(chartType, o, result.columns);
   // 이동평균은 sortOrder 대신 시간 오름차순을 강제한다(서버 변환기와 동일).
@@ -1070,6 +1187,7 @@ export function assembleOption(
     backgroundColor: o.backgroundColor ?? '#ffffff',
     __chartsdkAutoColorMap: autoColorMap,
     __chartsdkShowComputedAt: o.showComputedAt !== false,
+    ...(Object.keys(fieldLabels).length > 0 ? { [SERIES_DISPLAY_NAMES_KEY]: fieldLabels } : {}),
     __chartsdkValueFormat: {
       tooltip: o.tooltip?.valueFormat ?? 'raw',
       yAxis: o.yAxis?.format ?? 'raw',
@@ -1231,6 +1349,7 @@ export function assembleOption(
     opt.yAxis = {
       type: 'category',
       data: yNames,
+      ...(Object.keys(fieldLabels).length > 0 ? { [AXIS_DISPLAY_NAMES_KEY]: fieldLabels } : {}),
       splitArea: { show: true },
       axisLabel: categoryAxisLabel(typography.axis, undefined, o.yAxis, 'auto', false, fonts.axis),
       ...axisOptions(o.yAxis, typography.axis, 'y', 'y', fonts.axis),
@@ -1696,10 +1815,12 @@ function appendMovingAverage(
   const sourceColor = sourceSeries.lineStyle?.color
     ?? sourceSeries.color
     ?? sourceSeries.itemStyle?.color;
+  const sourceName = seriesColumns[seriesIndex].name;
+  const averageName = `${sourceName} · ${config.period}기간 이동평균`;
   const averageSeries: Record<string, any> = {
     id: `${MOVING_AVERAGE_SERIES_ID}_${seriesIndex}`,
     type: 'line',
-    name: `${seriesColumns[seriesIndex].name} · ${config.period}기간 이동평균`,
+    name: averageName,
     data: values,
     showSymbol: false,
     symbol: 'none',
@@ -1717,6 +1838,13 @@ function appendMovingAverage(
   applySeriesEmphasis(averageSeries, options, 'line');
   const originalSeries = [...option.series];
   option.series.push(averageSeries);
+  const displayNames = option[SERIES_DISPLAY_NAMES_KEY] as Record<string, string> | undefined;
+  if (displayNames?.[sourceName]) {
+    option[SERIES_DISPLAY_NAMES_KEY] = {
+      ...displayNames,
+      [averageName]: `${displayNames[sourceName]} · ${config.period}기간 이동평균`,
+    };
+  }
 
   applyMovingAverageLegend(option, originalSeries, config.showInLegend);
 }
@@ -2069,7 +2197,7 @@ function applyCommonTooltip(
   // 툴팁은 HTML 렌더라 루트 textStyle 을 상속하지 않는다 — 글꼴을 따로 지정한다(서버 미러).
   const tooltip: Record<string, any> = { textStyle: { fontSize, ...(fontFamily ? { fontFamily } : {}) } };
   if (!enabled) tooltip.show = false;
-  if (config.trigger && config.trigger !== 'auto') tooltip.trigger = config.trigger;
+  if (config.trigger === 'item' || config.trigger === 'axis') tooltip.trigger = config.trigger;
   if (config.axisPointer && config.axisPointer !== 'auto') tooltip.axisPointer = { type: config.axisPointer };
   if (config.confine === 'inside') tooltip.confine = true;
   if (config.confine === 'free') tooltip.confine = false;

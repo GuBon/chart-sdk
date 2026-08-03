@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronRight, Database, Layers3, Search, Table2 } from 'lucide-react';
+import { Check, ChevronRight, Database, Layers3, Pencil, Search, Table2, X } from 'lucide-react';
 import { datasourcesApi, schemaApi } from '@/lib/api';
 import type { Datasource, RelationType, SchemaTable } from '@/lib/api';
 import { chartDatasourcePath, chartRelationPath, chartSchemaPath } from '@/lib/chartRoutes';
@@ -70,7 +70,9 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
     return [...counts].sort(([a], [b]) => a.localeCompare(b, 'ko'));
   }, [relations]);
   const schemaRelations = useMemo(
-    () => (relations ?? []).filter((item) => item.schema === schema).sort((a, b) => a.name.localeCompare(b.name, 'ko')),
+    () => (relations ?? [])
+      .filter((item) => item.schema === schema)
+      .sort((a, b) => (a.displayName || a.name).localeCompare(b.displayName || b.name, 'ko')),
     [relations, schema],
   );
   const selectedRelation = relation == null
@@ -79,8 +81,28 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
   const visibleSchemaRelations = useMemo(() => {
     const query = relationQuery.trim().toLocaleLowerCase('ko');
     if (!query) return schemaRelations;
-    return schemaRelations.filter((item) => item.name.toLocaleLowerCase('ko').includes(query));
+    return schemaRelations.filter((item) =>
+      item.name.toLocaleLowerCase('ko').includes(query)
+      || item.displayName?.toLocaleLowerCase('ko').includes(query)
+      || item.columns.some((column) =>
+        column.name.toLocaleLowerCase('ko').includes(query)
+        || column.displayName?.toLocaleLowerCase('ko').includes(query)));
   }, [relationQuery, schemaRelations]);
+
+  const updateDisplayName = async (
+    relationName: string,
+    columnName: string | undefined,
+    displayName: string,
+  ) => {
+    await schemaApi.updateDisplayName({
+      datasourceId: datasource!.id,
+      schema: schema ?? 'public',
+      relation: relationName,
+      column: columnName,
+      displayName: displayName.trim() || null,
+    });
+    setRelations(await schemaApi.tables(datasource!.id));
+  };
 
   if (datasources === null || (needsCatalog && relations === null)) {
     return <div className="py-24 text-center text-sm text-text-tertiary">데이터 탐색 정보를 불러오는 중…</div>;
@@ -187,7 +209,7 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
                     aria-label="관계 검색"
                     value={relationQuery}
                     onChange={(event) => setRelationQuery(event.target.value)}
-                    placeholder="TABLE·View 이름 검색"
+                    placeholder="표시 이름·실제 이름 검색"
                     className="h-9 pl-9"
                   />
                 </div>
@@ -201,17 +223,26 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
                   <table className="w-full table-fixed border-collapse">
                     <thead>
                       <tr className="h-10 bg-muted/60 text-left text-xs font-medium text-text-secondary">
-                        <th className="w-[36%] pl-5">이름</th>
-                        <th className="w-[22%]">종류</th>
-                        <th className="w-[18%]">컬럼</th>
+                        <th className="w-[28%] pl-5">표시 이름</th>
+                        <th className="w-[25%]">실제 이름</th>
+                        <th className="w-[18%]">종류</th>
+                        <th className="w-[12%]">컬럼</th>
                         <th className="pr-5">예상 행 수</th>
                       </tr>
                     </thead>
                     <tbody>
                       {visibleSchemaRelations.map((item) => (
                         <tr key={item.name} className="h-[52px] border-t border-border text-[13px]">
-                          <td className="pl-5 font-medium">
-                            <Link href={`${chartRelationPath({ datasourceName: datasource.name, schema: item.schema, name: item.name })}?view=columns`} className="text-text-primary hover:text-primary hover:underline">{item.name}</Link>
+                          <td className="pl-5">
+                            <InlineDisplayName
+                              value={item.displayName}
+                              physicalName={item.name}
+                              ariaLabel={`${item.name} 표시 이름`}
+                              onSave={(value) => updateDisplayName(item.name, undefined, value)}
+                            />
+                          </td>
+                          <td className="font-mono text-xs text-text-secondary">
+                            <Link href={`${chartRelationPath({ datasourceName: datasource.name, schema: item.schema, name: item.name })}?view=columns`} className="hover:text-primary hover:underline">{item.name}</Link>
                           </td>
                           <td><RelationBadge type={item.relationType} populated={item.populated} /></td>
                           <td className="text-text-secondary">{item.columns.length}개</td>
@@ -241,8 +272,8 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
         <>
           <PageHeader
             icon={<Table2 className="size-5" />}
-            title={selectedRelation.name}
-            description={`${selectedRelation.schema} · ${relationTypeLabel(selectedRelation.relationType)}${selectedRelation.estimatedRowCount == null ? '' : ` · 약 ${selectedRelation.estimatedRowCount.toLocaleString()}행`}`}
+            title={selectedRelation.displayName || selectedRelation.name}
+            description={`${selectedRelation.schema}.${selectedRelation.name} · ${relationTypeLabel(selectedRelation.relationType)}${selectedRelation.estimatedRowCount == null ? '' : ` · 약 ${selectedRelation.estimatedRowCount.toLocaleString()}행`}`}
           />
           <ScopeViewTabs
             basePath={chartRelationPath({ datasourceName: datasource.name, schema, name: relation })}
@@ -253,19 +284,42 @@ export function DataCatalogPage({ datasourceName, schema, relation, view = 'char
           />
           {view === 'columns' ? (
             <section className="mb-8">
+              <div className="mb-5 flex items-center gap-4 rounded-[10px] border border-border bg-bg-panel px-5 py-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-text-secondary">관계 표시 이름</p>
+                  <p className="mt-1 font-mono text-xs text-text-tertiary">{selectedRelation.schema}.{selectedRelation.name}</p>
+                </div>
+                <div className="w-full max-w-sm">
+                  <InlineDisplayName
+                    value={selectedRelation.displayName}
+                    physicalName={selectedRelation.name}
+                    ariaLabel={`${selectedRelation.name} 표시 이름`}
+                    onSave={(value) => updateDisplayName(selectedRelation.name, undefined, value)}
+                  />
+                </div>
+              </div>
               <SectionHeader title="컬럼" count={selectedRelation.columns.length} />
               <div className="overflow-hidden rounded-[10px] border border-border bg-bg-panel">
                 <table className="w-full table-fixed border-collapse">
                   <thead>
                     <tr className="h-10 bg-muted/60 text-left text-xs font-medium text-text-secondary">
-                      <th className="w-1/2 pl-5">컬럼명</th>
+                      <th className="w-[38%] pl-5">표시 이름</th>
+                      <th className="w-[34%]">실제 이름</th>
                       <th className="pr-5">데이터 타입</th>
                     </tr>
                   </thead>
                   <tbody>
                     {selectedRelation.columns.map((column) => (
                       <tr key={column.name} className="h-11 border-t border-border text-[13px]">
-                        <td className="pl-5 font-medium text-text-primary">{column.name}</td>
+                        <td className="pl-5">
+                          <InlineDisplayName
+                            value={column.displayName}
+                            physicalName={column.name}
+                            ariaLabel={`${column.name} 표시 이름`}
+                            onSave={(value) => updateDisplayName(selectedRelation.name, column.name, value)}
+                          />
+                        </td>
+                        <td className="font-mono text-xs text-text-secondary">{column.name}</td>
                         <td className="pr-5 text-text-secondary">{column.type}</td>
                       </tr>
                     ))}
@@ -336,4 +390,115 @@ function RelationBadge({ type, populated }: { type: RelationType; populated?: bo
 
 function EmptyPanel({ text, icon }: { text: string; icon?: ReactNode }) {
   return <div className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border bg-bg-panel px-4 text-center text-[13px] text-text-tertiary">{icon}{text}</div>;
+}
+
+function InlineDisplayName({
+  value,
+  physicalName,
+  ariaLabel,
+  onSave,
+}: {
+  value?: string;
+  physicalName: string;
+  ariaLabel: string;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(value ?? '');
+  }, [editing, value]);
+
+  const cancel = () => {
+    if (saving) return;
+    setDraft(value ?? '');
+    setError(null);
+    setEditing(false);
+  };
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(draft);
+      setEditing(false);
+    } catch {
+      setError('표시 이름을 저장하지 못했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="group flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-text-primary" title={value || physicalName}>
+          {value || physicalName}
+        </span>
+        {!value && <span className="shrink-0 text-[10px] text-text-tertiary">기본</span>}
+        <button
+          type="button"
+          aria-label={`${ariaLabel} 편집`}
+          title="표시 이름 편집"
+          onClick={() => setEditing(true)}
+          className="shrink-0 rounded p-1 text-text-tertiary opacity-70 transition-colors hover:bg-muted hover:text-text-primary group-hover:opacity-100"
+        >
+          <Pencil className="size-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <Input
+          autoFocus
+          size="sm"
+          aria-label={ariaLabel}
+          value={draft}
+          maxLength={200}
+          placeholder={physicalName}
+          disabled={saving}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void save();
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              cancel();
+            }
+          }}
+        />
+        <button
+          type="button"
+          aria-label="표시 이름 저장"
+          title="저장"
+          disabled={saving}
+          onClick={() => void save()}
+          className="rounded p-1 text-primary hover:bg-blue-50 disabled:opacity-50"
+        >
+          <Check className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="표시 이름 편집 취소"
+          title="취소"
+          disabled={saving}
+          onClick={cancel}
+          className="rounded p-1 text-text-tertiary hover:bg-muted hover:text-text-primary disabled:opacity-50"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      <p className={`mt-1 text-[10px] ${error ? 'text-danger' : 'text-text-tertiary'}`}>
+        {error ?? '비우고 저장하면 데이터소스의 기본 표시 이름으로 되돌립니다.'}
+      </p>
+    </div>
+  );
 }
