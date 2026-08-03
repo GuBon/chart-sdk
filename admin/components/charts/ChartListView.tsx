@@ -159,14 +159,14 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
           )}
         />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] items-start gap-4">
           {charts?.map((chart) => (
             <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} />
           ))}
           {!hasFilter && page === 1 && (
             <Link
               href="/charts/new"
-              className="flex min-h-[230px] flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border text-text-tertiary transition-colors hover:border-text-tertiary hover:text-text-secondary"
+              className="flex h-[274px] flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border text-text-tertiary transition-colors hover:border-text-tertiary hover:text-text-secondary"
             >
               <Plus className="size-6" />
               <span className="text-[13px]">새 차트 만들기</span>

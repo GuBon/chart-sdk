@@ -1,10 +1,16 @@
 'use client';
 
+import { useMemo } from 'react';
 import type { ChartOptions } from '@/lib/api';
 import { ChartPreview } from './ChartPreview';
 
 export function MiniChart({ option }: { option?: ChartOptions | null }) {
-  if (option === null) {
+  const thumbnailOption = useMemo(
+    () => option == null ? option : toThumbnailOption(option),
+    [option],
+  );
+
+  if (thumbnailOption === null) {
     return (
       <div className="flex h-full w-full items-center justify-center rounded-md bg-bg-panel/60 text-xs text-text-tertiary">
         preview unavailable
@@ -12,11 +18,11 @@ export function MiniChart({ option }: { option?: ChartOptions | null }) {
     );
   }
 
-  if (option === undefined) {
+  if (thumbnailOption === undefined) {
     return <div className="h-full w-full animate-pulse rounded-md bg-bg-panel/70" />;
   }
 
-  return <ChartPreview option={toThumbnailOption(option)} />;
+  return <ChartPreview option={thumbnailOption} />;
 }
 
 function toThumbnailOption(option: ChartOptions): ChartOptions {
