@@ -360,19 +360,19 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 툴팁 ──
-  // '자동'은 해당 키를 ECharts에 전달하지 않아 설치 버전(6.1)의 기본 동작을 그대로 사용한다.
+  // 사용자에게 실제로 다른 두 동작만 노출한다. item은 단일 데이터, axis는 같은 축의 계열 묶음이다.
   {
     key: 'tooltip.enabled', zone: 'common', section: '툴팁', label: '툴팁 표시',
     control: 'toggle', appliesTo: MAJOR_TYPES, default: true,
     echarts: 'tooltip.show',
   },
   {
-    key: 'tooltip.trigger', zone: 'common', section: '툴팁', label: '트리거',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap'], default: 'auto',
+    key: 'tooltip.trigger', zone: 'common', section: '툴팁', label: '표시 기준',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap'], default: 'item',
     showIf: (o) => o.tooltip?.enabled !== false,
     echarts: 'tooltip.trigger',
-    choices: [{ value: 'auto', label: '자동' }, { value: 'item', label: '항목' }, { value: 'axis', label: '축' }],
-    help: '자동은 ECharts 기본값(item)을 사용합니다. 막대·선에서 축을 선택하면 같은 X 위치의 계열을 함께 표시합니다.',
+    choices: [{ value: 'item', label: '항목' }, { value: 'axis', label: '축' }],
+    help: '항목은 마우스를 올린 데이터 하나, 축은 같은 축 위치의 여러 계열을 함께 표시합니다.',
   },
   {
     key: 'tooltip.valueFormat', zone: 'common', section: '툴팁', label: '값 포맷',
@@ -1505,6 +1505,7 @@ export function migrateLegacyInteractionOptions(options: Options, chartType: Maj
   migrateLegacyGeoSeriesStyles(next, chartType);
   if (next.tooltip && typeof next.tooltip === 'object' && !Array.isArray(next.tooltip)) {
     const tooltip = { ...next.tooltip };
+    if (tooltip.trigger === 'auto') tooltip.trigger = 'item';
     delete tooltip.contentMode;
     delete tooltip.template;
     next.tooltip = tooltip;

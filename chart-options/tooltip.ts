@@ -1,4 +1,8 @@
 import type { MajorType } from './optionRegistry';
+import {
+  fieldDisplayName,
+  measureDisplayName,
+} from './fieldDisplayNames';
 
 export type TooltipFieldKind =
   | 'category'
@@ -71,7 +75,8 @@ function lastSegment(value: unknown, fallback = ''): string {
   return dot >= 0 ? text.slice(dot + 1) : text;
 }
 
-function humanize(value: unknown, fallback: string): string {
+function humanize(value: unknown, fallback: string, builder?: Record<string, any>): string {
+  if (builder) return fieldDisplayName(builder, value, fallback);
   const text = lastSegment(value, fallback)
     .replace(/^__chartsdk_/, '')
     .replace(/[_-]+/g, ' ')
@@ -79,13 +84,14 @@ function humanize(value: unknown, fallback: string): string {
   return text || fallback;
 }
 
-function measureLabel(field: Record<string, any> | undefined, fallback: string): string {
-  if (!field) return humanize(fallback, '값');
-  const alias = String(field.alias ?? '').trim();
-  if (alias) return alias;
-  const base = humanize(field.column, fallback);
-  const aggregate = String(field.agg ?? 'none');
-  return aggregate === 'none' ? base : `${base} ${AGGREGATE_LABELS[aggregate] ?? aggregate}`;
+function measureLabel(
+  field: Record<string, any> | undefined,
+  fallback: string,
+  builder?: Record<string, any>,
+): string {
+  return builder
+    ? measureDisplayName(builder, field, fallback)
+    : measureDisplayName({}, field, fallback);
 }
 
 function measureKey(field: Record<string, any> | undefined, index: number, fallback: string): string {
@@ -121,14 +127,14 @@ function cartesianFields(context: TooltipFieldContext): TooltipFieldDescriptor[]
   const seriesBy = String(builder.seriesBy ?? '').trim();
   const fields: TooltipFieldDescriptor[] = [];
   const xIdentity = String(builder.xAxis ?? resultColumn(context, 0, 'x'));
-  fields.push(field(`x:${xIdentity}`, humanize(builder.xAxis ?? resultColumn(context, 0, '카테고리'), '카테고리'), '가로축', 'category'));
+  fields.push(field(`x:${xIdentity}`, humanize(builder.xAxis ?? resultColumn(context, 0, '카테고리'), '카테고리', builder), '가로축', 'category'));
 
   if (seriesBy) {
-    fields.push(field(`series:${seriesBy}`, humanize(seriesBy, '계열'), '계열', 'series'));
+    fields.push(field(`series:${seriesBy}`, humanize(seriesBy, '계열', builder), '계열', 'series'));
     const source = yAxis[0];
     fields.push(field(
       measureKey(source, 0, resultColumn(context, 2, '값')),
-      measureLabel(source, resultColumn(context, 2, '값')),
+      measureLabel(source, resultColumn(context, 2, '값'), builder),
       AGGREGATE_LABELS[String(source?.agg ?? 'none')] ?? '값',
       'measure',
       { valueIndex: 1 },
@@ -140,7 +146,7 @@ function cartesianFields(context: TooltipFieldContext): TooltipFieldDescriptor[]
     const source = yAxis[index];
     fields.push(field(
       measureKey(source, index, column.name),
-      measureLabel(source, column.name),
+      measureLabel(source, column.name, builder),
       AGGREGATE_LABELS[String(source?.agg ?? 'none')] ?? '값',
       'measure',
       { seriesName: column.name, valueIndex: index + 1 },
@@ -161,7 +167,7 @@ function scatterFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
     : '';
   const xName = resultColumn(context, 0, 'X');
   const fields: TooltipFieldDescriptor[] = [
-    field(`x:${String(builder.xAxis ?? xName)}`, humanize(builder.xAxis ?? xName, 'X'), '가로축', 'x', { valueIndex: 0 }),
+    field(`x:${String(builder.xAxis ?? xName)}`, humanize(builder.xAxis ?? xName, 'X', builder), '가로축', 'x', { valueIndex: 0 }),
   ];
 
   context.columns.slice(1).forEach((column, index) => {
@@ -169,7 +175,7 @@ function scatterFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
     if (bubbleName && column.name === bubbleName) {
       fields.push(field(
         `bubble:${String(source?.column ?? column.name)}`,
-        measureLabel(source, column.name),
+        measureLabel(source, column.name, builder),
         '버블 크기',
         'bubbleSize',
         { valueIndex: 2 },
@@ -178,7 +184,7 @@ function scatterFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
     }
     fields.push(field(
       measureKey(source, index, column.name),
-      measureLabel(source, column.name),
+      measureLabel(source, column.name, builder),
       '세로축',
       'y',
       { seriesName: column.name, valueIndex: 1 },
@@ -193,8 +199,8 @@ function pieFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
   const categoryName = resultColumn(context, 0, '항목');
   const valueName = resultColumn(context, 1, '값');
   return [
-    field(`category:${String(builder.xAxis ?? categoryName)}`, humanize(builder.xAxis ?? categoryName, '항목'), '항목', 'category'),
-    field(measureKey(yAxis[0], 0, valueName), measureLabel(yAxis[0], valueName), AGGREGATE_LABELS[String(yAxis[0]?.agg ?? 'none')] ?? '값', 'measure'),
+    field(`category:${String(builder.xAxis ?? categoryName)}`, humanize(builder.xAxis ?? categoryName, '항목', builder), '항목', 'category'),
+    field(measureKey(yAxis[0], 0, valueName), measureLabel(yAxis[0], valueName, builder), AGGREGATE_LABELS[String(yAxis[0]?.agg ?? 'none')] ?? '값', 'measure'),
     field('derived:percent', '구성비', '계산값', 'percent'),
   ];
 }
@@ -203,10 +209,10 @@ function boxplotFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
   const builder = context.builderConfig ?? {};
   const yAxis = Array.isArray(builder.yAxis) ? builder.yAxis as Record<string, any>[] : [];
   const categoryName = resultColumn(context, 0, '카테고리');
-  const valueName = measureLabel(yAxis[0], resultColumn(context, 1, '값'));
+  const valueName = measureLabel(yAxis[0], resultColumn(context, 1, '값'), builder);
   const identity = String(yAxis[0]?.column ?? resultColumn(context, 1, 'value'));
   return [
-    field(`category:${String(builder.xAxis ?? categoryName)}`, humanize(builder.xAxis ?? categoryName, '카테고리'), '카테고리', 'category'),
+    field(`category:${String(builder.xAxis ?? categoryName)}`, humanize(builder.xAxis ?? categoryName, '카테고리', builder), '카테고리', 'category'),
     field(`box:min:${identity}`, `${valueName} 최솟값`, '계산값', 'boxMin', { valueIndex: 0 }),
     field(`box:q1:${identity}`, `${valueName} 1사분위수`, '계산값', 'boxQ1', { valueIndex: 1 }),
     field(`box:median:${identity}`, `${valueName} 중앙값`, '계산값', 'boxMedian', { valueIndex: 2 }),
@@ -221,13 +227,13 @@ function heatmapFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
   const yAxis = Array.isArray(builder.yAxis) ? builder.yAxis as Record<string, any>[] : [];
   const xName = resultColumn(context, 0, '가로 항목');
   const fields = [
-    field(`x:${String(builder.xAxis ?? xName)}`, humanize(builder.xAxis ?? xName, '가로 항목'), '가로축', 'category'),
+    field(`x:${String(builder.xAxis ?? xName)}`, humanize(builder.xAxis ?? xName, '가로 항목', builder), '가로축', 'category'),
   ];
   context.columns.slice(1).forEach((column, index) => {
     const source = yAxis[index];
     fields.push(field(
       measureKey(source, index, column.name),
-      measureLabel(source, column.name),
+      measureLabel(source, column.name, builder),
       '측정 항목',
       'measure',
       { seriesName: column.name, valueIndex: 2 },
@@ -244,15 +250,15 @@ function areaMapFields(context: TooltipFieldContext): TooltipFieldDescriptor[] {
   const valueRef = area.valueColumn ?? yAxis[0]?.column ?? resultColumn(context, 1, '값');
   const valueSource = area.valueColumn ? { column: area.valueColumn, agg: 'none' } : yAxis[0];
   const fields = [
-    field(`region:${String(nameRef)}`, humanize(nameRef, '지역'), '지역', 'category'),
+    field(`region:${String(nameRef)}`, humanize(nameRef, '지역', builder), '지역', 'category'),
   ];
   if (builder.seriesBy) {
-    fields.push(field(`series:${String(builder.seriesBy)}`, humanize(builder.seriesBy, '계열'), '계열', 'series'));
+    fields.push(field(`series:${String(builder.seriesBy)}`, humanize(builder.seriesBy, '계열', builder), '계열', 'series'));
   }
   if (valueRef) {
     fields.push(field(
       measureKey(valueSource, 0, String(valueRef)),
-      measureLabel(valueSource, String(valueRef)),
+      measureLabel(valueSource, String(valueRef), builder),
       AGGREGATE_LABELS[String(valueSource?.agg ?? 'none')] ?? '값',
       'geoValue',
     ));
@@ -272,19 +278,19 @@ function geoPointFields(context: TooltipFieldContext): TooltipFieldDescriptor[] 
   const colorRef = point.colorColumn;
 
   if (nameRef || hasColumn(INTERNAL_GEO_COLUMNS.name)) {
-    fields.push(field(`geo:name:${String(nameRef ?? INTERNAL_GEO_COLUMNS.name)}`, humanize(nameRef, '포인트 이름'), '포인트 이름', 'geoName'));
+    fields.push(field(`geo:name:${String(nameRef ?? INTERNAL_GEO_COLUMNS.name)}`, humanize(nameRef, '포인트 이름', builder), '포인트 이름', 'geoName'));
   }
   if (builder.seriesBy || hasColumn(INTERNAL_GEO_COLUMNS.series)) {
-    fields.push(field(`series:${String(builder.seriesBy ?? INTERNAL_GEO_COLUMNS.series)}`, humanize(builder.seriesBy, '계열'), '계열', 'series'));
+    fields.push(field(`series:${String(builder.seriesBy ?? INTERNAL_GEO_COLUMNS.series)}`, humanize(builder.seriesBy, '계열', builder), '계열', 'series'));
   }
   if (valueRef || hasColumn(INTERNAL_GEO_COLUMNS.value)) {
-    fields.push(field(`geo:value:${String(valueRef ?? INTERNAL_GEO_COLUMNS.value)}`, humanize(valueRef, '값'), context.chartType === 'map' ? '강도 값' : '값', 'geoValue', { valueIndex: 2 }));
+    fields.push(field(`geo:value:${String(valueRef ?? INTERNAL_GEO_COLUMNS.value)}`, humanize(valueRef, '값', builder), context.chartType === 'map' ? '강도 값' : '값', 'geoValue', { valueIndex: 2 }));
   }
   if (context.chartType === 'geoscatter' && (sizeRef || hasColumn(INTERNAL_GEO_COLUMNS.size))) {
-    fields.push(field(`geo:size:${String(sizeRef ?? INTERNAL_GEO_COLUMNS.size)}`, humanize(sizeRef, '크기'), '포인트 크기', 'geoSize', { valueIndex: 3 }));
+    fields.push(field(`geo:size:${String(sizeRef ?? INTERNAL_GEO_COLUMNS.size)}`, humanize(sizeRef, '크기', builder), '포인트 크기', 'geoSize', { valueIndex: 3 }));
   }
   if (colorRef || hasColumn(INTERNAL_GEO_COLUMNS.color)) {
-    fields.push(field(`geo:color:${String(colorRef ?? INTERNAL_GEO_COLUMNS.color)}`, humanize(colorRef, '색상 값'), '색상 기준', 'geoColor', {
+    fields.push(field(`geo:color:${String(colorRef ?? INTERNAL_GEO_COLUMNS.color)}`, humanize(colorRef, '색상 값', builder), '색상 기준', 'geoColor', {
       valueIndex: context.chartType === 'map' ? 3 : 4,
     }));
   }
@@ -292,11 +298,11 @@ function geoPointFields(context: TooltipFieldContext): TooltipFieldDescriptor[] 
   const longitudeRef = point.mode === 'spatial' ? '경도' : builder.xAxis ?? INTERNAL_GEO_COLUMNS.longitude;
   const latitudeRef = point.mode === 'spatial' ? '위도' : yAxis[0]?.column ?? INTERNAL_GEO_COLUMNS.latitude;
   fields.push(
-    field(`geo:longitude:${String(longitudeRef)}`, humanize(longitudeRef, '경도'), point.mode === 'spatial' ? '위치 계산값' : '위치', 'longitude', {
+    field(`geo:longitude:${String(longitudeRef)}`, humanize(longitudeRef, '경도', builder), point.mode === 'spatial' ? '위치 계산값' : '위치', 'longitude', {
       defaultVisible: false,
       valueIndex: 0,
     }),
-    field(`geo:latitude:${String(latitudeRef)}`, humanize(latitudeRef, '위도'), point.mode === 'spatial' ? '위치 계산값' : '위치', 'latitude', {
+    field(`geo:latitude:${String(latitudeRef)}`, humanize(latitudeRef, '위도', builder), point.mode === 'spatial' ? '위치 계산값' : '위치', 'latitude', {
       defaultVisible: false,
       valueIndex: 1,
     }),

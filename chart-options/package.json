@@ -21,6 +21,7 @@
     "./sampling": "./sampling.ts",
     "./palettes": "./palettes.ts",
     "./tooltip": "./tooltip.ts",
+    "./fieldDisplayNames": "./fieldDisplayNames.ts",
     "./valueFormat": "./valueFormat.ts",
     "./layout-contract-cases.json": "./layout-contract-cases.json",
     "./transform-parity-contract-cases.json": "./transform-parity-contract-cases.json",

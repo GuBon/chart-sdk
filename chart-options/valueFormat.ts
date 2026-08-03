@@ -1,5 +1,6 @@
 import type { MajorType } from './optionRegistry';
 import type { TooltipFieldDescriptor } from './tooltip';
+import { AXIS_DISPLAY_NAMES_KEY, SERIES_DISPLAY_NAMES_KEY } from './fieldDisplayNames';
 
 export type ValueFormat = 'raw' | 'comma' | 'decimal0' | 'decimal1' | 'percent';
 
@@ -12,6 +13,10 @@ type TooltipMetadata = {
   showSeriesColor?: boolean;
 };
 type VerticalAxisRole = 'x' | 'y';
+type AxisDisplayNames = {
+  x?: Record<string, string>;
+  y?: Record<string, string>;
+};
 
 type TooltipParams = {
   seriesId?: unknown;
@@ -27,8 +32,14 @@ type TooltipParams = {
 export function hydrateValueFormat(option: Record<string, any>): Record<string, any> {
   const metadata = option.__chartsdkValueFormat as FormatMetadata | undefined;
   const tooltipMetadata = option.__chartsdkTooltip as TooltipMetadata | undefined;
+  const seriesDisplayNames = option[SERIES_DISPLAY_NAMES_KEY] as Record<string, string> | undefined;
   delete option.__chartsdkValueFormat;
   delete option.__chartsdkTooltip;
+  delete option[SERIES_DISPLAY_NAMES_KEY];
+
+  if (option.legend && seriesDisplayNames && Object.keys(seriesDisplayNames).length > 0) {
+    option.legend.formatter = (name: unknown) => seriesDisplayNames[String(name)] ?? String(name ?? '');
+  }
 
   if (option.tooltip && metadata?.tooltip && metadata.tooltip !== 'raw') {
     option.tooltip.valueFormatter = (value: unknown) => formatChartValue(value, metadata.tooltip!, metadata.unit ?? '');
@@ -41,6 +52,7 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
     }
   }
   hydrateVerticalAxisLabels(option, metadata);
+  const axisDisplayNames = hydrateAxisDisplayNames(option);
 
   if (option.tooltip && tooltipMetadata?.chartType && tooltipMetadata.mode === 'fields') {
     const valueFormatter = typeof option.tooltip.valueFormatter === 'function'
@@ -65,11 +77,42 @@ export function hydrateValueFormat(option: Record<string, any>): Record<string, 
           item ?? {},
           valueFormatter,
           option,
+          axisDisplayNames,
         ))
         .join('<br/>');
     };
   }
   return option;
+}
+
+function hydrateAxisDisplayNames(option: Record<string, any>): AxisDisplayNames {
+  const result: AxisDisplayNames = {};
+  const hydrate = (value: unknown, role: keyof AxisDisplayNames) => {
+    const axes = Array.isArray(value) ? value : value ? [value] : [];
+    for (const axis of axes) {
+      if (!axis || typeof axis !== 'object') continue;
+      const names = axis[AXIS_DISPLAY_NAMES_KEY] as Record<string, string> | undefined;
+      delete axis[AXIS_DISPLAY_NAMES_KEY];
+      if (!names || Object.keys(names).length === 0) continue;
+      result[role] ??= names;
+      axis.axisLabel = { ...(axis.axisLabel ?? {}) };
+      const previous = typeof axis.axisLabel.formatter === 'function'
+        ? axis.axisLabel.formatter as (value: unknown) => unknown
+        : null;
+      axis.axisLabel.formatter = (value: unknown) => {
+        const displayed = displayAxisValue(value, names);
+        return previous ? previous(displayed) : displayed;
+      };
+    }
+  };
+  hydrate(option.xAxis, 'x');
+  hydrate(option.yAxis, 'y');
+  return result;
+}
+
+function displayAxisValue(value: unknown, names?: Record<string, string>): string {
+  const physical = String(value ?? '');
+  return names?.[physical] ?? physical;
 }
 
 function renderFieldTooltip(
@@ -259,6 +302,7 @@ function renderTooltip(
   params: TooltipParams,
   valueFormatter: (value: unknown) => string,
   option: Record<string, any>,
+  axisDisplayNames: AxisDisplayNames = {},
 ): string {
   const dimensions = Array.isArray(params.value) ? params.value : [];
   if (
@@ -285,7 +329,10 @@ function renderTooltip(
     ? xAxis.data[Number(dimensions[0])] ?? dimensions[0]
     : dimensions[0];
   const y = chartType === 'heatmap' && Array.isArray(yAxis?.data)
-    ? yAxis.data[Number(dimensions[1])] ?? dimensions[1]
+    ? displayAxisValue(
+        yAxis.data[Number(dimensions[1])] ?? dimensions[1],
+        axisDisplayNames.y,
+      )
     : dimensions[1];
   const values: Record<string, unknown> = {
     series: params.seriesName,
