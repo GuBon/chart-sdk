@@ -72,6 +72,32 @@ class FederationRoutingIT {
     }
 
     @Test
+    void crossSourceSamplingEstimatesJoinedPopulationAndAppliesSeededBernoulliAfterWhere() {
+        Map<String, Object> cfg = Map.of(
+                "table", ref(dsTandanji, "tandanji", "exercise_logs"),
+                "joins", List.of(Map.of(
+                        "table", ref(dsDocker, "public", "users"),
+                        "type", "inner",
+                        "on", Map.of("leftColumn", "exercise_logs.user_id", "rightColumn", "users.id"))),
+                "xAxis", "users.id",
+                "yAxis", List.of(Map.of("column", "exercise_logs.calories_burned", "agg", "sum", "alias", "cal")),
+                "where", List.of(Map.of("column", "exercise_logs.calories_burned", "op", "gt", "value", 0)),
+                "sample", Map.of("mode", "manual", "size", 1_000, "seed", 321));
+
+        FederatedQueryRunner.BuiltResult first = runner.runBuilder(dsTandanji, cfg, "bar", false);
+        FederatedQueryRunner.BuiltResult second = runner.runBuilder(dsTandanji, cfg, "bar", false);
+
+        assertThat(first.sampling().method()).isEqualTo("RESULT_RANDOM");
+        assertThat(first.sampling().populationEstimate()).isPositive();
+        assertThat(first.rows().rows()).isEqualTo(second.rows().rows());
+        assertThat(first.sql().text())
+                .contains("INNER JOIN")
+                .contains("WHERE \"ds" + dsTandanji + "\".\"tandanji\".\"exercise_logs\".\"calories_burned\" > ? OFFSET 0)")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(");
+    }
+
+    @Test
     void storedLiteralFederatedSqlReExecutesViaRunStored() {
         // 저장→임베드 경로: runBuilder 로 생성한 페더레이션 SQL 을 리터럴 인라인(? → 값)한 뒤, 임베드·새로고침이
         // 쓰는 runStored 로 재실행. WHERE 로 리터럴 인라인 경로까지 관통 검증한다.

@@ -33,7 +33,7 @@ class SamplingMetadataTest {
                                 Map.of("column", "customer_id", "agg", "count_distinct")
                         )));
 
-        assertThat(sampling.version()).isEqualTo(6);
+        assertThat(sampling.version()).isEqualTo(7);
         assertThat(sampling.approximate()).isTrue();
         assertThat(sampling.method()).isEqualTo("SYSTEM");
         assertThat(sampling.mode()).isEqualTo("auto");
@@ -54,7 +54,7 @@ class SamplingMetadataTest {
         SamplingMetadata.system(25).putInto(response);
 
         assertThat(response.get("sampling")).isEqualTo(Map.of(
-                "version", 6,
+                "version", 7,
                 "mode", "manual",
                 "requestedMethod", "system",
                 "rate", 25.0,

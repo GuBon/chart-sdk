@@ -111,9 +111,9 @@ describe('renderChart', () => {
     });
 
     expect(el.querySelector('[data-chart-caption]')?.textContent)
-      .toContain('결과 무작위 행 표본 11,998행 · 표본 결과 · 95% 신뢰수준 · 오차 약 ±1.7%');
+      .toContain('결과 Bernoulli 행 표본 11,998행 · 표본 결과 · 95% 신뢰수준 · 오차 약 ±1.7%');
     expect(el.querySelector('[data-chart-sampling-warning]')?.textContent)
-      .toContain('조회 결과에서 무작위로 선택된 행');
+      .toContain('조회 결과의 각 행을 같은 확률로 독립 선택한 Bernoulli 표본');
   });
 
   it('표본 SUM·COUNT는 전체 추정 배지 없이 표본값 주의문구를 표시한다', () => {

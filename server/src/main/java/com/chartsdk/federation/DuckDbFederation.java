@@ -3,12 +3,16 @@ package com.chartsdk.federation;
 import com.chartsdk.datasource.DatasourceCredentials;
 import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.FederatedCatalog;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.RefRenderer;
 import com.chartsdk.query.SchemaCatalog;
+import com.chartsdk.query.SamplingSeed;
 import com.chartsdk.query.SqlIdentifier;
 import com.chartsdk.web.ApiException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -25,6 +29,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongFunction;
 
 /**
  * 다중 소스 페더레이션 실행 엔진(설계 §3). per-op 무상태: DuckDB in-memory 연결을 열어 필요한 데이터소스를
@@ -38,6 +43,7 @@ import java.util.Map;
 public class DuckDbFederation {
 
     private static final Logger log = LoggerFactory.getLogger(DuckDbFederation.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     static final int QUERY_TIMEOUT_SECONDS = 30; // 저빈도 계산 — 단일 소스(10s)보다 여유
     static final String MEMORY_LIMIT = "1GB";
@@ -45,6 +51,10 @@ public class DuckDbFederation {
 
     private final DatasourceService datasources;
     private final QueryExecutor queryExecutor;
+
+    /** SQL produced after the population estimate and executed on that same attached connection. */
+    public record PlannedBernoulli(QueryRows rows, BuilderSqlBuilder.Sql sql, long populationEstimate) {
+    }
 
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor) {
         this.datasources = datasources;
@@ -68,43 +78,133 @@ public class DuckDbFederation {
      * WHERE 바인딩({@code ?})은 PreparedStatement 로 넘긴다(노코드 빌더 경로). ATTACH 는 바인딩 불가라 Statement 로 선행.
      */
     public QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
-        return execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_ROWS);
+        return execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_ROWS, null);
     }
 
-    /** 지도 포인트 빌더처럼 SQL 자체에 결과 LIMIT이 없는 페더레이션 실행용. */
-    public QueryRows executeUnbounded(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
-        return execute(datasourceIds, federatedSql, params, 0);
+    /** Complete chart execution with the same heap-safety ceiling as direct PostgreSQL queries. */
+    public QueryRows executeChart(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
+        return QueryExecutor.enforceChartResultLimit(
+                execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_CHART_ROWS + 1, null));
     }
 
-    private QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params, int maxRows) {
-        long start = System.nanoTime();
-        boolean repeatableReservoir = federatedSql.contains("USING SAMPLE reservoir(");
+    /** 동일 DuckDB 연결에서 seed를 설정한 뒤 Bernoulli 표본 SQL을 실행한다. */
+    public QueryRows executeBernoulli(Collection<Long> datasourceIds, String federatedSql, List<Object> params,
+                                      boolean chartResult, long seed) {
+        QueryRows rows = execute(datasourceIds, federatedSql, params,
+                chartResult ? QueryExecutor.MAX_CHART_ROWS + 1 : QueryExecutor.MAX_ROWS, seed);
+        return chartResult ? QueryExecutor.enforceChartResultLimit(rows) : rows;
+    }
+
+    /** DuckDB EXPLAIN JSON 최상위 Estimated Cardinality. 원격 JOIN+WHERE 쿼리는 실행하지 않는다. */
+    public long explainEstimatedRows(Collection<Long> datasourceIds, String sql, List<Object> params) {
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
-            try (Statement st = conn.createStatement()) {
-                st.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
-                st.execute("LOAD postgres");
-                for (Long id : datasourceIds) {
-                    DatasourceCredentials c = datasources.credentials(id);
-                    if (log.isDebugEnabled()) log.debug("federation ATTACH: {}", maskedAttachSql(id, c)); // 비밀번호 마스킹(§10)
-                    st.execute(attachSql(id, c));
-                }
-                st.execute("SET memory_limit='" + MEMORY_LIMIT + "'");
-                // DuckDB의 REPEATABLE reservoir는 단일 스레드에서만 같은 seed 재현을 보장한다.
-                st.execute("SET threads TO " + (repeatableReservoir ? 1 : THREADS));
+            configure(conn, datasourceIds, false);
+            return explainEstimatedRows(conn, sql, params);
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    /**
+     * Runs EXPLAIN, builds the probability-aware SQL, and executes it without reconnecting or
+     * repeating postgres ATTACH. Used by cross-datasource RESULT_RANDOM charts.
+     */
+    public PlannedBernoulli executePlannedBernoulli(
+            Collection<Long> datasourceIds,
+            String populationSql,
+            List<Object> populationParams,
+            LongFunction<BuilderSqlBuilder.Sql> sqlFactory,
+            boolean chartResult,
+            long seed
+    ) {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
+            configure(conn, datasourceIds, true);
+            long estimate;
+            try {
+                estimate = explainEstimatedRows(conn, populationSql, populationParams);
+            } catch (Exception ignored) {
+                estimate = 0;
             }
-            try (PreparedStatement ps = conn.prepareStatement(federatedSql)) {
-                ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
-                for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
-                try (ResultSet rs = ps.executeQuery()) {
-                    return QueryRows.from(rs, start, maxRows);
-                }
-            }
+            BuilderSqlBuilder.Sql sql = sqlFactory.apply(estimate);
+            setRandomSeed(conn, seed);
+            QueryRows rows = execute(conn, sql.text(), sql.params(),
+                    chartResult ? QueryExecutor.MAX_CHART_ROWS + 1 : QueryExecutor.MAX_ROWS);
+            if (chartResult) rows = QueryExecutor.enforceChartResultLimit(rows);
+            return new PlannedBernoulli(rows, sql, estimate);
         } catch (SQLTimeoutException e) {
             throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
         } catch (ApiException e) {
             throw e;
         } catch (SQLException e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        }
+    }
+
+    private QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params,
+                              int maxRows, Long bernoulliSeed) {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
+            configure(conn, datasourceIds, bernoulliSeed != null);
+            if (bernoulliSeed != null) setRandomSeed(conn, bernoulliSeed);
+            return execute(conn, federatedSql, params, maxRows);
+        } catch (SQLTimeoutException e) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
+        } catch (ApiException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        }
+    }
+
+    private long explainEstimatedRows(Connection connection, String sql, List<Object> params) throws Exception {
+        try (PreparedStatement ps = connection.prepareStatement("EXPLAIN (FORMAT JSON) " + sql)) {
+            ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return 0;
+                JsonNode root = JSON.readTree(rs.getString(2));
+                return Math.max(0, root.path(0).path("extra_info")
+                        .path("Estimated Cardinality").asLong(0));
+            }
+        }
+    }
+
+    private QueryRows execute(Connection connection, String sql, List<Object> params, int maxRows)
+            throws SQLException {
+        long start = System.nanoTime();
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            ps.setMaxRows(maxRows);
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                return QueryRows.from(rs, start, maxRows);
+            }
+        }
+    }
+
+    private void configure(Connection connection, Collection<Long> datasourceIds,
+                           boolean deterministicBernoulli) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
+            statement.execute("LOAD postgres");
+            for (Long id : datasourceIds) {
+                DatasourceCredentials credentials = datasources.credentials(id);
+                if (log.isDebugEnabled()) {
+                    log.debug("federation ATTACH: {}", maskedAttachSql(id, credentials));
+                }
+                statement.execute(attachSql(id, credentials));
+            }
+            statement.execute("SET memory_limit='" + MEMORY_LIMIT + "'");
+            // seeded random()의 행 소비 순서를 고정해야 같은 seed가 같은 Bernoulli 표본을 재생한다.
+            statement.execute("SET threads TO " + (deterministicBernoulli ? 1 : THREADS));
+        }
+    }
+
+    private static void setRandomSeed(Connection connection, long seed) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT setseed(?)")) {
+            statement.setDouble(1, SamplingSeed.unit(seed));
+            statement.execute();
         }
     }
 

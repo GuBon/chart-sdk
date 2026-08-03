@@ -325,9 +325,12 @@ class BuilderSqlBuilderTest {
 
         assertThat(sql.text())
                 .contains("\"__chartsdk_population\" AS (SELECT")
-                .contains("ORDER BY random() LIMIT 10000")
+                .contains("OFFSET 0)")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(")
                 .contains("\"__chartsdk_sample\".\"__chartsdk_y_0\" AS \"amount\"")
                 .doesNotContain("GROUP BY", SamplingMetadata.HIDDEN_GROUP_COUNT, SamplingMetadata.HIDDEN_TOTAL_COUNT);
+        assertThat(sql.params()).containsExactly(1.0);
         assertThat(sql.sampling().method()).isEqualTo("RESULT_RANDOM");
         assertThat(sql.sampling().confidenceLevel()).isNull();
     }
@@ -361,21 +364,44 @@ class BuilderSqlBuilderTest {
                 "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77)
         );
 
-        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, "bar", false);
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, "bar", false,
+                SamplePlan.resultRandom(500_000, 10_000, 77, "JOIN_RESULT"));
 
         assertThat(sql.text())
-                .startsWith("WITH \"__chartsdk_seed\" AS MATERIALIZED (SELECT setseed(?)")
-                .contains("\"__chartsdk_population\" AS (SELECT")
+                .startsWith("WITH \"__chartsdk_population\" AS (SELECT")
                 .contains("FROM \"public\".\"sales\" LEFT JOIN \"public\".\"customers\"")
-                .contains("WHERE \"public\".\"sales\".\"amount\" >= ?)")
-                .contains("ORDER BY random() LIMIT 10000")
+                .contains("WHERE \"public\".\"sales\".\"amount\" >= ? OFFSET 0)")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(")
                 .contains("AVG(\"__chartsdk_sample\".\"__chartsdk_y_0\") AS \"average\"")
                 .contains("GROUP BY \"__chartsdk_sample\".\"__chartsdk_x\"");
         assertThat(sql.params()).hasSize(2);
-        assertThat(sql.params().get(0)).isInstanceOf(Double.class);
-        assertThat(sql.params().get(1)).isEqualTo(100);
+        assertThat(sql.params().get(0)).isEqualTo(100);
+        assertThat(sql.params().get(1)).isEqualTo(0.02);
         assertThat(sql.sampling().method()).isEqualTo("RESULT_RANDOM");
         assertThat(sql.sampling().confidenceLevel()).isEqualTo(0.95);
+    }
+
+    @Test
+    void buildsJoinAndWherePopulationProbeWithoutAggregationOrSampling() {
+        Map<String, Object> cfg = Map.of(
+                "table", "sales",
+                "joins", List.of(Map.of(
+                        "table", "customers",
+                        "type", "left",
+                        "on", Map.of("leftColumn", "sales.customer_id", "rightColumn", "customers.id")
+                )),
+                "where", List.of(Map.of("column", "sales.amount", "op", "gte", "value", 100))
+        );
+
+        BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(catalog, cfg, "bar");
+
+        assertThat(population.text()).isEqualTo(
+                "SELECT 1 FROM \"public\".\"sales\" LEFT JOIN \"public\".\"customers\""
+                        + " ON \"public\".\"sales\".\"customer_id\" = \"public\".\"customers\".\"id\""
+                        + " WHERE \"public\".\"sales\".\"amount\" >= ?");
+        assertThat(population.params()).containsExactly(100);
+        assertThat(population.text()).doesNotContain("random()", "GROUP BY", "ORDER BY");
     }
 
     @Test
@@ -559,6 +585,65 @@ class BuilderSqlBuilderTest {
                 .contains("TABLESAMPLE SYSTEM (5) REPEATABLE (91)")
                 .contains("\"__chartsdk_geojson\"");
         assertThat(areaSystem.sampling().approximate()).isTrue();
+    }
+
+    @Test
+    void resultSamplingRunsAfterJoinAndWhereButBeforePointTransformation() {
+        Map<String, Object> config = Map.of(
+                "table", "sales",
+                "joins", List.of(Map.of(
+                        "table", "customers",
+                        "type", "left",
+                        "on", Map.of("leftColumn", "sales.customer_id", "rightColumn", "customers.id")
+                )),
+                "geoPoint", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "sales.location",
+                        "valueColumn", "sales.amount"),
+                "where", List.of(Map.of("column", "customers.region", "op", "eq", "value", "Seoul")),
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77)
+        );
+
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, config, "geoscatter", false,
+                SamplePlan.resultRandom(500_000, 10_000, 77, "JOIN_RESULT"));
+
+        assertThat(sql.text())
+                .startsWith("WITH \"__chartsdk_population\" AS (SELECT")
+                .contains("LEFT JOIN \"public\".\"customers\"")
+                .contains("WHERE \"public\".\"customers\".\"region\" = ? OFFSET 0)")
+                .contains("\"__chartsdk_sample\" AS MATERIALIZED")
+                .contains("WHERE random() < ?), \"__chartsdk_spatial\" AS MATERIALIZED")
+                .contains("ST_X(\"__chartsdk_spatial\".\"__chartsdk_spatial_value\")")
+                .contains("ST_Y(\"__chartsdk_spatial\".\"__chartsdk_spatial_value\")")
+                .containsOnlyOnce("ST_Transform(")
+                .doesNotContain("ORDER BY random()", "ST_X(ST_Transform", "ST_Y(ST_Transform");
+        assertThat(sql.params()).containsExactly("Seoul", 0.02);
+    }
+
+    @Test
+    void resultSamplingRunsBeforeAreaTransformationAndGeoJsonSerialization() {
+        Map<String, Object> config = Map.of(
+                "table", "sales",
+                "geoArea", Map.of(
+                        "mode", "spatial",
+                        "spatialColumn", "service_area",
+                        "nameColumn", "category",
+                        "valueColumn", "amount"),
+                "where", List.of(Map.of("column", "amount", "op", "gt", "value", 0)),
+                "sample", Map.of("mode", "manual", "size", 1_000, "seed", 91)
+        );
+
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, config, "map", false,
+                SamplePlan.resultRandom(100_000, 1_000, 91, "VIEW_RESULT"));
+
+        assertThat(sql.text())
+                .contains("WHERE \"public\".\"sales\".\"amount\" > ?), \"__chartsdk_sample\" AS MATERIALIZED")
+                .contains("WHERE random() < ?), \"__chartsdk_spatial\" AS MATERIALIZED")
+                .contains("ST_AsGeoJSON(\"__chartsdk_spatial\".\"__chartsdk_spatial_value\", 6)")
+                .containsOnlyOnce("ST_Transform(")
+                .containsOnlyOnce("ST_AsGeoJSON(")
+                .doesNotContain("ORDER BY random()");
+        assertThat(sql.params()).containsExactly(0, 0.01);
     }
 
     @Test

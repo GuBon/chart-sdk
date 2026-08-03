@@ -47,38 +47,63 @@ public class FederatedQueryRunner {
 
     /** builderConfig 로부터 SQL 생성 + 실행(미리보기·저장 시드·수동 새로고침의 재생성 경로). */
     public BuiltResult runBuilder(long primaryDatasourceId, Map<String, Object> cfg, String chartType, boolean rawMode) {
-        boolean unboundedChart = !rawMode;
+        boolean chartResult = !rawMode;
         Set<Long> refs = BuilderSqlBuilder.referencedDatasources(cfg);
         if (refs.size() >= 2) {
             FederatedCatalog catalog = federation.catalog(refs);
             // 다중 소스 조인도 JOIN+WHERE 결과를 모집단으로 삼는다. 이 계획은 DB 카탈로그를 조회하지 않는다.
             SamplePlan plan = planner.plan(primaryDatasourceId, cfg, rawMode);
+            if (plan.method() == SamplePlan.Method.RESULT_RANDOM) {
+                BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(
+                        catalog, RefRenderer.FEDERATED, cfg, chartType);
+                SamplePlan unestimated = plan;
+                DuckDbFederation.PlannedBernoulli planned = federation.executePlannedBernoulli(
+                        refs,
+                        population.text(),
+                        population.params(),
+                        estimate -> BuilderSqlBuilder.generate(
+                                catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode,
+                                unestimated.withPopulationEstimate(estimate)),
+                        chartResult,
+                        plan.seed()
+                );
+                SamplingQueryRows.Result result = SamplingQueryRows.extract(
+                        planned.rows(), planned.sql().sampling());
+                return new BuiltResult(result.rows(), planned.sql(), refs, result.sampling());
+            }
             BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
                     catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
+            QueryRows executed = chartResult
+                    ? federation.executeChart(refs, sql.text(), sql.params())
+                    : federation.execute(refs, sql.text(), sql.params());
             SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                    unboundedChart
-                            ? federation.executeUnbounded(refs, sql.text(), sql.params())
-                            : federation.execute(refs, sql.text(), sql.params()),
-                    sql.sampling());
+                    executed, sql.sampling());
             return new BuiltResult(result.rows(), sql, refs, result.sampling());
         }
         long dsId = refs.isEmpty() ? primaryDatasourceId : refs.iterator().next();
         SchemaCatalog catalog = queries.catalog(dsId);
         SamplePlan plan = planner.plan(dsId, cfg, rawMode); // 관계 종류·조인 유무·PK·행수·밀도로 RESULT_RANDOM 포함 실행 방식 결정
+        if (plan.method() == SamplePlan.Method.RESULT_RANDOM) {
+            BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(catalog, cfg, chartType);
+            plan = plan.withPopulationEstimate(
+                    queries.explainEstimatedRows(dsId, population.text(), population.params()));
+        }
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
+        QueryRows executed = plan.method() == SamplePlan.Method.RESULT_RANDOM
+                ? queries.executeBernoulli(dsId, sql.text(), sql.params(), chartResult, plan.seed())
+                : chartResult
+                        ? queries.executeChart(dsId, sql.text(), sql.params())
+                        : queries.execute(dsId, sql.text(), sql.params());
         SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                unboundedChart
-                        ? queries.executeUnbounded(dsId, sql.text(), sql.params())
-                        : queries.execute(dsId, sql.text(), sql.params()),
-                sql.sampling());
+                executed, sql.sampling());
         return new BuiltResult(result.rows(), sql, Set.of(dsId), result.sampling());
     }
 
     /** 저장된 리터럴 SQL 실행(저장 시드·수동 새로고침의 재실행 경로). 소스 수로 라우팅. */
     public QueryRows runStored(Set<Long> datasourceIds, long primaryDatasourceId, String storedSql) {
         if (datasourceIds != null && datasourceIds.size() >= 2) {
-            return federation.executeUnbounded(datasourceIds, storedSql, List.of());
+            return federation.executeChart(datasourceIds, storedSql, List.of());
         }
-        return queries.executeUnbounded(primaryDatasourceId, storedSql, List.of());
+        return queries.executeChart(primaryDatasourceId, storedSql, List.of());
     }
 }

@@ -31,4 +31,9 @@ public record SamplePlan(Method method, long[] keys, String pkColumn,
     public static SamplePlan resultRandom(long populationEstimate, int sampleSize, long seed, String reason) {
         return new SamplePlan(Method.RESULT_RANDOM, null, null, populationEstimate, sampleSize, 0, seed, reason);
     }
+
+    /** EXPLAIN으로 얻은 VIEW 또는 JOIN+WHERE 결과 행 수 추정치를 기존 결과 표본 계획에 주입한다. */
+    public SamplePlan withPopulationEstimate(long estimate) {
+        return new SamplePlan(method, keys, pkColumn, Math.max(0, estimate), sampleSize, blockRate, seed, fallbackReason);
+    }
 }

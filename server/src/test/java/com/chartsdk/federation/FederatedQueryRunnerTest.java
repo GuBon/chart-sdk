@@ -14,6 +14,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -25,7 +26,7 @@ class FederatedQueryRunnerTest {
     private static final QueryRows EMPTY = new QueryRows(List.of(), List.of(), 0, false, 1);
 
     @Test
-    void routesOrdinaryBuilderChartsThroughUnboundedExecution() {
+    void routesOrdinaryBuilderChartsThroughChartExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);
         SamplingPlanner planner = mock(SamplingPlanner.class);
@@ -35,12 +36,12 @@ class FederatedQueryRunnerTest {
                 "yAxis", List.of(Map.of("column", "latitude", "agg", "sum")));
         when(queries.catalog(1L)).thenReturn(singleCatalog());
         when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
-        when(queries.executeUnbounded(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+        when(queries.executeChart(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
 
         FederatedQueryRunner.BuiltResult result =
                 new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "bar", false);
 
-        verify(queries).executeUnbounded(eq(1L), anyString(), anyList());
+        verify(queries).executeChart(eq(1L), anyString(), anyList());
         assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
     }
 
@@ -63,23 +64,23 @@ class FederatedQueryRunnerTest {
     }
 
     @Test
-    void routesStoredChartSqlThroughUnboundedExecution() {
+    void routesStoredChartSqlThroughChartExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);
         SamplingPlanner planner = mock(SamplingPlanner.class);
-        when(queries.executeUnbounded(1L, "SELECT * FROM chart_data", List.of())).thenReturn(EMPTY);
-        when(federation.executeUnbounded(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of())).thenReturn(EMPTY);
+        when(queries.executeChart(1L, "SELECT * FROM chart_data", List.of())).thenReturn(EMPTY);
+        when(federation.executeChart(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of())).thenReturn(EMPTY);
         FederatedQueryRunner runner = new FederatedQueryRunner(queries, federation, planner);
 
         assertThat(runner.runStored(Set.of(1L), 1L, "SELECT * FROM chart_data")).isSameAs(EMPTY);
         assertThat(runner.runStored(Set.of(1L, 2L), 1L, "SELECT * FROM joined_chart")).isSameAs(EMPTY);
 
-        verify(queries).executeUnbounded(1L, "SELECT * FROM chart_data", List.of());
-        verify(federation).executeUnbounded(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of());
+        verify(queries).executeChart(1L, "SELECT * FROM chart_data", List.of());
+        verify(federation).executeChart(Set.of(1L, 2L), "SELECT * FROM joined_chart", List.of());
     }
 
     @Test
-    void routesSingleSourceGeoScatterThroughUnboundedExecution() {
+    void routesSingleSourceGeoScatterThroughChartExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);
         SamplingPlanner planner = mock(SamplingPlanner.class);
@@ -87,18 +88,18 @@ class FederatedQueryRunnerTest {
                 "datasourceId", 1L, "schema", "public", "name", "points"));
         when(queries.catalog(1L)).thenReturn(singleCatalog());
         when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
-        when(queries.executeUnbounded(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+        when(queries.executeChart(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
 
         FederatedQueryRunner.BuiltResult result =
                 new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "geoscatter", false);
 
-        verify(queries).executeUnbounded(eq(1L), anyString(), anyList());
+        verify(queries).executeChart(eq(1L), anyString(), anyList());
         assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
         assertThat(result.rows().truncated()).isFalse();
     }
 
     @Test
-    void routesCrossSourceGeoScatterThroughUnboundedFederationExecution() {
+    void routesCrossSourceGeoScatterThroughFederatedChartExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);
         SamplingPlanner planner = mock(SamplingPlanner.class);
@@ -121,17 +122,17 @@ class FederatedQueryRunnerTest {
                         Map.of("point_id", "bigint", "name", "text")))));
         when(federation.catalog(Set.of(1L, 2L))).thenReturn(catalog);
         when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
-        when(federation.executeUnbounded(eq(Set.of(1L, 2L)), anyString(), anyList())).thenReturn(EMPTY);
+        when(federation.executeChart(eq(Set.of(1L, 2L)), anyString(), anyList())).thenReturn(EMPTY);
 
         FederatedQueryRunner.BuiltResult result =
                 new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "geoscatter", false);
 
-        verify(federation).executeUnbounded(eq(Set.of(1L, 2L)), anyString(), anyList());
+        verify(federation).executeChart(eq(Set.of(1L, 2L)), anyString(), anyList());
         assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
     }
 
     @Test
-    void routesSingleSourceSpatialAreaMapThroughUnboundedExecution() {
+    void routesSingleSourceSpatialAreaMapThroughChartExecution() {
         QueryExecutor queries = mock(QueryExecutor.class);
         DuckDbFederation federation = mock(DuckDbFederation.class);
         SamplingPlanner planner = mock(SamplingPlanner.class);
@@ -146,14 +147,84 @@ class FederatedQueryRunnerTest {
                         "valueColumn", "score"));
         when(queries.catalog(1L)).thenReturn(areaCatalog());
         when(planner.plan(1L, config, false)).thenReturn(SamplePlan.none());
-        when(queries.executeUnbounded(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
+        when(queries.executeChart(eq(1L), anyString(), anyList())).thenReturn(EMPTY);
 
         FederatedQueryRunner.BuiltResult result =
                 new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "map", false);
 
-        verify(queries).executeUnbounded(eq(1L), anyString(), anyList());
+        verify(queries).executeChart(eq(1L), anyString(), anyList());
         assertThat(result.sql().text()).doesNotContain("LIMIT 1000");
         assertThat(result.rows().truncated()).isFalse();
+    }
+
+    @Test
+    void explainsResultPopulationThenExecutesSeededBernoulli() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        Map<String, Object> config = Map.of(
+                "table", Map.of("datasourceId", 1L, "schema", "public", "name", "points"),
+                "xAxis", "longitude",
+                "yAxis", List.of(Map.of("column", "latitude", "agg", "avg")),
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77));
+        when(queries.catalog(1L)).thenReturn(singleCatalog());
+        when(planner.plan(1L, config, false))
+                .thenReturn(SamplePlan.resultRandom(0, 10_000, 77, "VIEW_RESULT"));
+        when(queries.explainEstimatedRows(eq(1L), anyString(), anyList())).thenReturn(500_000L);
+        when(queries.executeBernoulli(eq(1L), anyString(), anyList(), eq(true), eq(77L))).thenReturn(EMPTY);
+
+        FederatedQueryRunner.BuiltResult result =
+                new FederatedQueryRunner(queries, federation, planner).runBuilder(1L, config, "bar", false);
+
+        verify(queries).explainEstimatedRows(eq(1L), anyString(), anyList());
+        verify(queries).executeBernoulli(eq(1L), anyString(), anyList(), eq(true), eq(77L));
+        assertThat(result.sampling().populationEstimate()).isEqualTo(500_000L);
+        assertThat(result.sql().params()).containsExactly(0.02);
+        assertThat(result.sql().text()).contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(");
+    }
+
+    @Test
+    void crossSourceResultSamplingPlansAndExecutesOnOneFederationSession() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        Map<String, Object> config = Map.of(
+                "table", Map.of("datasourceId", 1L, "schema", "public", "name", "points"),
+                "joins", List.of(Map.of(
+                        "table", Map.of("datasourceId", 2L, "schema", "public", "name", "labels"),
+                        "type", "left",
+                        "on", Map.of("leftColumn", "points.id", "rightColumn", "labels.point_id"))),
+                "xAxis", "labels.name",
+                "yAxis", List.of(Map.of("column", "points.latitude", "agg", "avg")),
+                "sample", Map.of("mode", "manual", "size", 10_000, "seed", 77));
+        Set<Long> refs = Set.of(1L, 2L);
+        FederatedCatalog catalog = new FederatedCatalog(Map.of(
+                1L, singleCatalog(),
+                2L, new SchemaCatalog(Map.of(
+                        new SchemaCatalog.Key("public", "labels"),
+                        Map.of("point_id", "bigint", "name", "text")))));
+        when(federation.catalog(refs)).thenReturn(catalog);
+        when(planner.plan(1L, config, false))
+                .thenReturn(SamplePlan.resultRandom(0, 10_000, 77, "JOIN_RESULT"));
+        when(federation.executePlannedBernoulli(
+                eq(refs), anyString(), anyList(), any(), eq(true), eq(77L)))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    java.util.function.LongFunction<com.chartsdk.query.BuilderSqlBuilder.Sql> factory =
+                            invocation.getArgument(3);
+                    com.chartsdk.query.BuilderSqlBuilder.Sql sql = factory.apply(500_000L);
+                    return new DuckDbFederation.PlannedBernoulli(EMPTY, sql, 500_000L);
+                });
+
+        FederatedQueryRunner.BuiltResult result =
+                new FederatedQueryRunner(queries, federation, planner)
+                        .runBuilder(1L, config, "bar", false);
+
+        verify(federation).executePlannedBernoulli(
+                eq(refs), anyString(), anyList(), any(), eq(true), eq(77L));
+        assertThat(result.sampling().populationEstimate()).isEqualTo(500_000L);
+        assertThat(result.sql().params()).contains(0.02);
     }
 
     private static Map<String, Object> geoConfig(Map<String, Object> table) {

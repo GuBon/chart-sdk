@@ -108,8 +108,8 @@ class FederatedSqlBuilderTest {
     }
 
     @Test
-    void samplesResolvedCrossSourceJoinWithDuckDbReservoir() {
-        BuilderSqlBuilder.Sql sql = gen(Map.of(
+    void samplesResolvedCrossSourceJoinWithBernoulliAfterJoinAndWhere() {
+        Map<String, Object> cfg = Map.of(
                 "table", ref(2, "sales", "orders"),
                 "joins", List.of(Map.of(
                         "table", ref(5, "public", "customers"),
@@ -119,17 +119,21 @@ class FederatedSqlBuilderTest {
                 "yAxis", List.of(Map.of("column", "orders.amount", "agg", "stddev", "alias", "spread")),
                 "where", List.of(Map.of("column", "orders.amount", "op", "gt", "value", 0)),
                 "sample", Map.of("mode", "manual", "size", 12_000, "seed", 321)
-        ), "bar", false);
+        );
+        BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
+                catalog, RefRenderer.FEDERATED, cfg, "bar", false,
+                SamplePlan.resultRandom(600_000, 12_000, 321, "JOIN_RESULT"));
 
         assertThat(sql.text())
                 .startsWith("WITH \"__chartsdk_population\" AS (SELECT")
                 .contains("INNER JOIN \"ds5\".\"public\".\"customers\"")
-                .contains("WHERE \"ds2\".\"sales\".\"orders\".\"amount\" > ?)")
-                .contains("USING SAMPLE reservoir(12000 ROWS) REPEATABLE (321)")
+                .contains("WHERE \"ds2\".\"sales\".\"orders\".\"amount\" > ? OFFSET 0)")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(")
                 .contains("STDDEV(\"__chartsdk_sample\".\"__chartsdk_y_0\") AS \"spread\"")
                 .contains("\"__chartsdk_sample_n_0\"")
                 .contains("\"__chartsdk_sample_sd_0\"");
-        assertThat(sql.params()).containsExactly(0);
+        assertThat(sql.params()).containsExactly(0, 0.02);
         assertThat(sql.sampling().method()).isEqualTo("RESULT_RANDOM");
         assertThat(sql.sampling().sampleSize()).isEqualTo(12_000);
     }

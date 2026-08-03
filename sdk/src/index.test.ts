@@ -152,7 +152,7 @@ describe('render', () => {
       {},
       'c',
       {
-        version: 6, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
+        version: 7, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
         valueMode: 'sample',
       },
     );

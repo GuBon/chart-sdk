@@ -99,9 +99,13 @@ class RelationSourceAndSamplingIT {
         FederatedQueryRunner.BuiltResult sampledView = runner.runBuilder(DATASOURCE_ID, view, "bar", false);
         FederatedQueryRunner.BuiltResult sampledViewAgain = runner.runBuilder(DATASOURCE_ID, view, "bar", false);
         assertThat(sampledView.sampling().method()).isEqualTo("RESULT_RANDOM");
-        assertThat(sampledView.sampling().sampledRowCount()).isEqualTo(1_000L);
+        assertThat(sampledView.sampling().sampledRowCount()).isBetween(850L, 1_150L);
+        assertThat(sampledView.sampling().populationEstimate()).isPositive();
         assertThat(sampledView.rows().rows()).isEqualTo(sampledViewAgain.rows().rows());
-        assertThat(sampledView.sql().text()).contains("\"__chartsdk_population\"").contains("ORDER BY random() LIMIT 1000");
+        assertThat(sampledView.sql().text())
+                .contains("\"__chartsdk_population\"")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(");
 
         Map<String, Object> joined = Map.of(
                 "table", ref("sales"),
@@ -114,10 +118,13 @@ class RelationSourceAndSamplingIT {
                 "sample", Map.of("mode", "manual", "size", 1_000, "seed", 77));
         FederatedQueryRunner.BuiltResult sampledJoin = runner.runBuilder(DATASOURCE_ID, joined, "bar", false);
         assertThat(sampledJoin.sampling().method()).isEqualTo("RESULT_RANDOM");
-        assertThat(sampledJoin.sampling().sampledRowCount()).isEqualTo(1_000L);
+        assertThat(sampledJoin.sampling().sampledRowCount()).isBetween(850L, 1_150L);
+        assertThat(sampledJoin.sampling().populationEstimate()).isPositive();
         assertThat(sampledJoin.sql().text())
                 .contains("INNER JOIN \"" + SCHEMA + "\".\"regions\"")
-                .contains("WHERE \"" + SCHEMA + "\".\"sales\".\"amount\" > ?)");
+                .contains("WHERE \"" + SCHEMA + "\".\"sales\".\"amount\" > ? OFFSET 0)")
+                .contains("WHERE random() < ?")
+                .doesNotContain("ORDER BY random()", "reservoir(");
 
         Map<String, Object> exactView = Map.of(
                 "table", ref("sales_view"),

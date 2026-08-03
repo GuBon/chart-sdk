@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v6).
+ * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v7).
  *
  * <p><b>스펙</b>(캐시 판정 대상 — builderConfig 만으로 결정): {@code mode·requestedMethod·rate·sizeTarget·seed}.
  * <b>실행</b>(표시용 — 런타임 해석 결과): {@code approximate·method·valueMode·populationEstimate·sampleSize·
@@ -36,7 +36,7 @@ public record SamplingMetadata(
         List<Estimate> estimates,
         List<String> warnings
 ) {
-    public static final int CONTRACT_VERSION = 6;
+    public static final int CONTRACT_VERSION = 7;
     public static final double MIN_RATE = 0.1;
     public static final double MAX_RATE = 100.0;
     public static final long DEFAULT_SEED = 48_291L;
@@ -138,10 +138,12 @@ public record SamplingMetadata(
     /** VIEW 또는 JOIN+WHERE 결과에서 뽑은 균일 행 표본. */
     public SamplingMetadata asResultRandom(long populationEstimate, int sampleSize) {
         Double confidence = isRowSample() ? null : CONFIDENCE_LEVEL;
+        Set<String> warnings = new LinkedHashSet<>(executionWarnings("RESULT_RANDOM", estimates));
+        if (populationEstimate <= 0) warnings.add("RESULT_POPULATION_ESTIMATE_UNAVAILABLE");
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
                 true, "RESULT_RANDOM", "sample", populationEstimate > 0 ? populationEstimate : null,
                 sampleSize, null, confidence,
-                List.of(), estimates, executionWarnings("RESULT_RANDOM", estimates));
+                List.of(), estimates, List.copyOf(warnings));
     }
 
     /** 실행 통계(실측 표본수·그룹·오차범위·추가 경고) 주입. 정확 실행은 무시. */

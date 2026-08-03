@@ -1,15 +1,37 @@
 package com.chartsdk.federation;
 
 import com.chartsdk.datasource.DatasourceCredentials;
+import com.chartsdk.datasource.DatasourceService;
+import com.chartsdk.query.QueryExecutor;
+import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 /**
  * Phase 2 — ATTACH SQL 생성의 순수 로직(외부 DB 불필요): 별칭 규약·read-only·자격증명 이스케이프·마스킹.
  * 실 페더레이션 실행은 Phase 0 스파이크 + 통합 스크립트로 검증한다.
  */
 class DuckDbFederationTest {
+
+    @Test
+    void jdbcRowLimitAndChartSafetyCeilingAreEnforced() {
+        DuckDbFederation federation = new DuckDbFederation(
+                mock(DatasourceService.class), mock(QueryExecutor.class));
+
+        var preview = federation.execute(List.of(), "SELECT * FROM range(60000)", List.of());
+        assertThat(preview.rowCount()).isEqualTo(QueryExecutor.MAX_ROWS);
+        assertThat(preview.truncated()).isTrue();
+
+        assertThatThrownBy(() -> federation.executeChart(
+                List.of(), "SELECT * FROM range(60000)", List.of()))
+                .isInstanceOfSatisfying(ApiException.class,
+                        error -> assertThat(error.code()).isEqualTo("RESULT_TOO_LARGE"));
+    }
 
     @Test
     void buildsReadOnlyAttachWithDatasourceAlias() {

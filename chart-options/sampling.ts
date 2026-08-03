@@ -1,10 +1,10 @@
-/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v6 — 결과집합 행 표본 포함). */
-export const SAMPLING_CONTRACT_VERSION = 6;
+/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v7 — 결과집합 Bernoulli 행 표본 포함). */
+export const SAMPLING_CONTRACT_VERSION = 7;
 export const MIN_SAMPLE_RATE = 0.1;
 export const MAX_SAMPLE_RATE = 100;
 export const DEFAULT_SAMPLE_SEED = 48_291;
 
-// 무편향 표본은 절대 갯수(size)가 정확도를 결정한다(±z·s/√n, 모집단 크기 무관). % 대신 갯수를 제어값으로 노출.
+// 무편향 표본은 목표 갯수(size)가 정확도를 결정한다. RESULT_RANDOM의 실측치는 Bernoulli라 목표와 달라질 수 있다.
 export const DEFAULT_SAMPLE_SIZE = 10_000;
 export const MIN_SAMPLE_SIZE = 1_000;
 export const MAX_SAMPLE_SIZE = 50_000;
@@ -18,6 +18,7 @@ export type SamplingWarningCode =
   | 'BLOCK_SAMPLE_CLUSTERING'
   | 'INDEX_RANDOM_SAMPLE'
   | 'RESULT_RANDOM_SAMPLE'
+  | 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE'
   | 'INDEX_SAMPLE_ESTIMATED_TOTAL'
   | 'SMALL_SAMPLE_GROUPS'
   | 'STDDEV_CI_NORMALITY_ASSUMED'
@@ -70,7 +71,7 @@ export interface SamplingMetadata {
   method: SamplingMethod;
   valueMode: SamplingValueMode;
   populationEstimate?: number;
-  sampleSize?: number;
+  sampleSize?: number; // 실행 목표. RESULT_RANDOM의 가변 실측치는 sampledRowCount.
   sampledRowCount?: number;
   confidenceLevel?: number;
   groups?: SamplingGroupCount[];
@@ -124,9 +125,11 @@ export function samplingWarningMessage(code: SamplingWarningCode): string {
     case 'INDEX_RANDOM_SAMPLE':
       return '전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.';
     case 'RESULT_RANDOM_SAMPLE':
-      return '조회 결과에서 무작위로 선택된 행의 표본 결과입니다.';
+      return '조회 결과의 각 행을 같은 확률로 독립 선택한 Bernoulli 표본입니다. 실제 행 수는 목표와 다를 수 있습니다.';
+    case 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE':
+      return '조회 결과 행 수를 추정하지 못해 Bernoulli 확률을 100%로 적용했습니다.';
     case 'INDEX_SAMPLE_ESTIMATED_TOTAL':
-      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v6로 다시 계산하는 것을 권장합니다.';
+      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v7로 다시 계산하는 것을 권장합니다.';
     case 'SMALL_SAMPLE_GROUPS':
       return '표본이 30개 미만인 항목은 오차범위를 산출하지 않았습니다. 표본 크기를 늘리면 정확도가 올라갑니다.';
     case 'STDDEV_CI_NORMALITY_ASSUMED':
@@ -146,7 +149,7 @@ export function samplingMethodLabel(method: SamplingMethod): string {
     case 'INDEX_RANDOM':
       return '무작위 행 표본';
     case 'RESULT_RANDOM':
-      return '결과 무작위 행 표본';
+      return '결과 Bernoulli 행 표본';
     case 'SYSTEM':
       return '블록 표본';
     case 'FULL_SCAN':

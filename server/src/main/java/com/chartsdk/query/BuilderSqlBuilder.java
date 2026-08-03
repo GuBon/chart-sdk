@@ -50,7 +50,6 @@ public final class BuilderSqlBuilder {
     private static final String SAMPLE_CTE = "__chartsdk_sample";
     private static final String N_CTE = "__chartsdk_n";
     private static final String POPULATION_CTE = "__chartsdk_population";
-    private static final String SEED_CTE = "__chartsdk_seed";
     private static final String BASE_ALIAS = "__chartsdk_base";
     private static final String KEYS_ALIAS = "__chartsdk_keys";
     private static final String RESULT_X = "__chartsdk_x";
@@ -66,6 +65,9 @@ public final class BuilderSqlBuilder {
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
     private static final String SPATIAL_AREA_GEOJSON = "__chartsdk_geojson";
+    private static final String SPATIAL_SOURCE = "__chartsdk_spatial_source";
+    private static final String SPATIAL_VALUE = "__chartsdk_spatial_value";
+    private static final String SPATIAL_CTE = "__chartsdk_spatial";
 
     private BuilderSqlBuilder(Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
                              String chartType, boolean rawMode, SamplePlan plan, boolean federated) {
@@ -101,6 +103,19 @@ public final class BuilderSqlBuilder {
                                String chartType, boolean rawMode, SamplePlan plan) {
         return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, rawMode, plan,
                 renderer == RefRenderer.FEDERATED).build();
+    }
+
+    /** RESULT_RANDOM 확률 계산용 JOIN+WHERE 모집단 계획 SQL. EXPLAIN 전용이며 실제 행은 읽지 않는다. */
+    public static Sql generateSamplingPopulation(Catalog catalog, RefRenderer renderer,
+                                                 Map<String, Object> cfg, String chartType) {
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, false, null,
+                renderer == RefRenderer.FEDERATED).buildSamplingPopulation();
+    }
+
+    /** 단일 PostgreSQL 소스의 RESULT_RANDOM 모집단 계획 SQL. */
+    public static Sql generateSamplingPopulation(SchemaCatalog catalog, Map<String, Object> cfg,
+                                                 String chartType) {
+        return generateSamplingPopulation(catalog, RefRenderer.SINGLE, cfg, chartType);
     }
 
     /** builderConfig 가 참조하는 datasourceId 집합(명시된 것만). 실행 라우팅(단일 vs 페더레이션) 판정에 쓴다. */
@@ -247,6 +262,20 @@ public final class BuilderSqlBuilder {
         return new Sql(sql, params, sampling);
     }
 
+    /**
+     * Bernoulli 확률의 분모가 되는 결과 모집단을 PostgreSQL/DuckDB planner에 질의한다.
+     * SELECT 1만 투영하므로 공간 변환이나 집계는 실행 계획에 포함하지 않는다.
+     */
+    private Sql buildSamplingPopulation() {
+        if (baseRef == null) throw invalidReq("table is required.");
+        assertTable(baseRef);
+        registerTable(baseRef);
+        String joins = buildJoins();
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        return new Sql("SELECT 1 FROM " + render(baseRef) + joins + where, params, null);
+    }
+
     /** 표본 스펙(sampling())을 실행 계획으로 해석 — 무플랜은 레거시(SYSTEM/exact) 해석 그대로. */
     private SamplingMetadata resolveSampling() {
         SamplingMetadata spec = sampling();
@@ -302,32 +331,24 @@ public final class BuilderSqlBuilder {
         if (sampling == null || !sampling.approximate() || !"RESULT_RANDOM".equals(sampling.method())) {
             return new Sql(sql, params, sampling);
         }
-        int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
-                : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
-        long seed = sampling.seed() == null ? SamplingMetadata.DEFAULT_SEED : sampling.seed();
-        String seedCte = SqlIdentifier.quote(SEED_CTE);
         String population = SqlIdentifier.quote(POPULATION_CTE);
         String sample = SqlIdentifier.quote(SAMPLE_CTE);
-        String wrapped = "WITH " + seedCte + " AS MATERIALIZED (SELECT setseed(?) AS "
-                + SqlIdentifier.quote("seeded") + "), " + population + " AS (" + sql + "), "
+        String barrier = hasJoins ? " OFFSET 0" : "";
+        String wrapped = "WITH " + population + " AS (" + sql + barrier + "), "
                 + sample + " AS MATERIALIZED (SELECT " + population + ".* FROM " + population
-                + " CROSS JOIN " + seedCte + " ORDER BY random() LIMIT " + sampleSize + ") SELECT * FROM " + sample;
-        List<Object> wrappedParams = new ArrayList<>();
-        wrappedParams.add(postgresSeed(seed));
-        wrappedParams.addAll(params);
+                + " WHERE random() < ?) SELECT * FROM " + sample;
+        List<Object> wrappedParams = new ArrayList<>(params);
+        wrappedParams.add(resultBernoulliProbability(sampling));
         return new Sql(wrapped, wrappedParams, sampling);
     }
 
     /**
-     * VIEW 또는 JOIN+WHERE 결과를 모집단 CTE로 만든 뒤 고정 개수 행을 뽑고 집계한다.
-     * PostgreSQL은 seeded random top-k, DuckDB는 native reservoir를 사용하지만 API 의미는 RESULT_RANDOM으로 같다.
+     * VIEW 또는 JOIN+WHERE 결과를 실행 경계로 확정한 뒤 독립 Bernoulli 행 표본을 만들고 집계한다.
+     * OFFSET 0은 PostgreSQL/DuckDB가 외부 random 조건을 JOIN 한쪽으로 밀어 넣지 못하게 하는 스트리밍 경계다.
      */
     private Sql buildResultRandom(Ref x, Ref series, List<Map<String, Object>> yAxis, String joins,
-                                  SamplingMetadata sampling) {
+                                   SamplingMetadata sampling) {
         boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
-        int sampleSize = sampling.sampleSize() != null ? sampling.sampleSize()
-                : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
-        long seed = sampling.seed() == null ? SamplingMetadata.DEFAULT_SEED : sampling.seed();
 
         List<String> projected = new ArrayList<>();
         projected.add(render(x) + " AS " + SqlIdentifier.quote(RESULT_X));
@@ -348,30 +369,18 @@ public final class BuilderSqlBuilder {
 
         List<Object> params = new ArrayList<>();
         StringBuilder cte = new StringBuilder("WITH ");
-        if (!federated) {
-            cte.append(SqlIdentifier.quote(SEED_CTE))
-                    .append(" AS MATERIALIZED (SELECT setseed(?) AS ")
-                    .append(SqlIdentifier.quote("seeded")).append("), ");
-            params.add(postgresSeed(seed));
-        }
 
         String where = buildWhere(params);
         String population = SqlIdentifier.quote(POPULATION_CTE);
         String sample = SqlIdentifier.quote(SAMPLE_CTE);
         String nCte = SqlIdentifier.quote(N_CTE);
+        String barrier = hasJoins ? " OFFSET 0" : "";
         cte.append(population).append(" AS (SELECT ")
                 .append(String.join(", ", projected))
-                .append(" FROM ").append(render(baseRef)).append(joins).append(where).append("), ")
-                .append(sample).append(" AS MATERIALIZED (");
-        if (federated) {
-            cte.append("SELECT * FROM ").append(population)
-                    .append(" USING SAMPLE reservoir(").append(sampleSize)
-                    .append(" ROWS) REPEATABLE (").append(seed).append(")");
-        } else {
-            cte.append("SELECT ").append(population).append(".* FROM ").append(population)
-                    .append(" CROSS JOIN ").append(SqlIdentifier.quote(SEED_CTE))
-                    .append(" ORDER BY random() LIMIT ").append(sampleSize);
-        }
+                .append(" FROM ").append(render(baseRef)).append(joins).append(where).append(barrier).append("), ")
+                .append(sample).append(" AS MATERIALIZED (SELECT ").append(population).append(".* FROM ")
+                .append(population).append(" WHERE random() < ?");
+        params.add(resultBernoulliProbability(sampling));
         cte.append("), ").append(nCte).append(" AS (SELECT COUNT(*) AS ")
                 .append(SqlIdentifier.quote("sampled")).append(" FROM ").append(sample).append(") ");
 
@@ -449,6 +458,9 @@ public final class BuilderSqlBuilder {
         }
 
         String pointSql = render(point);
+        if (isResultRandom(sampling)) {
+            return buildResultRandomSpatialPoint(joins, sampling, pointSql);
+        }
         // geography와 geometry를 한 경로로 처리한다. geometry 캐스트는 기존 SRID를 보존하고 ST_Transform이 WGS84로 정규화한다.
         String wgs84 = "ST_Transform((" + pointSql + ")::geometry, 4326)";
         List<String> selects = new ArrayList<>();
@@ -467,6 +479,58 @@ public final class BuilderSqlBuilder {
         String sql = source.cteHead() + "SELECT " + String.join(", ", selects)
                 + " FROM " + source.fromBase() + joins + where;
         return finishRawProjectionSampling(sql, params, sampling);
+    }
+
+    /**
+     * Samples the completed JOIN + user-WHERE result before invoking PostGIS functions. The
+     * materialized spatial CTE also guarantees that the transformed geometry is calculated once
+     * even though the final projection reads both X and Y from it.
+     */
+    private Sql buildResultRandomSpatialPoint(String joins, SamplingMetadata sampling, String pointSql) {
+        List<String> projected = new ArrayList<>();
+        projected.add(pointSql + " AS " + SqlIdentifier.quote(SPATIAL_SOURCE));
+        appendGeoPointRoleSelects(projected);
+
+        String seriesColumn = str(cfg.get("seriesBy"));
+        if (seriesColumn != null) {
+            projected.add("CAST(" + render(resolveRef(seriesColumn)) + " AS text) AS "
+                    + SqlIdentifier.quote(GEO_SERIES));
+        }
+
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        String population = SqlIdentifier.quote(POPULATION_CTE);
+        String sample = SqlIdentifier.quote(SAMPLE_CTE);
+        String spatial = SqlIdentifier.quote(SPATIAL_CTE);
+        String sampleSource = sample + "." + SqlIdentifier.quote(SPATIAL_SOURCE);
+        String spatialValue = spatial + "." + SqlIdentifier.quote(SPATIAL_VALUE);
+        String barrier = hasJoins ? " OFFSET 0" : "";
+
+        StringBuilder sql = new StringBuilder("WITH ")
+                .append(population).append(" AS (SELECT ").append(String.join(", ", projected))
+                .append(" FROM ").append(render(baseRef)).append(joins).append(where).append(barrier)
+                .append("), ").append(sample).append(" AS MATERIALIZED (SELECT ")
+                .append(population).append(".* FROM ").append(population)
+                .append(" WHERE random() < ?), ").append(spatial)
+                .append(" AS MATERIALIZED (SELECT ST_Transform((").append(sampleSource)
+                .append(")::geometry, 4326) AS ").append(SqlIdentifier.quote(SPATIAL_VALUE))
+                .append(", ").append(sample).append(".* FROM ").append(sample)
+                .append(" WHERE ").append(sampleSource).append(" IS NOT NULL) SELECT ST_X(")
+                .append(spatialValue).append(") AS ").append(SqlIdentifier.quote(SPATIAL_LONGITUDE))
+                .append(", ST_Y(").append(spatialValue).append(") AS ")
+                .append(SqlIdentifier.quote(SPATIAL_LATITUDE));
+        for (String alias : geoPointRoleRefs().keySet()) {
+            sql.append(", ").append(spatial).append(".").append(SqlIdentifier.quote(alias))
+                    .append(" AS ").append(SqlIdentifier.quote(alias));
+        }
+        if (seriesColumn != null) {
+            sql.append(", ").append(spatial).append(".").append(SqlIdentifier.quote(GEO_SERIES))
+                    .append(" AS ").append(SqlIdentifier.quote(GEO_SERIES));
+        }
+        sql.append(" FROM ").append(spatial);
+
+        params.add(resultBernoulliProbability(sampling));
+        return new Sql(sql.toString(), params, sampling);
     }
 
     private boolean isSpatialGeoPoint() {
@@ -503,6 +567,9 @@ public final class BuilderSqlBuilder {
         }
 
         String areaSql = render(area);
+        if (isResultRandom(sampling)) {
+            return buildResultRandomSpatialArea(joins, sampling, areaSql, name, value);
+        }
         String wgs84 = "ST_Transform((" + areaSql + ")::geometry, 4326)";
         List<String> selects = new ArrayList<>(List.of(
                 "CAST(" + render(name) + " AS text) AS " + SqlIdentifier.quote(SPATIAL_AREA_NAME),
@@ -521,6 +588,59 @@ public final class BuilderSqlBuilder {
         String sql = source.cteHead() + "SELECT " + String.join(", ", selects)
                 + " FROM " + source.fromBase() + joins + where;
         return finishRawProjectionSampling(sql, params, sampling);
+    }
+
+    /** RESULT_RANDOM variant of the area projection; sampling happens before transform/GeoJSON. */
+    private Sql buildResultRandomSpatialArea(String joins, SamplingMetadata sampling, String areaSql,
+                                             Ref name, Ref value) {
+        List<String> projected = new ArrayList<>(List.of(
+                areaSql + " AS " + SqlIdentifier.quote(SPATIAL_SOURCE),
+                "CAST(" + render(name) + " AS text) AS " + SqlIdentifier.quote(SPATIAL_AREA_NAME),
+                render(value) + " AS " + SqlIdentifier.quote(SPATIAL_AREA_VALUE)
+        ));
+        String seriesColumn = str(cfg.get("seriesBy"));
+        if (seriesColumn != null) {
+            projected.add("CAST(" + render(resolveRef(seriesColumn)) + " AS text) AS "
+                    + SqlIdentifier.quote(GEO_SERIES));
+        }
+
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        String population = SqlIdentifier.quote(POPULATION_CTE);
+        String sample = SqlIdentifier.quote(SAMPLE_CTE);
+        String spatial = SqlIdentifier.quote(SPATIAL_CTE);
+        String sampleSource = sample + "." + SqlIdentifier.quote(SPATIAL_SOURCE);
+        String spatialValue = spatial + "." + SqlIdentifier.quote(SPATIAL_VALUE);
+        String barrier = hasJoins ? " OFFSET 0" : "";
+
+        StringBuilder sql = new StringBuilder("WITH ")
+                .append(population).append(" AS (SELECT ").append(String.join(", ", projected))
+                .append(" FROM ").append(render(baseRef)).append(joins).append(where).append(barrier)
+                .append("), ").append(sample).append(" AS MATERIALIZED (SELECT ")
+                .append(population).append(".* FROM ").append(population)
+                .append(" WHERE random() < ?), ").append(spatial)
+                .append(" AS MATERIALIZED (SELECT ST_Transform((").append(sampleSource)
+                .append(")::geometry, 4326) AS ").append(SqlIdentifier.quote(SPATIAL_VALUE))
+                .append(", ").append(sample).append(".* FROM ").append(sample)
+                .append(" WHERE ").append(sampleSource).append(" IS NOT NULL) SELECT ")
+                .append(spatial).append(".").append(SqlIdentifier.quote(SPATIAL_AREA_NAME))
+                .append(" AS ").append(SqlIdentifier.quote(SPATIAL_AREA_NAME)).append(", ")
+                .append(spatial).append(".").append(SqlIdentifier.quote(SPATIAL_AREA_VALUE))
+                .append(" AS ").append(SqlIdentifier.quote(SPATIAL_AREA_VALUE))
+                .append(", ST_AsGeoJSON(").append(spatialValue).append(", 6) AS ")
+                .append(SqlIdentifier.quote(SPATIAL_AREA_GEOJSON));
+        if (seriesColumn != null) {
+            sql.append(", ").append(spatial).append(".").append(SqlIdentifier.quote(GEO_SERIES))
+                    .append(" AS ").append(SqlIdentifier.quote(GEO_SERIES));
+        }
+        sql.append(" FROM ").append(spatial);
+
+        params.add(resultBernoulliProbability(sampling));
+        return new Sql(sql.toString(), params, sampling);
+    }
+
+    private static boolean isResultRandom(SamplingMetadata sampling) {
+        return sampling != null && sampling.approximate() && "RESULT_RANDOM".equals(sampling.method());
     }
 
     private boolean isSpatialGeoArea() {
@@ -606,8 +726,17 @@ public final class BuilderSqlBuilder {
         return SqlIdentifier.quote(SAMPLE_CTE) + "." + SqlIdentifier.quote(column);
     }
 
-    private static double postgresSeed(long seed) {
-        return Math.max(-1.0, Math.min(1.0, (seed / (double) Integer.MAX_VALUE) * 2.0 - 1.0));
+    /** 목표 K를 모집단 추정치 N̂의 독립 포함 확률로 변환한다. 추정 불가 시 전량을 보존한다. */
+    static double resultBernoulliProbability(SamplingMetadata sampling) {
+        int target = sampling.sampleSize() != null ? sampling.sampleSize()
+                : sampling.sizeTarget() != null ? sampling.sizeTarget() : SamplingPlanner.DEFAULT_SIZE;
+        Long population = sampling.populationEstimate();
+        if (population == null || population <= 0) return 1.0;
+        return Math.max(0.0, Math.min(1.0, target / (double) population));
+    }
+
+    private static String appendNotNull(String where, String expression) {
+        return where + (where.isEmpty() ? " WHERE " : " AND ") + expression + " IS NOT NULL";
     }
 
     /** 오차범위 계산용 숨은 열 — 그룹별 COUNT + 전체 표본수(+INDEX_RANDOM 은 시리즈별 유효 n·필요 시 mean/sd). */
