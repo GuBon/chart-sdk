@@ -1,6 +1,7 @@
 package com.chartsdk.web;
 
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.converter.FieldDisplayNameResolver;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.federation.FederatedQueryRunner;
@@ -42,7 +43,7 @@ public class QueryController {
         String chartType = str(body.chartType());
         QueryRows rows = chartType == null
                 ? queries.execute(body.datasourceId(), sql)
-                : queries.executeUnbounded(body.datasourceId(), sql, List.of());
+                : queries.executeChart(body.datasourceId(), sql, List.of());
         Map<String, Object> result = rowsResult(rows);
         if (chartType != null) {
             result.put("option", converter.convert(rows, chartType, options(body)));
@@ -60,7 +61,11 @@ public class QueryController {
         QueryRows rows = built.rows();
         if (!rawMode) rows = SeriesPivot.pivot(rows, cfg, chartType);
 
-        Map<String, Object> result = rowsResult(rows);
+        Map<String, Object> result = rowsResult(
+                rows,
+                cfg,
+                !rawMode && cfg.get("seriesBy") != null
+        );
         result.put("generatedSql", SqlLiterals.inline(built.sql().text(), built.sql().params()));
         if (!rawMode) {
             result.put("option", converter.convert(rows, chartType, options(body), cfg));
@@ -94,6 +99,20 @@ public class QueryController {
         result.put("rowCount", rows.rowCount());
         result.put("truncated", rows.truncated());
         result.put("elapsedMs", rows.elapsedMs());
+        return result;
+    }
+
+    private static Map<String, Object> rowsResult(
+            QueryRows rows,
+            Map<String, Object> builderConfig,
+            boolean pivoted
+    ) {
+        Map<String, Object> result = rowsResult(rows);
+        result.put("columns", FieldDisplayNameResolver.displayColumns(
+                builderConfig,
+                rows.columns(),
+                pivoted
+        ));
         return result;
     }
 

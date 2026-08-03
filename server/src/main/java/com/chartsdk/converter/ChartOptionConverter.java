@@ -139,6 +139,11 @@ public class ChartOptionConverter {
         String variant = string(opt.get("variant"), "basic");
 
         List<Map<String, Object>> columns = rows.columns();
+        applyFieldDisplayNames(opt, builderConfig, columns);
+        Map<String, String> seriesDisplayNames = FieldDisplayNameResolver.seriesNames(
+                builderConfig == null ? Map.of() : builderConfig,
+                columns
+        );
         boolean movingAverageEligible = "line".equals(chartType)
                 && movingAverageEnabled(opt)
                 && isTemporalColumn(columns.isEmpty() ? Map.of() : columns.get(0));
@@ -175,6 +180,9 @@ public class ChartOptionConverter {
 
         Map<String, Object> o = new LinkedHashMap<>();
         o.put("__chartsdkAutoColorMap", autoColorMap);
+        if (!seriesDisplayNames.isEmpty()) {
+            o.put(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY, seriesDisplayNames);
+        }
         o.put(SHOW_COMPUTED_AT_KEY, !Boolean.FALSE.equals(opt.get("showComputedAt")));
         o.put("__chartsdkValueFormat", Map.of(
                 "tooltip", string(map(opt.get("tooltip")).get("valueFormat"), "raw"),
@@ -215,6 +223,33 @@ public class ChartOptionConverter {
         if (movingAverageEligible) applyMovingAverage(o, series, opt, columns, dataRows);
         o.put("series", series);
         return o;
+    }
+
+    private void applyFieldDisplayNames(
+            Map<String, Object> opt,
+            Map<String, Object> builderConfig,
+            List<Map<String, Object>> columns
+    ) {
+        Map<String, Object> builder = builderConfig == null ? Map.of() : builderConfig;
+        String xField = string(builder.get("xAxis"), "").trim();
+        Map<String, Object> xAxis = new LinkedHashMap<>(map(opt.get("xAxis")));
+        if (!xField.isEmpty()
+                && FieldDisplayNameResolver.hasSnapshot(builder, xField)
+                && string(xAxis.get("title"), "").trim().isEmpty()) {
+            String fallback = columns.isEmpty() ? "X" : string(columns.get(0).get("name"), "X");
+            xAxis.put("title", FieldDisplayNameResolver.fieldName(builder, xField, fallback));
+            opt.put("xAxis", xAxis);
+        }
+
+        List<Map<String, Object>> measures = mapItems(builder.get("yAxis"));
+        Map<String, Object> yAxis = new LinkedHashMap<>(map(opt.get("yAxis")));
+        if (measures.size() == 1
+                && FieldDisplayNameResolver.hasSnapshot(builder, measures.get(0).get("column"))
+                && string(yAxis.get("title"), "").trim().isEmpty()) {
+            String fallback = columns.size() > 1 ? string(columns.get(1).get("name"), "값") : "값";
+            yAxis.put("title", FieldDisplayNameResolver.measureName(builder, measures.get(0), fallback));
+            opt.put("yAxis", yAxis);
+        }
     }
 
     // ── 정렬 (@sort) ─────────────────────────────────────
@@ -317,8 +352,8 @@ public class ChartOptionConverter {
         boolean enabled = !Boolean.FALSE.equals(tooltip.get("enabled"));
         if (!enabled) t.put("show", false);
 
-        String trigger = string(tooltip.get("trigger"), "auto");
-        if (!"auto".equals(trigger)) t.put("trigger", trigger);
+        String trigger = string(tooltip.get("trigger"), "");
+        if ("item".equals(trigger) || "axis".equals(trigger)) t.put("trigger", trigger);
         String axisPointer = string(tooltip.get("axisPointer"), "auto");
         if (!"auto".equals(axisPointer)) t.put("axisPointer", Map.of("type", axisPointer));
         switch (string(tooltip.get("confine"), "auto")) {
@@ -536,6 +571,10 @@ public class ChartOptionConverter {
         Map<String, Object> yAxis = new LinkedHashMap<>();
         yAxis.put("type", "category");
         yAxis.put("data", yNames);
+        Map<String, Object> displayNames = map(o.get(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY));
+        if (!displayNames.isEmpty()) {
+            yAxis.put(FieldDisplayNameResolver.AXIS_DISPLAY_NAMES_KEY, displayNames);
+        }
         yAxis.put("splitArea", Map.of("show", true));
         decorateAxis(yAxis, yCfg, false, false, false, typography.axis(), axisFontFamily);
 
@@ -1493,7 +1532,9 @@ public class ChartOptionConverter {
         Map<String, Object> averageSeries = new LinkedHashMap<>();
         averageSeries.put("id", MOVING_AVERAGE_SERIES_ID + "_" + seriesIndex);
         averageSeries.put("type", "line");
-        averageSeries.put("name", string(columns.get(valueIndex).get("name"), "") + " · " + period + "기간 이동평균");
+        String sourceName = string(columns.get(valueIndex).get("name"), "");
+        String averageName = sourceName + " · " + period + "기간 이동평균";
+        averageSeries.put("name", averageName);
         averageSeries.put("data", averages);
         averageSeries.put("showSymbol", false);
         averageSeries.put("symbol", "none");
@@ -1518,6 +1559,15 @@ public class ChartOptionConverter {
             if (!name.isEmpty() && !originalSeriesNames.contains(name)) originalSeriesNames.add(name);
         }
         series.add(averageSeries);
+
+        Map<String, Object> displayNames = mutableMap(
+                option.get(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY)
+        );
+        String sourceDisplayName = string(displayNames.get(sourceName), "");
+        if (!sourceDisplayName.isEmpty()) {
+            displayNames.put(averageName, sourceDisplayName + " · " + period + "기간 이동평균");
+            option.put(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY, displayNames);
+        }
 
         // 이동평균은 applyLegend 가 이미 만든 범례의 data 만 조정한다. 범례 자체를 새로 만들면
         // "legend 생략 = 기본 표시" 계약을 우회해 없던 범례가 생긴다.
@@ -2033,6 +2083,7 @@ public class ChartOptionConverter {
         migrateLegacyGeoSeriesStyles(next, chartType);
         if (next.get("tooltip") instanceof Map<?, ?>) {
             Map<String, Object> tooltip = new LinkedHashMap<>(map(next.get("tooltip")));
+            if ("auto".equals(tooltip.get("trigger"))) tooltip.put("trigger", "item");
             tooltip.remove("contentMode");
             tooltip.remove("template");
             next.put("tooltip", tooltip);

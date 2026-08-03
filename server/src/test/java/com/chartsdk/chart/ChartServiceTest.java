@@ -2,6 +2,7 @@ package com.chartsdk.chart;
 
 import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.cache.CachedChartRows;
+import com.chartsdk.cache.ChartCacheExpectation;
 import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
@@ -25,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -52,12 +54,18 @@ class ChartServiceTest {
     @BeforeEach
     void setUp() {
         when(currentUser.currentUserId()).thenReturn(OptionalLong.empty());
-        when(charts.previewDefinition(null, 12L)).thenReturn(new ChartDefinition(
+        ChartDefinition definition = new ChartDefinition(
                 12L, 1L, "SELECT category, SUM(amount) AS total FROM sales GROUP BY category", "bar",
                 Map.of(), Map.of(), "manual", 3600, 3, null
-        ));
+        );
+        CachedChartRows cached = new CachedChartRows(
+                queryRows, Instant.parse("2026-07-20T00:00:00Z"));
+        when(charts.previewDefinition(null, 12L)).thenReturn(definition);
+        when(charts.previewDefinitions(null, List.of(12L))).thenReturn(Map.of(12L, definition));
         when(compute.serve(12L, "manual", 3600, 3, null))
-                .thenReturn(new CachedChartRows(queryRows, Instant.parse("2026-07-20T00:00:00Z")));
+                .thenReturn(cached);
+        when(compute.cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null))))
+                .thenReturn(Map.of(12L, cached));
         when(converter.convert(queryRows, "bar", Map.of())).thenReturn(Map.of("series", List.of()));
     }
 
@@ -82,6 +90,34 @@ class ChartServiceTest {
 
         assertThat(preview).containsKey("option");
         assertThat(preview).doesNotContainKeys("columns", "rows", "elapsedMs");
+        verify(charts).previewDefinitions(null, List.of(12L));
+        verify(compute).cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null)));
+        verify(compute, never()).serve(anyLong(), any(), anyInt(), anyInt(), any());
+        verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void batchPreviewReportsMissingSnapshotsWithoutStartingRecomputation() {
+        ChartDefinition second = new ChartDefinition(
+                13L, 1L, "SELECT category FROM sales", "bar",
+                Map.of(), Map.of(), "ttl", 60, 2, null);
+        ChartDefinition first = charts.previewDefinition(null, 12L);
+        Map<Long, ChartDefinition> definitions = Map.of(12L, first, 13L, second);
+        Map<Long, ChartCacheExpectation> expectations = Map.of(
+                12L, new ChartCacheExpectation(3, null),
+                13L, new ChartCacheExpectation(2, null));
+        CachedChartRows firstRows = new CachedChartRows(
+                queryRows, Instant.parse("2026-07-20T00:00:00Z"));
+        when(charts.previewDefinitions(null, List.of(12L, 13L))).thenReturn(definitions);
+        when(compute.cachedCompatible(expectations)).thenReturn(Map.of(12L, firstRows));
+
+        Map<String, Object> response = service.previews("12,13");
+        Map<String, Object> errors = (Map<String, Object>) response.get("errors");
+
+        assertThat(errors).containsEntry("13", "Preview snapshot is not ready.");
+        verify(compute, never()).serve(anyLong(), any(), anyInt(), anyInt(), any());
+        verify(compute, never()).recompute(anyLong());
     }
 
     @Test
@@ -128,7 +164,7 @@ class ChartServiceTest {
     @Test
     void rawSqlSaveRunsUnboundedQueryOnceAndSeedsThatExactResult() {
         String sql = "SELECT category, amount FROM sales";
-        when(queries.executeUnbounded(1L, sql, List.of())).thenReturn(queryRows);
+        when(queries.executeChart(1L, sql, List.of())).thenReturn(queryRows);
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(22L);
         when(charts.get(null, 22L)).thenReturn(Map.of("id", 22L));
         ChartSaveRequest request = new ChartSaveRequest(
@@ -136,7 +172,7 @@ class ChartServiceTest {
 
         service.create(request);
 
-        verify(queries, times(1)).executeUnbounded(1L, sql, List.of());
+        verify(queries, times(1)).executeChart(1L, sql, List.of());
         verify(compute).seedPreparedQuietly(22L, queryRows, 0, null);
         verify(compute, never()).recompute(anyLong());
     }
@@ -151,7 +187,7 @@ class ChartServiceTest {
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("MAIN_TABLE_REQUIRED");
 
-        verify(queries, never()).executeUnbounded(anyLong(), any(), any());
+        verify(queries, never()).executeChart(anyLong(), any(), any());
         verify(charts, never()).create(any(), any());
     }
 

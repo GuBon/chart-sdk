@@ -86,7 +86,10 @@ public class ChartRepository {
                        (SELECT ds.name
                           FROM mc_datasource ds
                          WHERE ds.id=COALESCE(NULLIF(mc_chart.builder_config->'table'->>'datasourceId', '')::bigint,
-                                              mc_chart.datasource_id)) AS datasource_name
+                                              mc_chart.datasource_id)) AS datasource_name,
+                       (SELECT COALESCE(NULLIF(u.display_name, ''), u.username)
+                          FROM mc_user u
+                         WHERE u.id=mc_chart.owner_id) AS author_name
                 """);
         sql.append(where);
         sql.append(" ORDER BY ").append(orderBy(query.sort()));
@@ -112,7 +115,10 @@ public class ChartRepository {
                        (SELECT ds.name
                           FROM mc_datasource ds
                          WHERE ds.id=COALESCE(NULLIF(mc_chart.builder_config->'table'->>'datasourceId', '')::bigint,
-                                              mc_chart.datasource_id)) AS datasource_name
+                                              mc_chart.datasource_id)) AS datasource_name,
+                       (SELECT COALESCE(NULLIF(u.display_name, ''), u.username)
+                          FROM mc_user u
+                         WHERE u.id=mc_chart.owner_id) AS author_name
                   FROM mc_chart
                  WHERE id=?
                 """);
@@ -247,19 +253,47 @@ public class ChartRepository {
         appendOwnerScope(sql, params, ownerId);
         return jdbc.query(sql.toString(), rs -> {
             if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
-            return new ChartDefinition(
-                    rs.getLong("id"),
-                    rs.getLong("datasource_id"),
-                    rs.getString("sql_query"),
-                    rs.getString("chart_type"),
-                    readJson(rs.getString("options")),
-                    readJson(rs.getString("builder_config")),
-                    rs.getString("refresh_mode"),
-                    rs.getInt("cache_ttl_seconds"),
-                    rs.getInt("version"),
-                    SamplingMetadata.fromBuilderConfig(readJson(rs.getString("builder_config")))
-            );
+            return previewDefinition(rs);
         }, params.toArray());
+    }
+
+    /** Owner-scoped definitions for chart-list previews, loaded in one query. */
+    public Map<Long, ChartDefinition> previewDefinitions(Long ownerId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return Map.of();
+        String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
+        StringBuilder sql = new StringBuilder("""
+                SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
+                       refresh_mode, cache_ttl_seconds, version
+                  FROM mc_chart
+                 WHERE id IN (
+                """);
+        sql.append(placeholders).append(")");
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>(ids);
+        appendOwnerScope(sql, params, ownerId);
+        return jdbc.query(sql.toString(), rs -> {
+            Map<Long, ChartDefinition> definitions = new LinkedHashMap<>();
+            while (rs.next()) {
+                ChartDefinition definition = previewDefinition(rs);
+                definitions.put(definition.id(), definition);
+            }
+            return definitions;
+        }, params.toArray());
+    }
+
+    private ChartDefinition previewDefinition(ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> builderConfig = readJson(rs.getString("builder_config"));
+        return new ChartDefinition(
+                rs.getLong("id"),
+                rs.getLong("datasource_id"),
+                rs.getString("sql_query"),
+                rs.getString("chart_type"),
+                readJson(rs.getString("options")),
+                builderConfig,
+                rs.getString("refresh_mode"),
+                rs.getInt("cache_ttl_seconds"),
+                rs.getInt("version"),
+                SamplingMetadata.fromBuilderConfig(builderConfig)
+        );
     }
 
     private static void appendOwnerScope(StringBuilder sql, List<Object> params, Long ownerId) {
@@ -269,17 +303,21 @@ public class ChartRepository {
     }
 
     private Map<String, Object> summary(ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> builderConfig = readJson(rs.getString("builder_config"));
+        long fallbackDatasourceId = rs.getLong("datasource_id");
+        String fallbackDatasourceName = rs.getString("datasource_name");
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", rs.getLong("id"));
         m.put("name", rs.getString("name"));
         m.put("description", rs.getString("description"));
         m.put("chartType", rs.getString("chart_type"));
-        m.put("datasourceId", rs.getLong("datasource_id"));
+        m.put("datasourceId", fallbackDatasourceId);
         m.put("mainTable", mainTable(
-                readJson(rs.getString("builder_config")),
-                rs.getLong("datasource_id"),
-                rs.getString("datasource_name")
+                builderConfig,
+                fallbackDatasourceId,
+                fallbackDatasourceName
         ));
+        m.put("authorName", rs.getString("author_name"));
         m.put("updatedAt", timestampString(rs.getTimestamp("updated_at")));
         return m;
     }

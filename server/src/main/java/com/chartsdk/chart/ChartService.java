@@ -2,9 +2,11 @@ package com.chartsdk.chart;
 
 import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.cache.CachedChartRows;
+import com.chartsdk.cache.ChartCacheExpectation;
 import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
+import com.chartsdk.converter.FieldDisplayNameResolver;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.QueryExecutor;
@@ -57,10 +59,26 @@ public class ChartService {
     public Map<String, Object> previews(String ids) {
         Map<String, Object> previews = new LinkedHashMap<>();
         Map<String, Object> errors = new LinkedHashMap<>();
-        parseIds(ids).stream().limit(60).forEach((id) -> {
+        List<Long> requested = parseIds(ids).stream().limit(60).toList();
+        Map<Long, ChartDefinition> definitions = charts.previewDefinitions(ownerId(), requested);
+        Map<Long, ChartCacheExpectation> expectations = new LinkedHashMap<>();
+        definitions.forEach((id, chart) -> expectations.put(
+                id, new ChartCacheExpectation(chart.version(), chart.sampling())));
+        Map<Long, CachedChartRows> cached = compute.cachedCompatible(expectations);
+        requested.forEach((id) -> {
             try {
                 // 목록 카드는 option만 필요하다. 최대 60개 카드 응답에 rows를 중복 싣지 않는다.
-                previews.put(String.valueOf(id), previewPayload(id, false));
+                ChartDefinition chart = definitions.get(id);
+                if (chart == null) {
+                    errors.put(String.valueOf(id), "Chart not found.");
+                    return;
+                }
+                CachedChartRows rows = cached.get(id);
+                if (rows == null) {
+                    errors.put(String.valueOf(id), "Preview snapshot is not ready.");
+                    return;
+                }
+                previews.put(String.valueOf(id), previewPayload(chart, rows, false));
             } catch (ApiException e) {
                 errors.put(String.valueOf(id), e.getMessage());
             } catch (RuntimeException e) {
@@ -123,6 +141,11 @@ public class ChartService {
         // 서빙 경로 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
         CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
                 chart.version(), chart.sampling());
+        return previewPayload(chart, rows, includeRows);
+    }
+
+    private Map<String, Object> previewPayload(ChartDefinition chart, CachedChartRows rows,
+                                               boolean includeRows) {
         Map<String, Object> response = new LinkedHashMap<>();
         var displayRows = SeriesPivot.pivot(rows.rows(), chart.builderConfig(), chart.chartType());
         response.put("chartId", chart.id());
@@ -136,7 +159,11 @@ public class ChartService {
                 chart.builderConfig()
         ));
         if (includeRows) {
-            response.put("columns", displayRows.columns());
+            response.put("columns", FieldDisplayNameResolver.displayColumns(
+                    chart.builderConfig(),
+                    displayRows.columns(),
+                    chart.builderConfig().get("seriesBy") != null
+            ));
             response.put("rows", displayRows.rows());
             response.put("elapsedMs", rows.rows().elapsedMs());
         }
@@ -177,7 +204,7 @@ public class ChartService {
         String sql = input.sqlQuery() == null ? "" : input.sqlQuery().trim();
         assertSelectOnly(sql);
         // 캐시에는 전체 차트 결과가 필요하므로 제한 실행 후 재조회하지 않고 처음부터 한 번만 전체 실행한다.
-        var rows = queries.executeUnbounded(input.datasourceId(), sql, List.of());
+        var rows = queries.executeChart(input.datasourceId(), sql, List.of());
         // raw SQL 은 항상 단일 소스(primary) — 구조상 페더레이션 대상 아님.
         return new Prepared(
                 copy(input, defineMode, sql, chartType, input.refreshMode()),

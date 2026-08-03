@@ -73,6 +73,11 @@ public class ChartComputeService {
                         chartId, definitionVersion, !"live".equals(refreshMode), sampling));
     }
 
+    /** Cache-only batch path for list cards; never starts customer-datasource recomputation. */
+    public Map<Long, CachedChartRows> cachedCompatible(Map<Long, ChartCacheExpectation> expectations) {
+        return cache.findCompatible(expectations);
+    }
+
     /** 차트가 2개 이상 데이터소스를 참조하는가 — 임베드 캐시-온리 판정의 단일 진실원. */
     public boolean isMultiSource(long chartId) {
         Integer n = jdbc.queryForObject("SELECT count(*) FROM mc_chart_datasource WHERE chart_id=?", Integer.class, chartId);
@@ -89,7 +94,7 @@ public class ChartComputeService {
         }
     }
 
-    /** 기존 builder 차트도 현재 생성 규칙(sampling v6의 결과 표본·표본 SUM/COUNT 포함)을 즉시 사용한다. */
+    /** 기존 builder 차트도 현재 생성 규칙(sampling v7 Bernoulli 결과 표본·표본 SUM/COUNT 포함)을 즉시 사용한다. */
     private Computed execute(long chartId, Chart chart) {
         if ("builder".equals(chart.defineMode()) && !chart.builderConfig().isEmpty()) {
             FederatedQueryRunner.BuiltResult built =

@@ -232,14 +232,14 @@ class MultiSourceChartLifecycleIT {
                 "it-update-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
         ChartSaveRequest create = new ChartSaveRequest(
                 "update-test", null, datasourceId, "sql", "SELECT 1 AS value",
-                null, "bar", Map.of(), "manual", 3600, null);
+                Map.of("table", "chart_value"), "bar", Map.of(), "manual", 3600, null);
         Map<String, Object> created = chartService.create(create);
         long chartId = ((Number) created.get("id")).longValue();
         assertThat(created.get("version")).isEqualTo(0);
 
         ChartSaveRequest update = new ChartSaveRequest(
                 "update-test", null, datasourceId, "sql", "SELECT 2 AS value",
-                null, "bar", Map.of(), "manual", 3600, 0);
+                Map.of("table", "chart_value"), "bar", Map.of(), "manual", 3600, 0);
         Map<String, Object> updated = chartService.update(chartId, update);
 
         assertThat(updated.get("version")).isEqualTo(1);

@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -65,6 +67,34 @@ public class ChartCacheService {
                     sampling
             );
         }, chartId);
+    }
+
+    /** Loads every compatible snapshot for a chart-list page in one database round trip. */
+    public Map<Long, CachedChartRows> findCompatible(Map<Long, ChartCacheExpectation> expectations) {
+        if (expectations == null || expectations.isEmpty()) return Map.of();
+        String placeholders = String.join(", ", java.util.Collections.nCopies(expectations.size(), "?"));
+        String sql = "SELECT chart_id, result::text, computed_at, definition_version"
+                + " FROM mc_chart_cache WHERE chart_id IN (" + placeholders + ")";
+        return jdbc.query(sql, rs -> {
+            Map<Long, CachedChartRows> compatible = new LinkedHashMap<>();
+            while (rs.next()) {
+                long chartId = rs.getLong("chart_id");
+                ChartCacheExpectation expectation = expectations.get(chartId);
+                if (expectation == null) continue;
+                try {
+                    decodeCompatible(
+                            rs.getString("result"),
+                            rs.getTimestamp("computed_at"),
+                            rs.getObject("definition_version", Integer.class),
+                            expectation.definitionVersion(),
+                            expectation.sampling()
+                    ).ifPresent(rows -> compatible.put(chartId, rows));
+                } catch (RuntimeException ignored) {
+                    // One corrupt legacy payload must not hide every other card in the batch.
+                }
+            }
+            return compatible;
+        }, expectations.keySet().toArray());
     }
 
     public CachedChartRows upsert(long chartId, QueryRows rows, int definitionVersion, SamplingMetadata sampling) {

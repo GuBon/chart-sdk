@@ -93,17 +93,17 @@ final class TooltipFieldResolver {
         String xIdentity = string(builder.get("xAxis"), resultColumn(columns, 0, "x"));
         fields.add(field(
                 "x:" + xIdentity,
-                humanize(builder.get("xAxis"), resultColumn(columns, 0, "카테고리")),
+                humanize(builder.get("xAxis"), resultColumn(columns, 0, "카테고리"), builder),
                 "가로축",
                 "category"
         ));
 
         if (!seriesBy.isEmpty()) {
-            fields.add(field("series:" + seriesBy, humanize(seriesBy, "계열"), "계열", "series"));
+            fields.add(field("series:" + seriesBy, humanize(seriesBy, "계열", builder), "계열", "series"));
             Map<String, Object> source = at(measures, 0);
             fields.add(field(
                     measureKey(source, 0, resultColumn(columns, 2, "값")),
-                    measureLabel(source, resultColumn(columns, 2, "값")),
+                    measureLabel(source, resultColumn(columns, 2, "값"), builder),
                     aggregateRole(source),
                     "measure",
                     null,
@@ -118,7 +118,7 @@ final class TooltipFieldResolver {
             String columnName = columnName(columns.get(index), "");
             fields.add(field(
                     measureKey(source, index - 1, columnName),
-                    measureLabel(source, columnName),
+                    measureLabel(source, columnName, builder),
                     aggregateRole(source),
                     "measure",
                     columnName,
@@ -144,7 +144,7 @@ final class TooltipFieldResolver {
         String xName = resultColumn(columns, 0, "X");
         List<Map<String, Object>> fields = new ArrayList<>();
         String xIdentity = string(builder.get("xAxis"), xName);
-        fields.add(field("x:" + xIdentity, humanize(builder.get("xAxis"), xName), "가로축", "x",
+        fields.add(field("x:" + xIdentity, humanize(builder.get("xAxis"), xName, builder), "가로축", "x",
                 null, 0, true));
 
         for (int index = 1; index < columns.size(); index++) {
@@ -153,7 +153,7 @@ final class TooltipFieldResolver {
             if (!bubbleName.isEmpty() && bubbleName.equals(columnName)) {
                 fields.add(field(
                         "bubble:" + string(source.get("column"), columnName),
-                        measureLabel(source, columnName),
+                        measureLabel(source, columnName, builder),
                         "버블 크기",
                         "bubbleSize",
                         null,
@@ -163,7 +163,7 @@ final class TooltipFieldResolver {
             } else {
                 fields.add(field(
                         measureKey(source, index - 1, columnName),
-                        measureLabel(source, columnName),
+                        measureLabel(source, columnName, builder),
                         "세로축",
                         "y",
                         columnName,
@@ -186,13 +186,13 @@ final class TooltipFieldResolver {
         return List.of(
                 field(
                         "category:" + string(builder.get("xAxis"), categoryName),
-                        humanize(builder.get("xAxis"), categoryName),
+                        humanize(builder.get("xAxis"), categoryName, builder),
                         "항목",
                         "category"
                 ),
                 field(
                         measureKey(source, 0, valueName),
-                        measureLabel(source, valueName),
+                        measureLabel(source, valueName, builder),
                         aggregateRole(source),
                         "measure"
                 ),
@@ -207,12 +207,12 @@ final class TooltipFieldResolver {
         List<Map<String, Object>> measures = maps(builder.get("yAxis"));
         Map<String, Object> source = at(measures, 0);
         String categoryName = resultColumn(columns, 0, "카테고리");
-        String valueName = measureLabel(source, resultColumn(columns, 1, "값"));
+        String valueName = measureLabel(source, resultColumn(columns, 1, "값"), builder);
         String identity = string(source.get("column"), resultColumn(columns, 1, "value"));
         return List.of(
                 field(
                         "category:" + string(builder.get("xAxis"), categoryName),
-                        humanize(builder.get("xAxis"), categoryName),
+                        humanize(builder.get("xAxis"), categoryName, builder),
                         "카테고리",
                         "category"
                 ),
@@ -234,7 +234,7 @@ final class TooltipFieldResolver {
         List<Map<String, Object>> fields = new ArrayList<>();
         fields.add(field(
                 "x:" + string(builder.get("xAxis"), xName),
-                humanize(builder.get("xAxis"), xName),
+                humanize(builder.get("xAxis"), xName, builder),
                 "가로축",
                 "category"
         ));
@@ -243,7 +243,7 @@ final class TooltipFieldResolver {
             String columnName = columnName(columns.get(index), "");
             fields.add(field(
                     measureKey(source, index - 1, columnName),
-                    measureLabel(source, columnName),
+                    measureLabel(source, columnName, builder),
                     "측정 항목",
                     "measure",
                     columnName,
@@ -268,15 +268,15 @@ final class TooltipFieldResolver {
                 : firstMeasure;
 
         List<Map<String, Object>> fields = new ArrayList<>();
-        fields.add(field("region:" + nameRef, humanize(nameRef, "지역"), "지역", "category"));
+        fields.add(field("region:" + nameRef, humanize(nameRef, "지역", builder), "지역", "category"));
         String seriesBy = string(builder.get("seriesBy"), "");
         if (!seriesBy.isEmpty()) {
-            fields.add(field("series:" + seriesBy, humanize(seriesBy, "계열"), "계열", "series"));
+            fields.add(field("series:" + seriesBy, humanize(seriesBy, "계열", builder), "계열", "series"));
         }
         if (valueRef != null && !String.valueOf(valueRef).isEmpty()) {
             fields.add(field(
                     measureKey(valueSource, 0, String.valueOf(valueRef)),
-                    measureLabel(valueSource, String.valueOf(valueRef)),
+                    measureLabel(valueSource, String.valueOf(valueRef), builder),
                     aggregateRole(valueSource),
                     "geoValue"
             ));
@@ -302,19 +302,19 @@ final class TooltipFieldResolver {
 
         if (nameRef != null || hasColumn(columns, POINT_NAME)) {
             Object source = nameRef == null ? POINT_NAME : nameRef;
-            fields.add(field("geo:name:" + source, humanize(nameRef, "포인트 이름"), "포인트 이름", "geoName"));
+            fields.add(field("geo:name:" + source, humanize(nameRef, "포인트 이름", builder), "포인트 이름", "geoName"));
         }
         String seriesBy = string(builder.get("seriesBy"), "");
         if (!seriesBy.isEmpty() || hasColumn(columns, GEO_SERIES)) {
             Object source = seriesBy.isEmpty() ? GEO_SERIES : seriesBy;
             fields.add(field("series:" + source, humanize(
-                    seriesBy.isEmpty() ? null : seriesBy, "계열"), "계열", "series"));
+                    seriesBy.isEmpty() ? null : seriesBy, "계열", builder), "계열", "series"));
         }
         if (valueRef != null || hasColumn(columns, POINT_VALUE)) {
             Object source = valueRef == null ? POINT_VALUE : valueRef;
             fields.add(field(
                     "geo:value:" + source,
-                    humanize(valueRef, "값"),
+                    humanize(valueRef, "값", builder),
                     "map".equals(chartType) ? "강도 값" : "값",
                     "geoValue",
                     null,
@@ -326,7 +326,7 @@ final class TooltipFieldResolver {
             Object source = sizeRef == null ? POINT_SIZE : sizeRef;
             fields.add(field(
                     "geo:size:" + source,
-                    humanize(sizeRef, "크기"),
+                    humanize(sizeRef, "크기", builder),
                     "포인트 크기",
                     "geoSize",
                     null,
@@ -338,7 +338,7 @@ final class TooltipFieldResolver {
             Object source = colorRef == null ? POINT_COLOR : colorRef;
             fields.add(field(
                     "geo:color:" + source,
-                    humanize(colorRef, "색상 값"),
+                    humanize(colorRef, "색상 값", builder),
                     "색상 기준",
                     "geoColor",
                     null,
@@ -353,7 +353,7 @@ final class TooltipFieldResolver {
         String coordinateRole = spatial ? "위치 계산값" : "위치";
         fields.add(field(
                 "geo:longitude:" + longitudeRef,
-                humanize(longitudeRef, "경도"),
+                humanize(longitudeRef, "경도", builder),
                 coordinateRole,
                 "longitude",
                 null,
@@ -362,7 +362,7 @@ final class TooltipFieldResolver {
         ));
         fields.add(field(
                 "geo:latitude:" + latitudeRef,
-                humanize(latitudeRef, "위도"),
+                humanize(latitudeRef, "위도", builder),
                 coordinateRole,
                 "latitude",
                 null,
@@ -396,14 +396,12 @@ final class TooltipFieldResolver {
         return field;
     }
 
-    private static String measureLabel(Map<String, Object> source, String fallback) {
-        String alias = string(source.get("alias"), "").trim();
-        if (!alias.isEmpty()) return alias;
-        String base = humanize(source.get("column"), fallback);
-        String aggregate = string(source.get("agg"), "none");
-        return "none".equals(aggregate)
-                ? base
-                : base + " " + AGGREGATE_LABELS.getOrDefault(aggregate, aggregate);
+    private static String measureLabel(
+            Map<String, Object> source,
+            String fallback,
+            Map<String, Object> builder
+    ) {
+        return FieldDisplayNameResolver.measureName(builder, source, fallback);
     }
 
     private static String measureKey(Map<String, Object> source, int index, String fallback) {
@@ -415,6 +413,10 @@ final class TooltipFieldResolver {
 
     private static String aggregateRole(Map<String, Object> source) {
         return AGGREGATE_LABELS.getOrDefault(string(source.get("agg"), "none"), "값");
+    }
+
+    private static String humanize(Object value, String fallback, Map<String, Object> builder) {
+        return FieldDisplayNameResolver.fieldName(builder, value, fallback);
     }
 
     private static String humanize(Object value, String fallback) {

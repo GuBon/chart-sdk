@@ -31,13 +31,13 @@ class QueryControllerTest {
         QueryExecutor queries = mock(QueryExecutor.class);
         ChartOptionConverter converter = mock(ChartOptionConverter.class);
         FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
-        when(queries.executeUnbounded(7L, "SELECT * FROM sales", List.of())).thenReturn(EMPTY);
+        when(queries.executeChart(7L, "SELECT * FROM sales", List.of())).thenReturn(EMPTY);
         when(converter.convert(EMPTY, "bar", Map.of())).thenReturn(Map.of("series", List.of()));
 
         Map<String, Object> result = new QueryController(queries, converter, runner).run(
                 new QueryRunRequest(7L, "SELECT * FROM sales", "bar", Map.of()));
 
-        verify(queries).executeUnbounded(7L, "SELECT * FROM sales", List.of());
+        verify(queries).executeChart(7L, "SELECT * FROM sales", List.of());
         assertThat(result).containsEntry("truncated", false).containsKey("option");
     }
 
@@ -118,5 +118,47 @@ class QueryControllerTest {
                 eq(Map.of()),
                 eq(cfg)
         );
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void builderResultAddsDisplayNamesWithoutRenamingPhysicalColumns() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        ChartOptionConverter converter = mock(ChartOptionConverter.class);
+        FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
+        QueryRows rows = new QueryRows(
+                List.of(
+                        Map.of("name", "region", "type", "text"),
+                        Map.of("name", "sum_amount", "type", "numeric")
+                ),
+                List.of(List.of("Seoul", 10)),
+                1,
+                false,
+                1
+        );
+        Map<String, Object> cfg = Map.of(
+                "xAxis", "sales.region",
+                "yAxis", List.of(Map.of("column", "sales.amount", "agg", "sum")),
+                "fieldDisplayNames", Map.of(
+                        "sales.region", "지역",
+                        "sales.amount", "매출액"
+                )
+        );
+        BuilderSqlBuilder.Sql sql = new BuilderSqlBuilder.Sql("SELECT region, SUM(amount) FROM sales", List.of());
+        when(runner.runBuilder(7L, cfg, "bar", false))
+                .thenReturn(new FederatedQueryRunner.BuiltResult(rows, sql, Set.of(7L)));
+        when(converter.convert(any(QueryRows.class), eq("bar"), eq(Map.of()), eq(cfg)))
+                .thenReturn(Map.of("series", List.of()));
+
+        Map<String, Object> result = new QueryController(queries, converter, runner).runBuilder(
+                new BuilderQueryRequest(7L, cfg, "bar", Map.of(), "aggregate"));
+        List<Map<String, Object>> columns = (List<Map<String, Object>>) result.get("columns");
+
+        assertThat(columns.get(0))
+                .containsEntry("name", "region")
+                .containsEntry("displayName", "지역");
+        assertThat(columns.get(1))
+                .containsEntry("name", "sum_amount")
+                .containsEntry("displayName", "매출액 합계");
     }
 }

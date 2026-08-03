@@ -65,7 +65,17 @@ class ChartOptionConverterTest {
 
             assertThat(label.get("show")).isEqualTo(false);
             assertThat(label.get("position")).isEqualTo("outside");
+            assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
         }
+    }
+
+    @Test
+    void legacyAutoTooltipTriggerMigratesToItem() {
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(
+                "tooltip", Map.of("trigger", "auto")
+        ));
+
+        assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isEqualTo("item");
     }
 
     @Test
@@ -1356,5 +1366,34 @@ class ChartOptionConverterTest {
         Map<?, ?> series = (Map<?, ?>) ((List<?>) option.get("series")).get(0);
         List<?> data = (List<?>) series.get("data");
         assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color")).isEqualTo("#FFBB00");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void emitsDisplayMetadataWithoutRenamingPhysicalSeries() {
+        Map<String, Object> builder = Map.of(
+                "xAxis", "sales.category",
+                "yAxis", List.of(Map.of("column", "sales.amount", "agg", "sum")),
+                "fieldDisplayNames", Map.of(
+                        "sales.category", "상품 분류",
+                        "sales.amount", "매출액"
+                )
+        );
+
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(), builder);
+        Map<String, Object> xAxis = (Map<String, Object>) option.get("xAxis");
+        Map<String, Object> yAxis = (Map<String, Object>) option.get("yAxis");
+        List<Map<String, Object>> series = (List<Map<String, Object>>) option.get("series");
+        Map<String, Object> displayNames =
+                (Map<String, Object>) option.get(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY);
+        Map<String, Object> tooltip = (Map<String, Object>) option.get("__chartsdkTooltip");
+        List<Map<String, Object>> fields = (List<Map<String, Object>>) tooltip.get("fields");
+
+        assertThat(xAxis.get("name")).isEqualTo("상품 분류");
+        assertThat(yAxis.get("name")).isEqualTo("매출액 합계");
+        assertThat(series.get(0).get("name")).isEqualTo("amount");
+        assertThat(displayNames).containsEntry("amount", "매출액 합계");
+        assertThat(fields).extracting(field -> field.get("label"))
+                .contains("상품 분류", "매출액 합계");
     }
 }
