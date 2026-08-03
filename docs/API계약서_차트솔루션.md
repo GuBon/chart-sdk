@@ -103,7 +103,7 @@ JWT 페이로드: { "userId": 7, "jti": 42, "iat": ..., "exp": ..., "v": 1 } —
 
 - sdk.js는 `option`을 그대로 `chart.setOption(res.option)` 한다. 클라이언트는 차트 모양을 결정하지 않는다.
 - `chart_type`과 `options`(JSONB)의 값이 서버에서 option 조립 시 반영된다.
-- `builderConfig.sample`을 사용한 차트는 sampling v6를 포함한다. 서버가 실행 방법을 `INDEX_RANDOM|RESULT_RANDOM|SYSTEM|FULL_SCAN` 중 결정한다. `RESULT_RANDOM`은 VIEW 또는 JOIN+WHERE 조회 결과에서 행을 뽑는 방식이다. 100% 또는 작은 물리 테이블의 FULL_SCAN은 `{approximate:false,method:"FULL_SCAN",valueMode:"exact"}`이다. 표본 실행의 `valueMode`는 `sample`이다. `sampledRowCount`는 표본에 들어온 실제 입력 행 수이고 API의 `rowCount`는 결과 그룹 수다. `groups`는 화면에 표시된 그룹별 표본 수다.
+- `builderConfig.sample`을 사용한 차트는 sampling v7을 포함한다. 서버가 실행 방법을 `INDEX_RANDOM|RESULT_RANDOM|SYSTEM|FULL_SCAN` 중 결정한다. `RESULT_RANDOM`은 VIEW 또는 JOIN+WHERE 조회 결과에 동일 확률의 Bernoulli를 적용하는 방식이다. 이때 `sampleSize`는 목표 행 수이고 `sampledRowCount`는 가변 실측 행 수다. 100% 또는 작은 물리 테이블의 FULL_SCAN은 `{approximate:false,method:"FULL_SCAN",valueMode:"exact"}`이다. 표본 실행의 `valueMode`는 `sample`이다. API의 `rowCount`는 결과 그룹 수이고 `groups`는 화면에 표시된 그룹별 표본 수다.
 - `estimates`는 시리즈별 계산 해석을 제공한다: SUM/COUNT=`SAMPLE_AGGREGATE`, AVG/STDDEV/VARIANCE=`SAMPLE_ESTIMATE`, MIN/MAX=`OBSERVED_EXTREME`, COUNT DISTINCT=`OBSERVED_DISTINCT`, 정확 실행은 모두 `EXACT`. SUM·COUNT는 외삽하지 않은 `표본 합계`·`표본 개수`이며 `SAMPLE_AGGREGATE_ONLY` 경고를 함께 보낸다. 독립행 무작위 표본인 INDEX_RANDOM·RESULT_RANDOM의 AVG에는 가능한 그룹에 95% 오차 요약을 제공하고, STDDEV/VARIANCE의 `intervals[]`는 `{key,sampleCount,estimate,lower95,upper95,relativeErrorPct?}` 그룹별 구간이다. 분산 계열 구간에는 `STDDEV_CI_NORMALITY_ASSUMED` 경고가 항상 따라간다.
 - `sampling`이 정식 계약이며 `approximate`·`sampleRate`는 구버전 클라이언트를 위한 하위 호환 별칭이다. Admin과 SDK는 정확/추정을 구분하고 경고를 표시한다.
 
@@ -165,10 +165,10 @@ POST /api/v1/query/run-builder
 
 `builderConfig.joins[]`(생성규칙 11장) 지정 시 다중 테이블 조인(`inner`/`left`, N개). 조인이 있으면 모든 컬럼 참조는 qualified `"테이블.컬럼"`. `sample`을 함께 지정하면 JOIN과 WHERE를 적용한 행 집합을 모집단 CTE로 만들고, 그 결과에서 `RESULT_RANDOM` 표본을 뽑은 뒤 집계한다. 앱은 이 기능을 위해 고객 DB에 VIEW/MATERIALIZED VIEW를 생성하지 않는다.
 
-`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 산점도는 `[x,y]`, 기본 영역 지도는 `region,value`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)는 섞을 수 없다. `sample`을 지정하면 집계 대신 선택된 원본 행만 반환하고 sampling v6의 처리 방식은 `ROW_SAMPLE`이다.
+`builderConfig.yAxis[].agg = "none"` 은 모든 차트 타입에서 지원되는 원본값 튜플 모드다. 이 모드에서는 SELECT가 X축 컬럼과 Y축 원본 컬럼을 그대로 반환하고 `GROUP BY`를 만들지 않는다. 막대/선은 `x,value`, 원형은 `name,value`, 산점도는 `[x,y]`, 기본 영역 지도는 `region,value`로 변환된다. 단 한 요청 안에서 `none`과 집계(`sum`/`avg` 등)는 섞을 수 없다. `sample`을 지정하면 집계 대신 선택된 원본 행만 반환하고 sampling v7의 처리 방식은 `ROW_SAMPLE`이다.
 
 `mode` (선택, 기본 `"aggregate"`):
-- `"aggregate"` — 차트 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환하고, `agg:"none"`은 선택된 원본 행을 그대로 반환한다. 응답은 sampling v6와 하위 호환 `approximate`·`sampleRate`를 함께 보낸다.
+- `"aggregate"` — 차트 실행 (생성규칙 6장). S2 [실행] 버튼 → [실행 결과] 탭. 단일 물리 테이블은 조건에 따라 INDEX_RANDOM/SYSTEM/FULL_SCAN을, VIEW와 조인은 RESULT_RANDOM을 사용한다. 레거시 `method:"system"`/`rate`는 물리 관계의 `TABLESAMPLE SYSTEM` 경로를 고정한다. SUM·COUNT는 선택된 표본의 값을 그대로 반환하고, `agg:"none"`은 선택된 원본 행을 그대로 반환한다. 응답은 sampling v7과 하위 호환 `approximate`·`sampleRate`를 함께 보낸다.
 - `"rows"` — 집계·GROUP BY 없이 `SELECT * + JOIN + WHERE(조건 동일 바인딩) + LIMIT 1000` (생성규칙 3B장). S2 [원본 데이터] 탭 — 집계 이전의 세부 데이터 확인용. [실행] 때 중복 호출하지 않고 사용자가 탭을 처음 열 때 지연 호출한다. 표본 추출은 무시한다.
 
 `chartType:"geoscatter"`의 `mode:"aggregate"`는 이름과 달리 원본 좌표 튜플을 반환하는 전용 경로다. `geoPoint` 미지정 또는 `{mode:"columns"}`이면 기존 `xAxis=경도`, `yAxis[0]=위도`, 선택 `yAxis[1]=크기`를 사용한다. `{mode:"spatial",spatialColumn:"location",sizeColumn?:"weight"}`이면 카탈로그가 확인한 SRID 지정 `geometry/geography(Point, SRID)`를 WGS84로 변환해 내부 열 `__chartsdk_longitude`, `__chartsdk_latitude`, 선택 `__chartsdk_size`로 반환한다. 공간 모드는 단일 데이터소스(같은 소스 내 JOIN 가능) 전용이며 표본 추출을 함께 쓰지 않는다.
@@ -414,12 +414,13 @@ GET /api/v1/schema/tables?datasourceId={id}
     {
       "schema": "public",
       "name": "sales",
+      "displayName": "매출",
       "relationType": "TABLE",
       "estimatedRowCount": 500000000,
       "columns": [
-        { "name": "id", "type": "bigint" },
-        { "name": "category", "type": "varchar" },
-        { "name": "amount", "type": "numeric" },
+        { "name": "id", "displayName": "매출 ID", "type": "bigint" },
+        { "name": "category", "displayName": "상품 분류", "type": "varchar" },
+        { "name": "amount", "displayName": "매출액", "type": "numeric" },
         { "name": "date", "type": "date" }
       ]
     },
@@ -433,8 +434,26 @@ GET /api/v1/schema/tables?datasourceId={id}
 - `relationType`은 `TABLE|VIEW|MATERIALIZED_VIEW`다. 물리화 뷰의 `populated:false`는 `REFRESH MATERIALIZED VIEW`가 필요한 상태이므로 선택 UI에서 비활성화하고, 직접 미리보기 요청도 409 `MATERIALIZED_VIEW_NOT_POPULATED`로 거부한다.
 - `estimatedRowCount`는 PostgreSQL `pg_class.reltuples`의 계획용 추정치로 TABLE·MATERIALIZED VIEW에만 제공될 수 있다. 정확한 행 수가 아니며 표본 계획과 직접 지정 UI의 "전체 약 N행 중" 안내에만 사용한다. VIEW·조인 결과 크기는 미리 전체 COUNT하지 않으며 실행 후 실제 표본 수와 집계별 유효 표본 수를 정확도 계산에 사용한다.
 - `schema`는 관계의 소속 스키마다. `public` 외 사용자 스키마(예: `analytics`)의 업무 관계도 노출된다. 클라이언트는 식별자를 비-public 일 때만 `"schema.name"`으로 한정해 `builderConfig.table`/`joins[].table`에 담는다(미지정 → public).
+- `displayName`은 선택 필드다. 고객 PostgreSQL의 `COMMENT ON TABLE|VIEW|COLUMN`을 기본값으로 읽고, ChartSDK에서 지정한 이름이 있으면 그 값을 우선한다. `name`은 SQL과 식별에 사용하는 물리 이름이므로 표시 이름을 편집해도 바뀌지 않는다.
 
-### 5.2 관계 원본 데이터 조회 (최대 1,000행)
+### 5.2 관계·컬럼 표시 이름 수정
+
+```
+PUT /api/v1/schema/display-name
+{
+  "datasourceId": 7,
+  "schema": "public",
+  "relation": "sales",
+  "column": "amount",
+  "displayName": "매출액"
+}
+```
+
+응답 204. 관계 표시 이름은 `column`을 생략한다. `displayName`을 `null` 또는 공백으로 보내면 ChartSDK 재정의를 삭제하고 PostgreSQL COMMENT 또는 물리 이름으로 되돌린다. 서버는 현재 카탈로그에 실제로 존재하는 관계·컬럼인지 검증한 후 중앙 메타 DB의 `mc_data_display_name`만 변경하며 고객 DB에는 DDL을 실행하지 않는다.
+
+차트에 필드를 연결할 때의 유효 표시 이름은 `builderConfig.fieldDisplayNames[physicalRef]`에 스냅샷으로 보존한다. 이후 데이터 카탈로그의 표시 이름이 바뀌어도 기존 차트는 조용히 변경되지 않는다. SQL 생성, 계열 색상 키와 데이터 값은 계속 물리 이름을 사용하고 축 제목·범례·툴팁·결과 표 헤더만 스냅샷을 사용한다.
+
+### 5.3 관계 원본 데이터 조회 (최대 1,000행)
 
 ```
 GET /api/v1/schema/tables/{tableName}/preview?datasourceId={id}&schema={schema}

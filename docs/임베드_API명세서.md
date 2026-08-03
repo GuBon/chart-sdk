@@ -156,7 +156,7 @@ Execution guardrails:
 | `computedAt` | ISO-8601 UTC | Time of the row result used to build `option`. |
 | `rowCount` | integer | Number of rows used to build the option. |
 | `truncated` | boolean | `true` when the row cap was reached and the result may be partial. |
-| `sampling` | object, optional | Sampling execution metadata v6. Includes INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN, requested size/rate/seed, actual sampled input count, per-group counts, per-series treatment/error summary, optional statistical `intervals[]`, and warnings. RESULT_RANDOM means rows were selected from a VIEW or JOIN+WHERE result before aggregation. Sampled SUM/COUNT use `SAMPLE_AGGREGATE`; AVG/STDDEV/VARIANCE use `SAMPLE_ESTIMATE`. Persisted with the cached result. |
+| `sampling` | object, optional | Sampling execution metadata v7. Includes INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN, requested size/rate/seed, actual sampled input count, per-group counts, per-series treatment/error summary, optional statistical `intervals[]`, and warnings. RESULT_RANDOM means independent Bernoulli rows were selected after the VIEW or JOIN+WHERE result boundary; `sampleSize` is the target and `sampledRowCount` is the variable actual count. Sampled SUM/COUNT use `SAMPLE_AGGREGATE`; AVG/STDDEV/VARIANCE use `SAMPLE_ESTIMATE`. Persisted with the cached result. |
 | `approximate` / `sampleRate` | boolean / number, optional | Backward-compatible aliases for older clients. New clients use `sampling`. |
 | `option` | object | Complete Apache ECharts option. SDK must pass it to `chart.setOption(option)` without rebuilding. |
 

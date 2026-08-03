@@ -190,9 +190,9 @@ SDK는 차트 모양을 결정하지 않으며, 모든 시각화 설정은 Admin
 - 캐시 실패 상태: 성공 결과는 유지하면서 `last_error/last_error_at`만 갱신한다. 성공 결과가 한 번도 없는 최초 시드 실패는 `result/computed_at`이 NULL인 error-only 행으로 기록한다. 차트 정의 버전이 다른 결과는 TTL stale로 간주하지 않고 절대 서빙하지 않는다.
 - 임베드 응답에 `computedAt` 포함 — S4 차트 하단에 "데이터 기준 {시각}" 캡션(옵션, 기본 켬)으로 정적 데이터임을 표시.
 - 무거운 쿼리의 근본 해결은 고객 DB 측 집계 테이블/뷰(ETL)이며, S5 등록 화면 안내문으로 가이드한다.
-- **표본 추출(보완 수단, MVP 포함):** 자동 또는 1,000~50,000행 직접 지정으로 시작한다. 단일 물리 테이블은 정수 PK·키 밀도 조건을 만족하면 INDEX_RANDOM 등가 조인으로 행을 균일하게 뽑고, 불가능하면 SYSTEM 블록 표본으로 폴백하며, 작은 테이블은 FULL_SCAN한다. VIEW와 JOIN+WHERE 행 집합은 그 조회 결과를 모집단으로 삼아 RESULT_RANDOM으로 뽑은 뒤 집계한다. SUM·COUNT는 외삽하지 않은 표본 합계·표본 개수, AVG·STDDEV·VARIANCE는 모집단 통계의 표본 추정값, MIN·MAX는 관측 극값, COUNT DISTINCT는 관측 고유 개수로 구분한다. 실행 메타데이터는 sampling v6로 캐시·Admin·임베드·SDK까지 전달한다. 원본값 튜플 모드에서는 사용할 수 없다.
+- **표본 추출(보완 수단, MVP 포함):** 자동 또는 1,000~50,000행 직접 지정으로 시작한다. 단일 물리 테이블은 정수 PK·키 밀도 조건을 만족하면 INDEX_RANDOM 등가 조인으로 행을 균일하게 뽑고, 불가능하면 SYSTEM 블록 표본으로 폴백하며, 작은 테이블은 FULL_SCAN한다. VIEW와 JOIN+WHERE 행 집합은 그 조회 결과를 모집단으로 삼아 실행 경계 뒤 RESULT_RANDOM Bernoulli로 뽑은 후 집계한다. 목표 행 수와 실측 행 수는 확률적으로 다를 수 있다. SUM·COUNT는 외삽하지 않은 표본 합계·표본 개수, AVG·STDDEV·VARIANCE는 모집단 통계의 표본 추정값, MIN·MAX는 관측 극값, COUNT DISTINCT는 관측 고유 개수로 구분한다. 실행 메타데이터는 sampling v7로 캐시·Admin·임베드·SDK까지 전달한다. 원본값 튜플 모드에서는 사용할 수 없다.
 - **통계적 표현 원칙:** 독립행 무작위 표본인 INDEX_RANDOM·RESULT_RANDOM에 95% 구간을 제공한다. 조인에서는 JOIN+WHERE 결과의 각 행이 표본 단위이며, 1:N 조인으로 증식한 행도 서로 다른 모집단 행이다. STDDEV·VARIANCE는 그룹별 비NULL 표본 수와 카이제곱 분포를 사용하고 정규성 가정을 반드시 표시한다. SYSTEM은 물리적 정렬·군집으로 오차가 커질 수 있어 같은 공식을 붙이지 않고 블록 표본 경고를 표시한다.
-- 구현 단계: 현재 = 갱신 모드 3종 + 저장 결과 재사용 seed + transaction advisory-lock single-flight TTL 캐시 + 수동 [지금 갱신] + 실패 상태 기록 + `computedAt` 캡션 + 갯수 기반 표본 + sampling v6 + INDEX_RANDOM/RESULT_RANDOM의 AVG 오차 요약 및 STDDEV/VARIANCE 그룹별 구간. 후속 = 명시적인 `% 점유율` 표시, `전체 추정값 보기` 옵션(그때만 SUM·COUNT 외삽과 오차구간 적용), 블록 구조를 고려한 SYSTEM 분산 추정/반복 표본, 진짜 비동기·스케줄 갱신(매일 06:00 등).
+- 구현 단계: 현재 = 갱신 모드 3종 + 저장 결과 재사용 seed + transaction advisory-lock single-flight TTL 캐시 + 수동 [지금 갱신] + 실패 상태 기록 + `computedAt` 캡션 + 갯수 기반 표본 + sampling v7 + INDEX_RANDOM/RESULT_RANDOM의 AVG 오차 요약 및 STDDEV/VARIANCE 그룹별 구간. 후속 = 명시적인 `% 점유율` 표시, `전체 추정값 보기` 옵션(그때만 SUM·COUNT 외삽과 오차구간 적용), 블록 구조를 고려한 SYSTEM 분산 추정/반복 표본, 진짜 비동기·스케줄 갱신(매일 06:00 등).
 
 ## 8. 비기능 요구사항 / 보안
 

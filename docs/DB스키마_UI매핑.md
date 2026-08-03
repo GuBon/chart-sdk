@@ -40,6 +40,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | `mc_user` | 사용자(개인 스코프의 소유자) | username, password_hash, display_name, role, is_active |
 | `mc_user_token` | 사용자 귀속 임베드 토큰(1인 1활성) | id(=JWT jti), user_id, token(원문), expires_at, is_active, **revoked_at/revoked_reason** |
 | `mc_datasource` | 개인 사용자별 PostgreSQL 연결 | owner_id, name, host, port, database_name, db_user, db_password_enc, max_pool_size, **last_tested_at/last_test_ok** |
+| `mc_data_display_name` | 고객 DB 관계·컬럼 표시 이름 재정의 | datasource_id, schema_name, relation_name, column_name(`''`=관계), display_name |
 | `mc_chart` | 개인 사용자별 차트 정의 | owner_id, name, description, datasource_id, define_mode, sql_query, **builder_config**(🧩), chart_type, **options**(🧩), refresh_mode, cache_ttl_seconds |
 | `mc_chart_cache` | 결과 캐시(대용량 대응) | chart_id(PK), result?, computed_at?, elapsed_ms, row_count, definition_version, **thumbnail**, last_error/at. 최초 계산 실패는 result/computed_at NULL인 error-only 행 |
 
@@ -47,6 +48,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 **v4.1(2026-06-19)**: 1인 1활성 토큰 모델 확정 — `mc_user_token.label` 제거(다중 토큰 식별 불필요), 활성 토큰 부분 유니크 인덱스(`user_id WHERE is_active`).
 **v5.0(2026-06-23)**: 개인 사용자 스코프 확정. `mc_datasource.owner_id`, `mc_chart.owner_id`로 소유 범위를 두고, 차트가 다른 사용자의 데이터소스를 참조하지 못하도록 `(datasource_id, owner_id)` 복합 FK를 둔다. 사용자별 unique(`mc_datasource(owner_id, name)`), `updated_at` DB 트리거, `pg_trgm` GIN 검색 인덱스 활성화.
 **v5.1(2026-06-29, 스키마 변경 없음)**: 원본값 튜플 모드는 `builder_config.yAxis[].agg = "none"`으로 JSONB에 저장한다. `mc_chart.sql_query`는 저장 시 서버가 재생성한 GROUP BY 없는 SQL을 보관하므로 별도 컬럼·마이그레이션이 필요 없다.
+**v6.0(2026-07-31)**: `mc_data_display_name`을 추가했다. PostgreSQL COMMENT를 기본 표시 이름으로 읽고 이 테이블의 재정의가 우선한다. 고객 DB 객체와 물리 식별자는 변경하지 않는다.
 
 ---
 
@@ -93,8 +95,9 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | UI 요소 | 저장 | 위치 |
 |---|---|---|
 | 데이터소스 셀렉트 | 📦 | `mc_chart.datasource_id` (목록=🔁 현재 사용자 소유 `mc_datasource`) |
-| 스키마 트리(관계·컬럼·타입) | ⏳ | `pg_catalog` 라이브 조회 — **저장 안 함**. TABLE·VIEW·MATERIALIZED VIEW의 `relationType`, 물리화 뷰 `populated`, 물리 관계 `estimatedRowCount`를 API에서 파생한다. 시스템 스키마·`mc_` 제외, `public` 외 사용자 스키마는 배지로 구분(식별자 `"schema.name"` 한정) |
-| 테이블/컬럼 검색 | ⏳ | 클라 필터 |
+| 스키마 트리(관계·컬럼·타입) | ⏳/📦 | 구조·물리 이름은 `pg_catalog` 라이브 조회. PostgreSQL COMMENT와 `mc_data_display_name`을 합쳐 `displayName`을 파생한다. TABLE·VIEW·MATERIALIZED VIEW의 `relationType`, 물리화 뷰 `populated`, 물리 관계 `estimatedRowCount`도 API에서 파생 |
+| 관계·컬럼 표시 이름 편집 | 📦 | `mc_data_display_name`. 공백 저장은 재정의를 삭제해 COMMENT/물리 이름으로 복귀. 고객 DB에는 쓰지 않음 |
+| 테이블/컬럼 검색 | ⏳ | 표시 이름·물리 이름을 함께 검색하는 클라이언트 필터 |
 | 소스변경확인 모달 | ⏳ | 클라 상태 |
 
 ### S2 중앙 · 노코드 구성 → `builder_config` (🧩)
@@ -106,13 +109,14 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 | 묶기(일/주/월) | 🧩 | `builder_config.xAxisBucket` |
 | Y축 컬럼+집계(복수) | 🧩 | `builder_config.yAxis[]` (column, agg, alias). `agg="none"`이면 모든 차트 타입의 원본값 튜플 모드 |
 | 시리즈 나누기 | 🧩 | `builder_config.seriesBy` + `seriesOrder`. 막대·선에서만 노출하며 미선택 시 계열 기준 행을 비운다 |
+| 필드 표시 이름 스냅샷 | 🧩 | `builder_config.fieldDisplayNames={physicalRef:displayName}`. 필드 연결 시 유효 이름을 복사하며 SQL·색상 식별에는 사용하지 않는다. 기존 차트는 이후 카탈로그 이름 변경의 영향을 받지 않음 |
 | 조건 행(WHERE, 복수) | 🧩 | `builder_config.where[]` (column, op, value) |
 | 정렬(데이터) | 🧩 | `builder_config.orderBy` (target, direction) |
 | 행 제한 | 🧩 | `builder_config.limit` |
-| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM. sampling v6 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`도 `ROW_SAMPLE`로 함께 저장·실행하며 JOIN과도 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
+| 표본 추출(토글+자동/갯수+다시 뽑기) | 🧩 | `builder_config.sample={mode,size?,method?,rate?,seed}`. 물리 테이블은 INDEX_RANDOM/SYSTEM/FULL_SCAN, VIEW·JOIN+WHERE 결과는 RESULT_RANDOM Bernoulli. sampling v7 실행 통계·집계별 의미·그룹별 신뢰구간은 캐시 result JSONB에 저장한다. `agg="none"`도 `ROW_SAMPLE`로 함께 저장·실행하며 JOIN과도 함께 저장한다. JSONB라 스키마 마이그레이션 없음 |
 | 포인트 지도 좌표 방식 | 🧩 | `builder_config.geoPoint={mode:"columns"}` 또는 `{mode:"spatial",spatialColumn,sizeColumn?}`. 공간 타입은 pg_catalog에서 파생하고 좌표값은 실행 시 변환하므로 별도 DB 컬럼·마이그레이션 없음 |
 | 생성된 SQL 보기 | 📦 | `mc_chart.sql_query` (builder에서 서버 재생성·리터럴화, 빈 문자열 DB CHECK 차단) |
-| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v6(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
+| [실행 결과] 탭(집계) | ⏳/🔁 | 미리보기=⏳(run-builder) / 저장 차트=🔁 `mc_chart_cache.result`; sample 설정이 있으면 sampling v7(스펙 `mode/requestedMethod/rate?/sizeTarget?/seed` + 실행 `method/valueMode/sampleSize/sampledRowCount/groups/estimates[].treatment/intervals/warnings`) 보존. 캐시 스키마는 JSONB라 DDL 변경 없음 |
 | [원본 데이터] 탭(raw) | ⏳ | 기준 관계 클릭=schema preview, 구성 변경 후 탭 열기=run-builder `mode:rows` 지연 호출. [실행]과 동시 중복 조회하지 않으며 저장 안 함 |
 | 실행 메타 "N행·Nms" | 🔁 | `mc_chart_cache.row_count`·`elapsed_ms` (또는 ⏳ 미리보기) |
 
@@ -216,7 +220,7 @@ mc_chart 1───1 mc_chart_cache        (차트 삭제 시 CASCADE)
 JSONB라도 키는 코드 레지스트리로 고정된다 — 임의 키가 아니다.
 - `mc_chart.options` ↔ `chart-options/optionRegistry.ts` (`OptionDef.key`) ↔ PRD 9.2. 변환 규칙은 `docs/변환기_매핑스펙_차트옵션.md`.
 - `mc_chart.builder_config` ↔ `docs/노코드_SQL생성규칙.md` 2장 스키마. 검증은 생성규칙 9장.
-- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `agg="none" + 집계 혼합` 금지는 애플리케이션 계층 책임이다. `agg="none" + sample`은 `ROW_SAMPLE`, `joins[] + sample`은 sampling v6 RESULT_RANDOM의 정상 조합이다.
+- 검증: 두 JSONB는 **서버에서 화이트리스트 검증 후 저장**(임의 식별자·옵션 차단). `agg="none" + 집계 혼합` 금지는 애플리케이션 계층 책임이다. `agg="none" + sample`은 `ROW_SAMPLE`, `joins[] + sample`은 sampling v7 RESULT_RANDOM의 정상 조합이다.
 
 ## 5. 인덱스 (실제 쿼리 패턴 기준)
 
