@@ -42,6 +42,13 @@ management:
       application: chartsdk-server
 
 chartsdk:
+  sampling-cache:
+    default-max-age-seconds: ${SAMPLE_CACHE_DEFAULT_MAX_AGE_SECONDS:900}
+    hard-ttl-seconds: ${SAMPLE_CACHE_HARD_TTL_SECONDS:86400}
+    max-entry-bytes: ${SAMPLE_CACHE_MAX_ENTRY_BYTES:67108864}
+    max-datasource-bytes: ${SAMPLE_CACHE_MAX_DATASOURCE_BYTES:134217728}
+    max-total-bytes: ${SAMPLE_CACHE_MAX_TOTAL_BYTES:536870912}
+    max-concurrent-builds: ${SAMPLE_CACHE_MAX_CONCURRENT_BUILDS:2}
   embed:
     jwt-secret: ${CHARTSDK_EMBED_JWT_SECRET:dev-chartsol-embed-secret-change-me}
   datasource:
