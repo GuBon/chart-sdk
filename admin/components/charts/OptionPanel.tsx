@@ -37,7 +37,6 @@ import { seriesDisplayNames } from '@chartsdk/chart-options/fieldDisplayNames';
 import type { MapViewport, MapViewportMode } from '@chartsdk/chart-options/geo';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { chartTypeLabel } from '@/lib/chartTypes';
 import type { MapViewportSession } from '@/lib/mapViewportSession';
 import { OptionControl, TypographyPolicy, autoTypographySizeOf } from './OptionControl';
 import { MapViewportControl } from './MapViewportControl';
@@ -113,7 +112,6 @@ export function OptionPanel({
   const [query, setQuery] = useState('');
   const [activeTabByType, setActiveTabByType] = useState<Partial<Record<MajorType, OptionEditorTab>>>({});
   const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
-  const [resetNotice, setResetNotice] = useState<{ message: string; prevType: MajorType; prevOptions: Options } | null>(null);
 
   const disabled = !hasResult;
   // 이동평균이 켜진 시간축 선 차트는 변환기가 시간 오름차순을 강제하므로 정렬 선택이 결과에 반영되지 않는다.
@@ -273,13 +271,8 @@ export function OptionPanel({
   };
   const changeType = (nextType: MajorType) => {
     if (nextType === chartType) return;
-    const previousType = chartType;
-    const previousOptions = structuredClone(options);
-    const { next, removedKeys } = switchMajor(options, chartType, nextType);
+    const { next } = switchMajor(options, chartType, nextType);
     onChangeChartType(nextType, next);
-    setResetNotice(removedKeys.length > 0
-      ? { message: `${chartTypeLabel(previousType)} 전용 설정이 초기화되었습니다.`, prevType: previousType, prevOptions: previousOptions }
-      : null);
   };
   const setActiveTab = (tab: OptionEditorTab) => {
     setActiveTabByType((previous) => ({ ...previous, [chartType]: tab }));
@@ -322,17 +315,6 @@ export function OptionPanel({
       <div className="px-4 pb-2">
         <Input id="option-search" name="optionSearch" icon={<Search className="size-3.5" />} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="옵션 검색" size="sm" disabled={disabled} />
         {disabled && <p className="mt-2 text-xs text-text-tertiary">실행하면 옵션을 변경할 수 있습니다.</p>}
-        {resetNotice && (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-muted px-2.5 py-2 text-xs text-text-secondary">
-            <span>{resetNotice.message}</span>
-            <button type="button" className="shrink-0 font-medium text-text-primary hover:underline" onClick={() => {
-              onChangeChartType(resetNotice.prevType, resetNotice.prevOptions);
-              setResetNotice(null);
-            }}>
-              실행 취소
-            </button>
-          </div>
-        )}
       </div>
 
       <div
