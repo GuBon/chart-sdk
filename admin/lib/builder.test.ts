@@ -3,12 +3,16 @@ import type { BuilderConfig, SchemaTable, TableRef } from '@/lib/api';
 import {
   activeTables,
   aggChoicesForChart,
+  assignDataPanelColumn,
   builderExecutionIssue,
   builderValidationIssue,
   builderWarning,
+  canAssignDataPanelColumn,
   columnType,
   columnsForBuilder,
   createSampleConfig,
+  dataPanelColumnRef,
+  dataPanelColumnSelectionIssue,
   emptyBuilder,
   emptyJoin,
   hasJoins,
@@ -240,6 +244,86 @@ describe('columnsForBuilder', () => {
     expect(values).toContain('users.name');
     expect(values).toContain('users_2.tier');
     expect(values).not.toContain('name'); // bare 는 조인 모드에서 나오지 않는다
+  });
+});
+
+describe('데이터 패널 컬럼 배치', () => {
+  it('활성 원본 컬럼 클릭은 X축에 배치하고 날짜 기본 묶기를 함께 적용한다', () => {
+    const config = bar({ xAxis: null, xAxisBucket: null });
+    const next = assignDataPanelColumn(config, 'bar', SALES, 'date', { kind: 'x' });
+
+    expect(next).toMatchObject({ xAxis: 'date', xAxisBucket: 'month' });
+    expect(next?.yAxis).toEqual(config.yAxis);
+  });
+
+  it('값 추가 대상이 있으면 해당 Y축만 교체한다', () => {
+    const config = bar({
+      yAxis: [
+        { column: 'amount', agg: 'sum' },
+        { column: 'id', agg: 'sum' },
+      ],
+    });
+    const next = assignDataPanelColumn(config, 'line', SALES, 'customer_id', { kind: 'y', index: 1 });
+
+    expect(next?.xAxis).toBe(config.xAxis);
+    expect(next?.yAxis).toEqual([
+      { column: 'amount', agg: 'sum' },
+      { column: 'customer_id', agg: 'sum' },
+    ]);
+  });
+
+  it('새 값 선택 대상은 컬럼을 고르는 순간 Y축을 추가하고 기존 기본 집계를 이어받는다', () => {
+    const empty = bar({ yAxis: [] });
+    const first = assignDataPanelColumn(empty, 'bar', SALES, 'amount', { kind: 'y', index: 0 });
+    expect(first?.yAxis).toEqual([{ column: 'amount', agg: 'none' }]);
+
+    const sampled = bar({ sample: { mode: 'auto' }, yAxis: [] });
+    expect(assignDataPanelColumn(sampled, 'bar', SALES, 'amount', { kind: 'y', index: 0 })?.yAxis)
+      .toEqual([{ column: 'amount', agg: 'sum' }]);
+
+    const second = assignDataPanelColumn(bar(), 'bar', SALES, 'id', { kind: 'y', index: 1 });
+    expect(second?.yAxis[1]).toEqual({ column: 'id', agg: 'sum' });
+  });
+
+  it('조인 구성은 클릭한 활성 테이블의 저장 핸들로 컬럼을 한정한다', () => {
+    const config = crossJoin();
+
+    expect(dataPanelColumnRef(config, USERS1, 'name')).toBe('users.name');
+    expect(dataPanelColumnRef(config, USERS2, 'tier')).toBe('users_2.tier');
+    expect(assignDataPanelColumn(config, 'bar', USERS2, 'id', { kind: 'y', index: 0 })?.yAxis[0].column)
+      .toBe('users_2.id');
+  });
+
+  it('비활성 테이블·없는 Y 슬롯·포인트 지도의 비숫자 컬럼은 사유와 함께 선택 불가로 판정한다', () => {
+    const point = bar({
+      xAxis: 'amount',
+      yAxis: [{ column: 'id', agg: 'none' }],
+      geoPoint: { mode: 'columns' },
+    });
+
+    expect(canAssignDataPanelColumn(point, 'geoscatter', EVENTS, 'value', { kind: 'x' })).toBe(false);
+    expect(canAssignDataPanelColumn(point, 'geoscatter', SALES, 'category', { kind: 'x' })).toBe(false);
+    expect(canAssignDataPanelColumn(point, 'geoscatter', SALES, 'amount', { kind: 'x' })).toBe(true);
+    expect(assignDataPanelColumn(point, 'geoscatter', SALES, 'amount', { kind: 'y', index: 3 })).toBeNull();
+    expect(dataPanelColumnSelectionIssue(point, 'geoscatter', EVENTS, 'value', { kind: 'x' }))
+      .toContain('현재 원본 또는 JOIN');
+    expect(dataPanelColumnSelectionIssue(point, 'geoscatter', SALES, 'category', { kind: 'x' }))
+      .toContain('숫자 컬럼');
+    expect(dataPanelColumnSelectionIssue(point, 'geoscatter', SALES, 'amount', { kind: 'x' })).toBeNull();
+    expect(dataPanelColumnSelectionIssue(point, 'geoscatter', SALES, 'amount', { kind: 'y', index: 3 }))
+      .toBe('선택할 Y축이 올바르지 않습니다.');
+  });
+
+  it('공간 geometry 입력 모드에서는 숨겨진 X/Y축을 데이터 패널 클릭으로 변경하지 않는다', () => {
+    const spatial = bar({
+      xAxis: null,
+      yAxis: [],
+      geoPoint: { mode: 'spatial', spatialColumn: 'location' },
+    });
+
+    expect(assignDataPanelColumn(spatial, 'geoscatter', SALES, 'amount', { kind: 'x' })).toBeNull();
+    expect(dataPanelColumnSelectionIssue(spatial, 'geoscatter', SALES, 'amount', { kind: 'x' }))
+      .toContain('공간 Point 모드');
   });
 });
 

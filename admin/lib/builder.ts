@@ -199,6 +199,142 @@ export function columnsForBuilder(cfg: BuilderConfig, tables: SchemaTable[]): { 
   );
 }
 
+/** 데이터 패널 컬럼 클릭이 배치될 빌더 필드. 기본 클릭은 X축, 값 추가 직후에는 해당 Y축이다. */
+export type DataPanelColumnTarget = { kind: 'x' } | { kind: 'y'; index: number };
+
+/**
+ * 데이터 패널의 물리 컬럼을 현재 빌더가 사용하는 참조 형식으로 바꾼다.
+ * 활성 원본/조인 테이블만 허용하며, 조인이 있으면 저장된 테이블 핸들로 한정한다.
+ */
+export function dataPanelColumnRef(
+  cfg: BuilderConfig,
+  table: Pick<SchemaTable, 'datasourceId' | 'schema' | 'name' | 'columns'>,
+  columnName: string,
+): string | null {
+  if (!table.columns.some((column) => column.name === columnName)) return null;
+  return activeDataPanelColumnRef(cfg, table, columnName);
+}
+
+function activeDataPanelColumnRef(
+  cfg: BuilderConfig,
+  table: Pick<SchemaTable, 'datasourceId' | 'schema' | 'name'>,
+  columnName: string,
+): string | null {
+  const activeTable = activeTables(cfg).find((ref) => tableRefKey(ref) === tableRefKey(table));
+  if (!activeTable) return null;
+  return hasJoins(cfg) ? `${tableHandle(activeTable)}.${columnName}` : columnName;
+}
+
+type DataPanelColumnEvaluation = {
+  assignment: { ref: string; column: SchemaTable['columns'][number] } | null;
+  issue: string | null;
+};
+
+function evaluateDataPanelColumn(
+  cfg: BuilderConfig,
+  chartType: ChartType,
+  table: SchemaTable,
+  columnName: string,
+  target: DataPanelColumnTarget,
+): DataPanelColumnEvaluation {
+  const column = table.columns.find((candidate) => candidate.name === columnName);
+  if (!column) return { assignment: null, issue: '컬럼 정보를 찾을 수 없습니다.' };
+  const ref = column ? activeDataPanelColumnRef(cfg, table, columnName) : null;
+  if (!ref) {
+    return {
+      assignment: null,
+      issue: '현재 원본 또는 JOIN에 포함된 테이블의 컬럼만 축에 사용할 수 있습니다.',
+    };
+  }
+
+  const pointInput = usesGeoPointInput(cfg, chartType);
+  const spatialPoint = pointInput && cfg.geoPoint?.mode === 'spatial';
+  const spatialArea = chartType === 'map'
+    && geoSeriesTypeFor(cfg, chartType) === 'map'
+    && cfg.geoArea?.mode === 'spatial';
+  if (spatialPoint) {
+    return {
+      assignment: null,
+      issue: '공간 Point 모드에서는 X/Y축 대신 공간 Point 컬럼을 사용합니다.',
+    };
+  }
+  if (spatialArea) {
+    return {
+      assignment: null,
+      issue: '공간 Polygon 모드에서는 X/Y축 대신 경계·이름·값 컬럼을 사용합니다.',
+    };
+  }
+  if (pointInput && !isNumericType(column.type)) {
+    const coordinate = target.kind === 'x' ? '경도(X)' : '위도(Y)';
+    return {
+      assignment: null,
+      issue: `포인트 지도의 ${coordinate}에는 숫자 컬럼만 사용할 수 있습니다.`,
+    };
+  }
+  if (target.kind === 'y' && (target.index < 0 || target.index > cfg.yAxis.length)) {
+    return { assignment: null, issue: '선택할 Y축이 올바르지 않습니다.' };
+  }
+  return { assignment: { ref, column }, issue: null };
+}
+
+/** 데이터 패널 컬럼을 현재 X/Y 대상에 배치할 수 없는 이유. null이면 클릭 가능하다. */
+export function dataPanelColumnSelectionIssue(
+  cfg: BuilderConfig,
+  chartType: ChartType,
+  table: SchemaTable,
+  columnName: string,
+  target: DataPanelColumnTarget,
+): string | null {
+  return evaluateDataPanelColumn(cfg, chartType, table, columnName, target).issue;
+}
+
+/** 렌더 단계에서 컬럼 버튼을 노출할지 검사한다. 상태 객체를 복제하지 않는 경량 경로다. */
+export function canAssignDataPanelColumn(
+  cfg: BuilderConfig,
+  chartType: ChartType,
+  table: SchemaTable,
+  columnName: string,
+  target: DataPanelColumnTarget,
+): boolean {
+  return evaluateDataPanelColumn(cfg, chartType, table, columnName, target).assignment != null;
+}
+
+/**
+ * 데이터 패널 컬럼을 X/Y에 배치한다. 화면의 셀렉트와 같은 제약을 적용하고,
+ * 공간 geometry 입력 모드처럼 X/Y가 숨겨진 구성에서는 상태를 바꾸지 않는다.
+ */
+export function assignDataPanelColumn(
+  cfg: BuilderConfig,
+  chartType: ChartType,
+  table: SchemaTable,
+  columnName: string,
+  target: DataPanelColumnTarget,
+): BuilderConfig | null {
+  const assignment = evaluateDataPanelColumn(cfg, chartType, table, columnName, target).assignment;
+  if (!assignment) return null;
+  const { column, ref } = assignment;
+
+  if (target.kind === 'y') {
+    if (target.index === cfg.yAxis.length) {
+      const agg = cfg.yAxis[0]?.agg
+        ?? (cfg.sample ? (isNumericType(column.type) ? 'sum' : 'count') : 'none');
+      return { ...cfg, yAxis: [...cfg.yAxis, { column: ref, agg }] };
+    }
+    return {
+      ...cfg,
+      yAxis: cfg.yAxis.map((field, index) =>
+        index === target.index ? { ...field, column: ref } : field),
+    };
+  }
+
+  const hideBucket = chartType === 'scatter' || chartType === 'boxplot' || usesGeoPointInput(cfg, chartType);
+  return {
+    ...cfg,
+    xAxis: ref,
+    xAxisBucket: isDateType(column.type) && !hideBucket ? 'month' : null,
+  };
+}
+
 /** 현재 데이터 카탈로그와 차트 스냅샷을 사용해 컬럼 참조의 표시 이름을 해석한다. */
 export function fieldDisplayNameForRef(
   ref: string | null | undefined,

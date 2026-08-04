@@ -27,11 +27,20 @@ interface Props {
   tables: SchemaTable[];
   datasourceId: number | null;
   selectedTable: string | null;
-  selection: { label: string } | null;
+  baseTableKey: string | null;
+  selection: {
+    label: string;
+    cancelLabel: string;
+    focusSearch?: boolean;
+    expandTableKey?: string | null;
+  } | null;
   disabledTableKeys: Set<string>;
   focusRequestKey: number;
+  columnTargetLabel: string;
   onChangeDatasource: (id: number) => void;
   onSelectTable: (table: SchemaTable) => void;
+  columnSelectionIssue: (table: SchemaTable, column: SchemaTable['columns'][number]) => string | null;
+  onSelectColumn: (table: SchemaTable, column: SchemaTable['columns'][number]) => void;
   onCancelSelection: () => void;
   onCollapse: () => void;
 }
@@ -55,11 +64,15 @@ export function SchemaExplorer({
   tables,
   datasourceId,
   selectedTable,
+  baseTableKey,
   selection,
   disabledTableKeys,
   focusRequestKey,
+  columnTargetLabel,
   onChangeDatasource,
   onSelectTable,
+  columnSelectionIssue,
+  onSelectColumn,
   onCancelSelection,
   onCollapse,
 }: Props) {
@@ -74,11 +87,17 @@ export function SchemaExplorer({
 
   // 현재 소스의 스키마 목록(데이터에서 유도). 1개뿐이면 필터 섹션을 숨긴다.
   const schemas = [...new Set(tables.map((t) => t.schema))];
+  const pinnedBaseTable = baseTableKey
+    ? tables.find((table) => tableRefKey(table) === baseTableKey)
+    : undefined;
+  const unpinnedTables = pinnedBaseTable
+    ? tables.filter((table) => tableRefKey(table) !== baseTableKey)
+    : tables;
 
   const q = query.toLowerCase().trim();
-  // 검색은 전체 테이블 대상(페이지 밖도 포함) — 표시만 이후 단계에서 자른다.
+  // 원본 테이블은 검색·정렬·페이지와 분리해 항상 첫 행에 고정하고, 나머지 목록만 검색한다.
   const searched = q
-    ? tables.filter(
+    ? unpinnedTables.filter(
         (t) =>
           t.name.toLowerCase().includes(q) ||
           t.displayName?.toLowerCase().includes(q) ||
@@ -86,7 +105,7 @@ export function SchemaExplorer({
           t.columns.some((c) =>
             c.name.toLowerCase().includes(q) || c.displayName?.toLowerCase().includes(q)),
       )
-    : tables;
+    : unpinnedTables;
   // 스키마 필터(팝오버) — 검색과 독립 적용.
   const filtered = schemaFilter ? searched.filter((t) => t.schema === schemaFilter) : searched;
 
@@ -102,17 +121,29 @@ export function SchemaExplorer({
         });
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const pageClamped = Math.min(Math.max(1, page), totalPages);
-  const pageItems = sorted.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE);
+  const pageItems = [
+    ...(pinnedBaseTable ? [pinnedBaseTable] : []),
+    ...sorted.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE),
+  ];
 
   // 검색·정렬·소스 변경 시 1페이지로 리셋.
   useEffect(() => setPage(1), [query, sort, schemaFilter, datasourceId, nameMode]);
   // 소스가 바뀌면 이전 소스의 스키마 필터는 무효 — 전체로 리셋.
   useEffect(() => setSchemaFilter(null), [datasourceId]);
   useEffect(() => {
-    if (!selection || focusRequestKey <= 0) return;
+    if (!selection?.focusSearch || focusRequestKey <= 0) return;
     searchRef.current?.focus();
     searchRef.current?.select();
   }, [focusRequestKey, selection]);
+  useEffect(() => {
+    const key = selection?.expandTableKey;
+    if (!key) return;
+    setExpanded((previous) => previous.has(key) ? previous : new Set(previous).add(key));
+  }, [selection?.expandTableKey]);
+  useEffect(() => {
+    if (!baseTableKey) return;
+    setExpanded((previous) => previous.has(baseTableKey) ? previous : new Set(previous).add(baseTableKey));
+  }, [baseTableKey]);
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -168,7 +199,7 @@ export function SchemaExplorer({
             </p>
             <button
               type="button"
-              aria-label="테이블 선택 취소"
+              aria-label={selection.cancelLabel}
               onClick={onCancelSelection}
               className="rounded p-0.5 text-blue-700 hover:bg-blue-100 hover:text-blue-900"
             >
@@ -242,6 +273,7 @@ export function SchemaExplorer({
             const key = tableRefKey(t);
             const open = expanded.has(key);
             const active = selectedTable === key;
+            const baseTable = baseTableKey === key;
             const unavailable = !isRelationSelectable(t);
             const alreadyUsed = disabledTableKeys.has(key);
             const disabled = unavailable || alreadyUsed;
@@ -254,6 +286,8 @@ export function SchemaExplorer({
               <div key={key}>
                 <button
                   type="button"
+                  data-testid={`schema-table-${key}`}
+                  data-base-table={baseTable || undefined}
                   onClick={() => selectTable(t)}
                   disabled={disabled}
                   title={
@@ -266,8 +300,14 @@ export function SchemaExplorer({
                           : '원본 테이블로 선택'
                   }
                   className={cn(
-                    'flex w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50',
-                    active ? 'bg-blue-50 font-medium text-blue-900 ring-1 ring-inset ring-primary/30' : 'text-text-primary',
+                    'flex w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md px-1.5 py-1 text-left text-[13px] hover:bg-muted disabled:cursor-not-allowed',
+                    baseTable
+                      ? 'bg-blue-100 text-blue-950 ring-1 ring-inset ring-primary/40'
+                      : active
+                        ? 'bg-blue-50 text-blue-900 ring-1 ring-inset ring-primary/30'
+                        : 'text-text-primary',
+                    disabled && !baseTable && 'opacity-50',
+                    baseTable ? 'font-bold' : active ? 'font-medium' : 'font-normal',
                   )}
                 >
                   <span
@@ -281,7 +321,7 @@ export function SchemaExplorer({
                   </span>
                   <Table2 className="size-3.5 shrink-0 text-text-secondary" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate" title={relationPrimary}>{relationPrimary}</span>
+                    <span className={cn('block truncate', baseTable && 'font-bold')} title={relationPrimary}>{relationPrimary}</span>
                     {relationSecondary && (
                       <span className="block truncate text-[10px] font-normal text-text-tertiary" title={relationSecondary}>
                         {relationSecondary}
@@ -305,14 +345,37 @@ export function SchemaExplorer({
                     const secondary = c.displayName
                       ? nameMode === 'display' ? c.name : c.displayName
                       : null;
+                    const selectionIssue = columnSelectionIssue(t, c);
+                    const selectable = selectionIssue == null;
+                    const content = (
+                      <>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-text-primary" title={primary}>{primary}</span>
+                          {secondary && <span className="block truncate text-[10px] text-text-tertiary">{secondary}</span>}
+                        </span>
+                        <span className="shrink-0 text-xs text-text-tertiary">{c.type}</span>
+                      </>
+                    );
                     return (
-                    <div key={c.name} className="flex items-center gap-2 py-1 pl-9 pr-2 text-[13px]">
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-text-primary" title={primary}>{primary}</span>
-                        {secondary && <span className="block truncate text-[10px] text-text-tertiary">{secondary}</span>}
-                      </span>
-                      <span className="shrink-0 text-xs text-text-tertiary">{c.type}</span>
-                    </div>
+                      <button
+                        key={c.name}
+                        type="button"
+                        data-testid={`schema-column-${key}-${c.name}`}
+                        aria-label={selectable
+                          ? `${primary} 컬럼을 ${columnTargetLabel}에 사용`
+                          : `${primary} 컬럼 사용 불가: ${selectionIssue}`}
+                        title={selectable ? `${columnTargetLabel}에 사용` : selectionIssue}
+                        disabled={!selectable}
+                        onClick={() => onSelectColumn(t, c)}
+                        className={cn(
+                          'group flex w-full items-center gap-1.5 rounded border border-transparent py-0.5 pl-7 pr-1.5 text-left text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                          selectable
+                            ? 'cursor-pointer hover:border-primary/20 hover:bg-blue-50'
+                            : 'cursor-not-allowed opacity-55',
+                        )}
+                      >
+                        {content}
+                      </button>
                     );
                   })}
               </div>

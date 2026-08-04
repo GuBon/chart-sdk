@@ -30,6 +30,7 @@ import {
   tableHandle,
   tableRefKey,
   updateSampleMode,
+  type DataPanelColumnTarget,
 } from '@/lib/builder';
 import { DEFAULT_SAMPLE_SEED, DEFAULT_SAMPLE_SIZE, MAX_SAMPLE_SIZE, MIN_SAMPLE_SIZE, isFullScanTable } from '@chartsdk/chart-options/sampling';
 import { Select } from '@/components/ui/Select';
@@ -54,7 +55,9 @@ interface Props {
   tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
   datasources: Datasource[];
   tableSelectionTarget: TableSelectionTarget | null;
+  axisColumnSelectionTarget: DataPanelColumnTarget | null;
   onRequestTableSelection: (target: TableSelectionTarget) => void;
+  onRequestAxisColumnSelection: (target: DataPanelColumnTarget) => void;
   onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
@@ -64,7 +67,7 @@ interface Props {
   onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, onRequestTableSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, axisColumnSelectionTarget, onRequestTableSelection, onRequestAxisColumnSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -102,8 +105,8 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const warning = builderWarning(config);
   const canRun = !executionIssue;
   const firstCol = (pointInput ? numericOptions[0] : colOptions[0])?.value ?? '';
-  const firstValueCol = numericOptions[0]?.value ?? colOptions[0]?.value ?? '';
-  const firstValueType = colOptions.find((column) => column.value === firstValueCol)?.type;
+  const pendingNewYAxis = axisColumnSelectionTarget?.kind === 'y'
+    && axisColumnSelectionTarget.index === config.yAxis.length;
 
   const patch = (p: Partial<BuilderConfig>) => onChange({ ...config, ...p });
 
@@ -115,30 +118,17 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     ? [config.table.schema, config.table.name].filter(Boolean).join('.')
     : '원본 테이블을 선택하세요';
 
-  const changeXAxis = (xAxis: string) => {
-    const isDate = isDateType(colOptions.find((c) => c.value === xAxis)?.type);
-    const nextXAxis = xAxis || null;
+  const clearXAxis = () => {
     patch({
-      xAxis: nextXAxis,
-      xAxisBucket: isDate && !hideBucket ? 'month' : null,
-      orderBy: !nextXAxis && config.yAxis.length === 0 ? null : config.orderBy,
+      xAxis: null,
+      xAxisBucket: null,
+      orderBy: config.yAxis.length === 0 ? null : config.orderBy,
     });
   };
 
   const setY = (i: number, p: Partial<YAxisField>) =>
     patch({ yAxis: config.yAxis.map((y, idx) => (idx === i ? { ...y, ...p } : y)) });
-  const addY = () => patch({
-    yAxis: [
-      ...config.yAxis,
-      {
-        column: firstValueCol,
-        // 기존 값 축이 있으면 같은 집계 방식을 이어 받아 원본값·집계값 혼합 오류를 피한다.
-        // 값 축이 비어 있는 표본 구성은 종전과 같이 숫자=sum, 그 외=count로 시작한다.
-        agg: config.yAxis[0]?.agg
-          ?? (config.sample ? (isNumericType(firstValueType) ? 'sum' : 'count') : 'none'),
-      },
-    ],
-  });
+  const addY = () => onRequestAxisColumnSelection({ kind: 'y', index: config.yAxis.length });
   const removeY = (i: number) => {
     const yAxis = config.yAxis.filter((_, idx) => idx !== i);
     patch({ yAxis, orderBy: !config.xAxis && yAxis.length === 0 ? null : config.orderBy });
@@ -243,7 +233,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
       {/* 구성 헤더 + 내부 정의 모드 탭 */}
       <div className="border-b border-border">
         <div className="flex h-12 items-center gap-3 px-4">
-          <span className="min-w-0 truncate text-sm font-medium text-text-primary" title={baseTableLabel}>
+          <span className={cn('min-w-0 truncate text-sm text-text-primary', config.table ? 'font-bold' : 'font-medium')} title={baseTableLabel}>
             {baseTableLabel}
           </span>
           <div className="flex-1" />
@@ -465,8 +455,19 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         )}
 
         {!spatialGeometry && <Row label={xLabel}>
-          <div className="w-60">
-            <Select id="builder-x-axis" aria-label="X축" value={config.xAxis ?? ''} onChange={(e) => changeXAxis(e.target.value)} options={pointInput ? numericOptions : colOptions} placeholder={areaInput ? '지역명 컬럼' : '컬럼 선택'} />
+          <div className="flex items-center gap-2">
+            <ColumnSelectionField
+              testId="builder-x-axis"
+              label={xLabel}
+              valueLabel={colOptions.find((column) => column.value === config.xAxis)?.label ?? config.xAxis}
+              active={axisColumnSelectionTarget?.kind === 'x'}
+              onClick={() => onRequestAxisColumnSelection({ kind: 'x' })}
+            />
+            {config.xAxis && (
+              <button type="button" aria-label={`${xLabel} 컬럼 제거`} onClick={clearXAxis} className="text-text-tertiary hover:text-danger">
+                <X className="size-3.5" />
+              </button>
+            )}
           </div>
           {areaInput && <span className="text-[13px] text-text-tertiary">지역 정식 명칭 컬럼(예: 서울특별시)</span>}
           {pointInput && <span className="text-[13px] text-text-tertiary">WGS84 경도 숫자 컬럼 — 위도는 아래에서 선택합니다</span>}
@@ -489,9 +490,14 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           <div className="flex flex-col gap-2">
             {config.yAxis.map((y, i) => (
               <div key={i} className="flex items-center gap-2">
-                <div className="w-44">
-                  <Select id={`builder-y-column-${i}`} name={`builderYColumn${i}`} value={y.column} onChange={(e) => setY(i, { column: e.target.value })} options={pointInput ? numericOptions : colOptions} placeholder="컬럼" />
-                </div>
+                <ColumnSelectionField
+                  testId={`builder-y-column-${i}`}
+                  label={`Y축 ${i + 1}`}
+                  valueLabel={colOptions.find((column) => column.value === y.column)?.label ?? y.column}
+                  active={axisColumnSelectionTarget?.kind === 'y' && axisColumnSelectionTarget.index === i}
+                  compact
+                  onClick={() => onRequestAxisColumnSelection({ kind: 'y', index: i })}
+                />
                 <div className="w-36">
                   <Select
                     id={`builder-y-agg-${i}`}
@@ -517,8 +523,20 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                 </button>
               </div>
             ))}
+            {pendingNewYAxis && (
+              <div data-testid="pending-y-axis-selector">
+                <ColumnSelectionField
+                  testId={`builder-y-column-${config.yAxis.length}`}
+                  label={`Y축 ${config.yAxis.length + 1}`}
+                  valueLabel={null}
+                  active
+                  compact
+                  onClick={() => onRequestAxisColumnSelection({ kind: 'y', index: config.yAxis.length })}
+                />
+              </div>
+            )}
             <div className="flex items-center gap-3">
-              <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || config.yAxis.length >= maxSeries}>
+              <Button id="builder-add-series" variant="secondary" size="sm" className="h-7" onClick={addY} disabled={!config.table || pendingNewYAxis || config.yAxis.length >= maxSeries}>
                 + 값 추가
               </Button>
             </div>
@@ -735,6 +753,48 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         )}
       </div>
     </div>
+  );
+}
+
+function ColumnSelectionField({
+  testId,
+  label,
+  valueLabel,
+  active,
+  compact = false,
+  onClick,
+}: {
+  testId: string;
+  label: string;
+  valueLabel: string | null | undefined;
+  active: boolean;
+  compact?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      id={testId}
+      type="button"
+      data-testid={testId}
+      aria-label={`${label} 컬럼 ${valueLabel ? '변경' : '선택'}`}
+      aria-pressed={active}
+      onClick={onClick}
+      title={valueLabel || `${label} 컬럼 선택`}
+      className={cn(
+        'relative flex h-8 items-center rounded-md border bg-bg-panel pl-3 text-left text-[13px] text-text-primary outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/20',
+        compact ? 'w-44' : 'w-60',
+        active ? 'border-primary pr-16 ring-2 ring-primary/15' : 'border-border pr-9',
+      )}
+    >
+      <span className={cn('min-w-0 flex-1 truncate whitespace-nowrap', !valueLabel && 'text-text-tertiary')}>
+        {valueLabel || '데이터 패널에서 컬럼 선택'}
+      </span>
+      {active ? (
+        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium text-primary">선택 중</span>
+      ) : (
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-secondary" />
+      )}
+    </button>
   );
 }
 

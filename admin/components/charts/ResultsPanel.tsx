@@ -36,7 +36,7 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTable
           <Tab label="실행 결과" active={tab === 'result'} onClick={() => onTab('result')} />
         </div>
         {tab === 'raw' && rawTableLabel && (
-          <span className="min-w-0 truncate text-xs text-text-secondary" title={rawTableLabel}>{rawTableLabel}</span>
+          <span className="min-w-0 truncate text-xs font-bold text-text-secondary" title={rawTableLabel}>{rawTableLabel}</span>
         )}
         {active && (
           <span className="text-xs text-text-tertiary">

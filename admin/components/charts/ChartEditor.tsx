@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronUp, ChevronsRight, Plus, RotateCcw } from 'lucide-react';
 import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
@@ -10,8 +10,10 @@ import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, GeoSeriesType, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
 import {
   activeTables,
+  assignDataPanelColumn,
   builderExecutionIssue,
   builderValidationIssue,
+  dataPanelColumnSelectionIssue,
   emptyBuilder,
   emptyJoin,
   isTableQueryMode,
@@ -21,6 +23,7 @@ import {
   tableRefKey,
   withFieldDisplayNameSnapshots,
   withUniqueHandle,
+  type DataPanelColumnTarget,
 } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import { chartSaveIssue } from '@/lib/chartSave';
@@ -247,6 +250,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [toast, setToast] = useState<string | null>(null);
   const [pendingBaseTable, setPendingBaseTable] = useState<SchemaTable | null>(null);
   const [tableSelectionTarget, setTableSelectionTarget] = useState<TableSelectionTarget | null>(null);
+  const [axisColumnSelectionTarget, setAxisColumnSelectionTarget] = useState<DataPanelColumnTarget | null>(null);
   const [tableSelectionFocusKey, setTableSelectionFocusKey] = useState(0);
   const [leavePath, setLeavePath] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
@@ -325,6 +329,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     if (chartId == null) return;
     let cancelled = false;
     setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
     setInitialPreviewLoading(true);
     setInitialPreviewError(null);
     setComputedAt(null);
@@ -553,6 +558,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   const requestTableSelection = (target: TableSelectionTarget) => {
     setPendingBaseTable(null);
+    setAxisColumnSelectionTarget(null);
     setTableSelectionTarget(target);
 
     const currentRef = target.kind === 'join'
@@ -569,16 +575,33 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setTableSelectionTarget(null);
   };
 
+  const requestAxisColumnSelection = (target: DataPanelColumnTarget) => {
+    if (target.kind === 'y' && (target.index < 0 || target.index > builder.yAxis.length)) return;
+    setPendingBaseTable(null);
+    setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(target);
+    if (!activeTables(builder).some((table) => table.datasourceId === datasourceId) && builder.table) {
+      setDatasourceId(builder.table.datasourceId);
+    }
+    setLeftCollapsed(false);
+  };
+
+  const cancelExplorerSelection = useCallback(() => {
+    setPendingBaseTable(null);
+    setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
+  }, []);
+
   useEffect(() => {
-    if (!tableSelectionTarget) return;
+    if (!tableSelectionTarget && axisColumnSelectionTarget == null) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      cancelTableSelection();
+      cancelExplorerSelection();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [tableSelectionTarget]);
+  }, [axisColumnSelectionTarget, cancelExplorerSelection, tableSelectionTarget]);
 
   const applyBuilderChange = (next: BuilderConfig) => {
     const normalized = withFieldDisplayNameSnapshots(
@@ -594,6 +617,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }
     setBuilder(normalized);
     setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
     setDirty(true);
     resetResults();
     // X/Y·계열·표본 설정은 원본 행 SQL을 바꾸지 않는다. 이 경우 실행 전까지 현재 원본
@@ -631,6 +655,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name },
     });
     setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
     resetResults();
     setDirty(true);
     // 원본 미리보기는 부가 기능 — 실패해도 테이블 선택은 유지(미처리 rejection·크래시 방지).
@@ -684,11 +709,28 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       : builder.table
         ? tableRefKey(builder.table)
         : null;
+  const baseTableKey = builder.table ? tableRefKey(builder.table) : null;
+  const pendingAxisColumnTarget = axisColumnSelectionTarget?.kind === 'x'
+    || (axisColumnSelectionTarget?.kind === 'y' && axisColumnSelectionTarget.index <= builder.yAxis.length)
+    ? axisColumnSelectionTarget
+    : null;
+  const dataPanelColumnTarget = pendingAxisColumnTarget ?? { kind: 'x' as const };
+  const columnTargetLabel = dataPanelColumnTarget.kind === 'y'
+    ? `Y축 ${dataPanelColumnTarget.index + 1}`
+    : 'X축';
+  const columnSelectionExpandKey = pendingAxisColumnTarget
+    ? activeTables(builder).find((table) => table.datasourceId === datasourceId)
+    : null;
   const disabledTableKeys = new Set(
     activeTables(builder)
       .map(tableRefKey)
       .filter((key) => key !== selectedTableKey),
   );
+
+  const selectDataPanelColumn = (table: SchemaTable, column: SchemaTable['columns'][number]) => {
+    const next = assignDataPanelColumn(builder, chartType, table, column.name, dataPanelColumnTarget);
+    if (next) applyBuilderChange(next);
+  };
 
   const runBuilder = async () => {
     const issue = builderExecutionIssue(builder, chartType, tables);
@@ -696,6 +738,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       if (issue) setRunError(issue);
       return;
     }
+    setAxisColumnSelectionTarget(null);
     const requestId = ++runRequestId.current;
     setRunning(true);
     setRunError(null);
@@ -915,6 +958,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       const geoSeriesType = next.variant as GeoSeriesType;
       const normalized = normalizeBuilderForChartType({ ...builder, geoSeriesType }, chartType);
       setBuilder(normalized);
+      setAxisColumnSelectionTarget(null);
       setColorSelection(null);
       setColorPicking(false);
       resetResults();
@@ -955,6 +999,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setRawError(null);
     setResultTab('result');
     setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
     setPendingBaseTable(null);
     dispatchMapViewport({
       type: 'restoreGlobal',
@@ -1063,16 +1108,38 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 tables={tables.filter((t) => t.datasourceId === datasourceId)}
                 datasourceId={datasourceId}
                 selectedTable={selectedTableKey}
+                baseTableKey={baseTableKey}
                 selection={tableSelectionTarget && selectionLabel
-                  ? { label: selectionLabel }
-                  : null}
+                  ? {
+                      label: selectionLabel,
+                      cancelLabel: '테이블 선택 취소',
+                      focusSearch: true,
+                    }
+                  : pendingAxisColumnTarget
+                    ? {
+                        label: `${columnTargetLabel}에 넣을 컬럼을 선택하세요`,
+                        cancelLabel: `${columnTargetLabel} 컬럼 선택 취소`,
+                        expandTableKey: columnSelectionExpandKey ? tableRefKey(columnSelectionExpandKey) : null,
+                      }
+                    : null}
                 disabledTableKeys={tableSelectionTarget ? disabledTableKeys : new Set()}
                 focusRequestKey={tableSelectionFocusKey}
+                columnTargetLabel={columnTargetLabel}
                 onChangeDatasource={changeDatasource}
                 onSelectTable={selectTable}
-                onCancelSelection={cancelTableSelection}
+                columnSelectionIssue={(table, column) => tableSelectionTarget
+                  ? '먼저 테이블 선택을 완료하거나 취소하세요.'
+                  : dataPanelColumnSelectionIssue(
+                      builder,
+                      chartType,
+                      table,
+                      column.name,
+                      dataPanelColumnTarget,
+                    )}
+                onSelectColumn={selectDataPanelColumn}
+                onCancelSelection={cancelExplorerSelection}
                 onCollapse={() => {
-                  cancelTableSelection();
+                  cancelExplorerSelection();
                   setLeftCollapsed(true);
                 }}
               />
@@ -1098,7 +1165,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   tables={tables}
                   datasources={datasources}
                   tableSelectionTarget={tableSelectionTarget}
+                  axisColumnSelectionTarget={pendingAxisColumnTarget}
                   onRequestTableSelection={requestTableSelection}
+                  onRequestAxisColumnSelection={requestAxisColumnSelection}
                   onCollapse={() => setBuilderCollapsed(true)}
                   onChange={(b) => {
                     // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
@@ -1260,6 +1329,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                     setChartType(to);
                     setOptions(next);
                     setBuilder(normalized);
+                    setAxisColumnSelectionTarget(null);
                     if (builderChanged) resetResults();
                     else if (!result) setOption(null);
                     setDirty(true);
