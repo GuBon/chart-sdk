@@ -25,7 +25,11 @@ public final class SamplingQueryRows {
         if (groupIndex < 0 || totalIndex < 0) {
             boolean rowSample = !sampling.estimates().isEmpty()
                     && sampling.estimates().stream().allMatch(estimate -> "none".equals(estimate.aggregate()));
-            return rowSample
+            boolean spatialRows = "RESULT_RANDOM".equals(sampling.method())
+                    && columns.stream().map(column -> String.valueOf(column.get("name")))
+                    .anyMatch(name -> "__chartsdk_longitude".equals(name)
+                            || "__chartsdk_geojson".equals(name));
+            return rowSample || spatialRows
                     ? new Result(source, sampling.withExecution(
                             source.rows().size(), List.of(), sampling.estimates(), List.of()))
                     : new Result(source, sampling);
