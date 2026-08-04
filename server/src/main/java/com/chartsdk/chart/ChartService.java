@@ -188,7 +188,11 @@ public class ChartService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "builderConfig is required.");
             }
             // 라우터로 검증·계산(단일→PG / 다중→DuckDB 페더레이션). 실행 실패 시 저장도 실패(§7.7).
-            FederatedQueryRunner.BuiltResult built = runner.runBuilder(input.datasourceId(), input.builderConfig(), chartType, false);
+            int sampleCacheMaxAge = "live".equals(input.refreshMode())
+                    ? 0
+                    : input.cacheTtlSeconds() == null ? 3600 : input.cacheTtlSeconds();
+            FederatedQueryRunner.BuiltResult built = runner.runBuilder(
+                    input.datasourceId(), input.builderConfig(), chartType, false, sampleCacheMaxAge);
             String storedSql = SqlLiterals.inline(built.sql().text(), built.sql().params());
             // 참조 소스 집합은 runBuilder 가 이미 확정(primary 폴백 포함) — junction 에 그대로 재사용.
             Set<Long> datasources = built.datasourceIds();

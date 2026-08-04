@@ -146,7 +146,7 @@ class ChartComputeServiceTest {
                 2L, "builder", "SELECT old_unscaled_sum", builderConfig, "bar", 3, sampling);
         QueryRows freshRows = new QueryRows(List.of(), List.of(), 0, false, 2);
         doReturn(definition).when(compute).definition(1L);
-        when(runner.runBuilder(2L, builderConfig, "bar", false)).thenReturn(
+        when(runner.runBuilder(2L, builderConfig, "bar", false, 3600)).thenReturn(
                 new FederatedQueryRunner.BuiltResult(
                         freshRows,
                         new BuilderSqlBuilder.Sql("SELECT current_scaled_sum", List.of(), sampling),
@@ -156,7 +156,7 @@ class ChartComputeServiceTest {
 
         assertThat(compute.recompute(1L)).isEqualTo(cached);
 
-        verify(runner).runBuilder(2L, builderConfig, "bar", false);
+        verify(runner).runBuilder(2L, builderConfig, "bar", false, 3600);
         verify(runner, never()).runStored(any(), anyLong(), anyString());
     }
 

@@ -97,8 +97,10 @@ public class ChartComputeService {
     /** 기존 builder 차트도 현재 생성 규칙(sampling v7 Bernoulli 결과 표본·표본 SUM/COUNT 포함)을 즉시 사용한다. */
     private Computed execute(long chartId, Chart chart) {
         if ("builder".equals(chart.defineMode()) && !chart.builderConfig().isEmpty()) {
+            int sampleCacheMaxAge = "live".equals(chart.refreshMode()) ? 0 : chart.cacheTtlSeconds();
             FederatedQueryRunner.BuiltResult built =
-                    runner.runBuilder(chart.datasourceId(), chart.builderConfig(), chart.chartType(), false);
+                    runner.runBuilder(chart.datasourceId(), chart.builderConfig(), chart.chartType(), false,
+                            sampleCacheMaxAge);
             return new Computed(built.rows(), built.sampling());
         }
         return new Computed(runner.runStored(datasources(chartId), chart.datasourceId(), chart.sqlQuery()), null);
@@ -106,7 +108,8 @@ public class ChartComputeService {
 
     Chart definition(long chartId) {
         return jdbc.query("""
-                SELECT datasource_id, define_mode, sql_query, builder_config::text, chart_type, version
+                SELECT datasource_id, define_mode, sql_query, builder_config::text, chart_type, version,
+                       refresh_mode, cache_ttl_seconds
                   FROM mc_chart
                  WHERE id=?
                 """, rs -> {
@@ -119,7 +122,9 @@ public class ChartComputeService {
                     builderConfig,
                     rs.getString("chart_type"),
                     rs.getInt("version"),
-                    SamplingMetadata.fromBuilderConfig(builderConfig)
+                    SamplingMetadata.fromBuilderConfig(builderConfig),
+                    rs.getString("refresh_mode"),
+                    rs.getInt("cache_ttl_seconds")
             );
         }, chartId);
     }
@@ -147,7 +152,12 @@ public class ChartComputeService {
     }
 
     record Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,
-                 String chartType, int version, SamplingMetadata sampling) {
+                 String chartType, int version, SamplingMetadata sampling,
+                 String refreshMode, int cacheTtlSeconds) {
+        Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,
+              String chartType, int version, SamplingMetadata sampling) {
+            this(datasourceId, defineMode, sqlQuery, builderConfig, chartType, version, sampling, "ttl", 3600);
+        }
     }
 
     record Computed(QueryRows rows, SamplingMetadata sampling) {

@@ -148,7 +148,7 @@ class ChartServiceTest {
                 Set.of(1L),
                 sampling
         );
-        when(runner.runBuilder(1L, builder, "bar", false)).thenReturn(built);
+        when(runner.runBuilder(1L, builder, "bar", false, 3600)).thenReturn(built);
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(21L);
         when(charts.get(null, 21L)).thenReturn(Map.of("id", 21L));
         ChartSaveRequest request = new ChartSaveRequest(
@@ -156,9 +156,31 @@ class ChartServiceTest {
 
         assertThat(service.create(request)).containsEntry("id", 21L);
 
-        verify(runner, times(1)).runBuilder(1L, builder, "bar", false);
+        verify(runner, times(1)).runBuilder(1L, builder, "bar", false, 3600);
         verify(compute).seedPreparedQuietly(21L, queryRows, 0, sampling);
         verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    void liveBuilderSaveBypassesTheL1SampleCache() {
+        Map<String, Object> builder = Map.of(
+                "table", "sales",
+                "xAxis", "category",
+                "yAxis", List.of(Map.of("column", "amount", "agg", "sum")),
+                "sample", Map.of("mode", "manual", "size", 1_000, "seed", 77));
+        FederatedQueryRunner.BuiltResult built = new FederatedQueryRunner.BuiltResult(
+                queryRows,
+                new BuilderSqlBuilder.Sql("SELECT category, SUM(amount) FROM sales GROUP BY category", List.of()),
+                Set.of(1L));
+        when(runner.runBuilder(1L, builder, "bar", false, 0)).thenReturn(built);
+        when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(23L);
+        when(charts.get(null, 23L)).thenReturn(Map.of("id", 23L));
+        ChartSaveRequest request = new ChartSaveRequest(
+                "live", null, 1L, "builder", null, builder, "bar", Map.of(), "live", 3600, null);
+
+        service.create(request);
+
+        verify(runner).runBuilder(1L, builder, "bar", false, 0);
     }
 
     @Test
@@ -194,7 +216,7 @@ class ChartServiceTest {
     @Test
     void updateSeedsPreparedResultWithRepositoryReturnedVersion() {
         Map<String, Object> builder = Map.of("table", "sales");
-        when(runner.runBuilder(1L, builder, "bar", false)).thenReturn(
+        when(runner.runBuilder(1L, builder, "bar", false, 3600)).thenReturn(
                 new FederatedQueryRunner.BuiltResult(
                         queryRows,
                         new BuilderSqlBuilder.Sql("SELECT * FROM sales", List.of()),
