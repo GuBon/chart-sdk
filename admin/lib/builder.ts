@@ -227,7 +227,6 @@ export function withFieldDisplayNameSnapshots(cfg: BuilderConfig, tables: Schema
     cfg.geoPoint?.nameColumn,
     cfg.geoPoint?.valueColumn,
     cfg.geoPoint?.sizeColumn,
-    cfg.geoPoint?.colorColumn,
     cfg.geoArea?.spatialColumn,
     cfg.geoArea?.nameColumn,
     cfg.geoArea?.valueColumn,
@@ -313,7 +312,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
       yAxis: cfg.yAxis.slice(0, 1).map((y) => ({ ...y, agg: 'none' })),
     };
   }
-  // 지도 포인트: X=경도, Y=위도. 이름·값·크기·색상값은 전용 역할 컬럼으로 분리한다.
+  // 지도 포인트: X=경도, Y=위도. 이름·값·크기는 전용 역할 컬럼으로 분리한다.
   if (usesGeoPointInput(cfg, chartType)) {
     const geoSeriesType = chartType === 'map'
       ? 'heatmap'
@@ -333,7 +332,6 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
           nameColumn: cfg.geoPoint?.nameColumn ?? null,
           valueColumn: cfg.geoPoint?.valueColumn ?? null,
           sizeColumn: cfg.geoPoint?.sizeColumn ?? null,
-          colorColumn: cfg.geoPoint?.colorColumn ?? null,
         },
         geoArea: undefined,
       };
@@ -348,7 +346,6 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
         nameColumn: cfg.geoPoint?.nameColumn ?? null,
         valueColumn: cfg.geoPoint?.valueColumn ?? null,
         sizeColumn: cfg.geoPoint?.sizeColumn ?? cfg.yAxis[1]?.column ?? null,
-        colorColumn: cfg.geoPoint?.colorColumn ?? null,
       },
       geoArea: undefined,
     };
@@ -432,7 +429,6 @@ function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[])
       cfg.geoPoint?.nameColumn,
       cfg.geoPoint?.valueColumn,
       cfg.geoPoint?.sizeColumn,
-      cfg.geoPoint?.colorColumn,
       cfg.geoArea?.spatialColumn,
       cfg.geoArea?.nameColumn,
       cfg.geoArea?.valueColumn,
@@ -498,9 +494,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
       if (cfg.geoPoint?.valueColumn && !isNumericType(columnType(cfg.geoPoint.valueColumn, cfg, tables))) {
         return '지도 값 컬럼은 숫자여야 합니다.';
       }
-      if (cfg.geoPoint?.colorColumn && !isNumericType(columnType(cfg.geoPoint.colorColumn, cfg, tables))) {
-        return '지도 색상값 컬럼은 숫자여야 합니다.';
-      }
       if (new Set(activeTables(cfg).map((table) => table.datasourceId)).size >= 2) {
         return '공간 Point 컬럼은 여러 데이터소스 조인에서 아직 사용할 수 없습니다.';
       }
@@ -513,7 +506,6 @@ export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType,
     for (const [column, message] of [
       [cfg.geoPoint?.valueColumn, '지도 값 컬럼은 숫자여야 합니다.'],
       [cfg.geoPoint?.sizeColumn, '지도 크기값 컬럼은 숫자여야 합니다.'],
-      [cfg.geoPoint?.colorColumn, '지도 색상값 컬럼은 숫자여야 합니다.'],
     ] as const) {
       if (column && !isNumericType(columnType(column, cfg, tables))) return message;
     }
@@ -595,8 +587,22 @@ export function emptyBuilder(): BuilderConfig {
   return { table: null, joins: [], xAxis: null, xAxisBucket: null, seriesBy: null, seriesOrder: 'asc', yAxis: [], where: [], orderBy: null, sample: null };
 }
 
+function stripRemovedGeoPointFields(geoPoint: BuilderConfig['geoPoint']): BuilderConfig['geoPoint'] {
+  if (!geoPoint) return geoPoint;
+  const clean = { ...geoPoint } as NonNullable<BuilderConfig['geoPoint']> & { colorColumn?: unknown };
+  delete clean.colorColumn;
+  return clean;
+}
+
 export function normalizeBuilder(cfg: BuilderConfig): BuilderConfig {
-  return { ...emptyBuilder(), ...cfg, joins: cfg.joins ?? [], sample: normalizeSampleConfig(cfg.sample) };
+  const cleanGeoPoint = stripRemovedGeoPointFields(cfg.geoPoint);
+  return {
+    ...emptyBuilder(),
+    ...cfg,
+    joins: cfg.joins ?? [],
+    sample: normalizeSampleConfig(cfg.sample),
+    ...(cfg.geoPoint == null ? {} : { geoPoint: cleanGeoPoint }),
+  };
 }
 
 /** 레거시 문자열 테이블 참조("schema.table"/"table") → TableRef 승격. 저장된 단일 소스 차트 로드 시(하위호환). */
@@ -620,7 +626,7 @@ export function migrateBuilderConfig(cfg: BuilderConfig, primaryDatasourceId: nu
     assigned.push(withHandle);
     return { ...j, table: withHandle };
   });
-  return { ...cfg, table: base, joins, sample: normalizeSampleConfig(cfg.sample) };
+  return normalizeBuilder({ ...cfg, table: base, joins, sample: normalizeSampleConfig(cfg.sample) });
 }
 
 /** orderBy 대상 라벨 (x = X축, y{i} = i번째 시리즈 별칭) */

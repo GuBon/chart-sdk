@@ -401,6 +401,14 @@ describe('레거시 마이그레이션', () => {
     const cfg = { table: users1Ref, joins: [{ table: { ...users2Ref, handle: 'keep_me' }, type: 'inner', on: { leftColumn: '', rightColumn: '' } }], xAxis: null, xAxisBucket: null, yAxis: [], where: [], orderBy: null, sample: null } as BuilderConfig;
     expect(migrateBuilderConfig(cfg, 1).joins?.[0].table.handle).toBe('keep_me');
   });
+  it('제거된 레거시 포인트 색상값은 로드 정규화에서 삭제한다', () => {
+    const legacy = {
+      ...bar(),
+      geoPoint: { mode: 'columns', valueColumn: 'amount', colorColumn: 'customer_id' },
+    } as unknown as BuilderConfig;
+    expect(normalizeBuilder(legacy).geoPoint).toEqual({ mode: 'columns', valueColumn: 'amount' });
+    expect(migrateBuilderConfig(legacy, 1).geoPoint).toEqual({ mode: 'columns', valueColumn: 'amount' });
+  });
 });
 
 describe('orderTargets · 기타', () => {
@@ -531,7 +539,6 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
         mode: 'columns',
         nameColumn: 'category',
         valueColumn: 'amount',
-        colorColumn: 'customer_id',
       },
       sample: { rate: 20 },
     });
@@ -548,7 +555,7 @@ describe('신규 유형 — boxplot · heatmap · map', () => {
         mode: 'columns',
         nameColumn: 'category',
         valueColumn: 'amount',
-        colorColumn: 'customer_id',
+        sizeColumn: null,
       },
     });
   });

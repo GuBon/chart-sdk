@@ -957,11 +957,11 @@ describe('개별 데이터 색상 계약', () => {
     expect(series.itemStyle.color).toBe('#123456');
     expect(series.data[0]).toEqual({
       name: '126.978, 37.5665',
-      value: [126.978, 37.5665, null, null, null],
+      value: [126.978, 37.5665, null, null],
     });
     expect(series.data[1]).toEqual({
       name: '129.0756, 35.1796',
-      value: [129.0756, 35.1796, null, null, null],
+      value: [129.0756, 35.1796, null, null],
       itemStyle: { color: '#FFB000' },
     });
     const geo = option.geo as Record<string, any>;
@@ -1013,13 +1013,12 @@ describe('ECharts 6.1 지도 계열 계약', () => {
       { name: '__chartsdk_point_name', type: 'text' },
       { name: '__chartsdk_point_value', type: 'number' },
       { name: '__chartsdk_size', type: 'number' },
-      { name: '__chartsdk_color_value', type: 'number' },
       { name: '__chartsdk_series', type: 'text' },
     ],
     rows: [
-      [126.978, 37.5665, '서울점', 120, 10, 30, '온라인'],
-      [129.0756, 35.1796, '부산점', 80, 30, 15, '매장'],
-      [126.5312, 33.4996, '제주점', 55, 20, 24, '온라인'],
+      [126.978, 37.5665, '서울점', 120, 10, '온라인'],
+      [129.0756, 35.1796, '부산점', 80, 30, '매장'],
+      [126.5312, 33.4996, '제주점', 55, 20, '온라인'],
     ],
     rowCount: 3,
     truncated: false,
@@ -1058,7 +1057,7 @@ describe('ECharts 6.1 지도 계열 계약', () => {
     ]);
   });
 
-  it('map 히트맵은 이름·값·색상값과 계열을 geo heatmap으로 인코딩한다', () => {
+  it('map 히트맵은 이름·강도값과 계열을 geo heatmap으로 인코딩한다', () => {
     const option = assembleOption(groupedPoints, 'map', {
       variant: 'heatmap',
       map: {
@@ -1090,10 +1089,10 @@ describe('ECharts 6.1 지도 계열 계약', () => {
       minOpacity: 0.1,
       maxOpacity: 0.85,
     });
-    expect(series[0].data[0]).toEqual({ name: '서울점', value: [126.978, 37.5665, 120, 30] });
+    expect(series[0].data[0]).toEqual({ name: '서울점', value: [126.978, 37.5665, 120] });
     expect((option.visualMap as Record<string, any>).seriesTargets).toEqual([
-      { seriesId: '__chartsdk_geo_heatmap_0', dimension: 3 },
-      { seriesId: '__chartsdk_geo_heatmap_1', dimension: 3 },
+      { seriesId: '__chartsdk_geo_heatmap_0', dimension: 2 },
+      { seriesId: '__chartsdk_geo_heatmap_1', dimension: 2 },
     ]);
   });
 
@@ -1128,12 +1127,9 @@ describe('ECharts 6.1 지도 계열 계약', () => {
     });
     expect(series[0].data[0]).toMatchObject({
       name: '서울점',
-      value: [126.978, 37.5665, 120, 10, 30],
+      value: [126.978, 37.5665, 120, 10],
       symbolSize: 6,
     });
-    expect((option.visualMap as Record<string, any>).seriesTargets).toEqual([
-      { seriesId: '__chartsdk_geo_point_0', dimension: 4 },
-      { seriesId: '__chartsdk_geo_point_1', dimension: 4 },
-    ]);
+    expect(option.visualMap).toBeUndefined();
   });
 });

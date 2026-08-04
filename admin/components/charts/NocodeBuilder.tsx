@@ -90,7 +90,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
   const areaNameOptions = colOptions.filter((column) => !/\b(?:geometry|geography)\b/i.test(column.type));
   const numericOptions = colOptions.filter((column) => isNumericType(column.type));
-  // 값 축 수 상한. 지도 포인트의 이름·값·크기·색상은 아래 전용 역할 선택기로 받는다.
+  // 값 축 수 상한. 지도 포인트의 이름·값·크기는 아래 전용 역할 선택기로 받는다.
   const supportsSeriesBy = supportsSeriesByForChart(chartType);
   const maxSeries = isPie || areaInput || isBoxplot || !!config.seriesBy || pointInput ? 1 : Infinity;
   const hideBucket = isScatter || isBoxplot || pointInput;
@@ -186,7 +186,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           nameColumn: config.geoPoint?.nameColumn ?? null,
           valueColumn: config.geoPoint?.valueColumn ?? null,
           sizeColumn: config.geoPoint?.sizeColumn ?? null,
-          colorColumn: config.geoPoint?.colorColumn ?? null,
         },
       });
       return;
@@ -201,7 +200,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         nameColumn: config.geoPoint?.nameColumn ?? null,
         valueColumn: config.geoPoint?.valueColumn ?? null,
         sizeColumn: config.geoPoint?.sizeColumn ?? null,
-        colorColumn: config.geoPoint?.colorColumn ?? null,
       },
     });
   };
@@ -573,19 +571,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                 <span className="text-[13px] text-text-tertiary">선택하면 값 범위에 따라 점 크기를 조절합니다</span>
               </Row>
             )}
-            <Row label="색상값">
-              <div className="w-60">
-                <Select
-                  id="builder-geo-point-color"
-                  aria-label="지도 포인트 색상값 컬럼"
-                  value={config.geoPoint?.colorColumn ?? ''}
-                  onChange={(event) => patch({ geoPoint: { ...config.geoPoint, mode: geoPointMode, colorColumn: event.target.value || null } })}
-                  options={numericOptions}
-                  placeholder={geoSeriesType === 'heatmap' ? '값 컬럼 사용' : '사용 안 함'}
-                />
-              </div>
-              <span className="text-[13px] text-text-tertiary">visualMap 색상 강도에 사용할 숫자입니다</span>
-            </Row>
           </>
         )}
 
@@ -602,7 +587,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
                 config.geoPoint?.nameColumn,
                 config.geoPoint?.valueColumn,
                 config.geoPoint?.sizeColumn,
-                config.geoPoint?.colorColumn,
                 config.geoArea?.nameColumn,
                 config.geoArea?.valueColumn,
                 config.geoArea?.spatialColumn,

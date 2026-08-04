@@ -231,8 +231,6 @@ function fieldValue(
       return values[descriptor.valueIndex ?? 2] ?? params.value;
     case 'geoSize':
       return values[descriptor.valueIndex ?? 3];
-    case 'geoColor':
-      return values[descriptor.valueIndex ?? 4];
     case 'longitude':
       return values[descriptor.valueIndex ?? 0];
     case 'latitude':

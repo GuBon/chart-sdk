@@ -21,7 +21,6 @@ export type TooltipFieldKind =
   | 'geoName'
   | 'geoValue'
   | 'geoSize'
-  | 'geoColor'
   | 'longitude'
   | 'latitude';
 
@@ -62,7 +61,6 @@ const INTERNAL_GEO_COLUMNS = {
   name: '__chartsdk_point_name',
   value: '__chartsdk_point_value',
   size: '__chartsdk_size',
-  color: '__chartsdk_color_value',
   series: '__chartsdk_series',
   areaName: '__chartsdk_area_name',
   areaValue: '__chartsdk_area_value',
@@ -275,7 +273,6 @@ function geoPointFields(context: TooltipFieldContext): TooltipFieldDescriptor[] 
   const nameRef = point.nameColumn;
   const valueRef = point.valueColumn;
   const sizeRef = point.sizeColumn ?? (context.chartType === 'geoscatter' ? yAxis[1]?.column : null);
-  const colorRef = point.colorColumn;
 
   if (nameRef || hasColumn(INTERNAL_GEO_COLUMNS.name)) {
     fields.push(field(`geo:name:${String(nameRef ?? INTERNAL_GEO_COLUMNS.name)}`, humanize(nameRef, '포인트 이름', builder), '포인트 이름', 'geoName'));
@@ -289,12 +286,6 @@ function geoPointFields(context: TooltipFieldContext): TooltipFieldDescriptor[] 
   if (context.chartType === 'geoscatter' && (sizeRef || hasColumn(INTERNAL_GEO_COLUMNS.size))) {
     fields.push(field(`geo:size:${String(sizeRef ?? INTERNAL_GEO_COLUMNS.size)}`, humanize(sizeRef, '크기', builder), '포인트 크기', 'geoSize', { valueIndex: 3 }));
   }
-  if (colorRef || hasColumn(INTERNAL_GEO_COLUMNS.color)) {
-    fields.push(field(`geo:color:${String(colorRef ?? INTERNAL_GEO_COLUMNS.color)}`, humanize(colorRef, '색상 값', builder), '색상 기준', 'geoColor', {
-      valueIndex: context.chartType === 'map' ? 3 : 4,
-    }));
-  }
-
   const longitudeRef = point.mode === 'spatial' ? '경도' : builder.xAxis ?? INTERNAL_GEO_COLUMNS.longitude;
   const latitudeRef = point.mode === 'spatial' ? '위도' : yAxis[0]?.column ?? INTERNAL_GEO_COLUMNS.latitude;
   fields.push(

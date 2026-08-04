@@ -60,7 +60,6 @@ public final class BuilderSqlBuilder {
     private static final String GEO_POINT_NAME = "__chartsdk_point_name";
     private static final String GEO_POINT_VALUE = "__chartsdk_point_value";
     private static final String SPATIAL_SIZE = "__chartsdk_size";
-    private static final String GEO_POINT_COLOR = "__chartsdk_color_value";
     private static final String GEO_SERIES = "__chartsdk_series";
     private static final String SPATIAL_AREA_NAME = "__chartsdk_area_name";
     private static final String SPATIAL_AREA_VALUE = "__chartsdk_area_value";
@@ -680,8 +679,7 @@ public final class BuilderSqlBuilder {
         for (String[] role : List.of(
                 new String[]{"nameColumn", GEO_POINT_NAME, "text"},
                 new String[]{"valueColumn", GEO_POINT_VALUE, "numeric"},
-                new String[]{"sizeColumn", SPATIAL_SIZE, "numeric"},
-                new String[]{"colorColumn", GEO_POINT_COLOR, "numeric"})) {
+                new String[]{"sizeColumn", SPATIAL_SIZE, "numeric"})) {
             String column = str(geoPoint.get(role[0]));
             if (column == null) continue;
             Ref ref = resolveRef(column);
@@ -946,7 +944,7 @@ public final class BuilderSqlBuilder {
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "boxplot requires agg 'none' on the value field.");
             if (yAxis.size() != 1) throw invalidReq("boxplot requires exactly one value field.");
         } else if (isGeoPointSeries()) {
-            // 지도 포인트: X=경도·Y=위도이며 이름·값·크기·색상값은 별도 역할 컬럼으로 전달한다.
+            // 지도 포인트: X=경도·Y=위도이며 이름·값·크기는 별도 역할 컬럼으로 전달한다.
             if (!allNone) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "Geo point coordinates require agg 'none'.");
             if (yAxis.size() != 1) throw invalidReq("Geo point input requires exactly one latitude field.");
             if (!isNumeric(typeOf(x))) throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH", "Geo point longitude must be numeric.");

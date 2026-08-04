@@ -61,12 +61,11 @@ const RESULTS: Record<MajorType, QueryResult> = {
       { name: '__chartsdk_point_name', type: 'text' },
       { name: '__chartsdk_point_value', type: 'number' },
       { name: '__chartsdk_size', type: 'number' },
-      { name: '__chartsdk_color_value', type: 'number' },
       { name: '__chartsdk_series', type: 'text' },
     ],
     [
-      ['서울', 20, 127.0, 37.5, '서울 점', 20, 9, 30, '국내'],
-      ['부산', 10, 129.1, 35.2, '부산 점', 10, 3, 15, '해외'],
+      ['서울', 20, 127.0, 37.5, '서울 점', 20, 9, '국내'],
+      ['부산', 10, 129.1, 35.2, '부산 점', 10, 3, '해외'],
     ],
   ),
   geoscatter: result(
@@ -76,12 +75,11 @@ const RESULTS: Record<MajorType, QueryResult> = {
       { name: '__chartsdk_point_name', type: 'text' },
       { name: '__chartsdk_point_value', type: 'number' },
       { name: '__chartsdk_size', type: 'number' },
-      { name: '__chartsdk_color_value', type: 'number' },
       { name: '__chartsdk_series', type: 'text' },
     ],
     [
-      [127.1, 37.5, '서울 점', 20, 9, 30, '국내'],
-      [126.9, 35.2, '부산 점', 10, 3, 15, '해외'],
+      [127.1, 37.5, '서울 점', 20, 9, '국내'],
+      [126.9, 35.2, '부산 점', 10, 3, '해외'],
     ],
   ),
 };

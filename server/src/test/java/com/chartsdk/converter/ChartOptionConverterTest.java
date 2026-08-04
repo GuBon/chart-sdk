@@ -694,7 +694,7 @@ class ChartOptionConverterTest {
         List<?> data = (List<?>) s0.get("data");
         Map<?, ?> p0 = (Map<?, ?>) data.get(0);
         Map<?, ?> p1 = (Map<?, ?>) data.get(1);
-        assertThat(p0.get("value")).isEqualTo(java.util.Arrays.asList(127.0, 37.5, null, 10, null));
+        assertThat(p0.get("value")).isEqualTo(java.util.Arrays.asList(127.0, 37.5, null, 10));
         assertThat(p0.get("symbolSize")).isEqualTo(6);   // 최소값 → 6px
         assertThat(p1.get("symbolSize")).isEqualTo(28);  // 최대값 → 6+22px
         assertThat(((Map<?, ?>) option.get("tooltip")).get("trigger")).isNull();
@@ -772,7 +772,7 @@ class ChartOptionConverterTest {
         assertThat(s0.get("symbolSize")).isEqualTo(14);
         assertThat(((List<?>) s0.get("data")).get(0)).isEqualTo(Map.of(
                 "name", "127.0, 37.5",
-                "value", java.util.Arrays.asList(127.0, 37.5, null, null, null)
+                "value", java.util.Arrays.asList(127.0, 37.5, null, null)
         ));
     }
 
@@ -974,7 +974,7 @@ class ChartOptionConverterTest {
         List<?> data = (List<?>) series.get("data");
         assertThat(data.get(0)).isEqualTo(Map.of(
                 "name", "126.978, 37.5665",
-                "value", java.util.Arrays.asList(126.978, 37.5665, null, null, null)
+                "value", java.util.Arrays.asList(126.978, 37.5665, null, null)
         ));
         assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color"))
                 .isEqualTo("#FFB000");
@@ -1053,11 +1053,11 @@ class ChartOptionConverterTest {
         assertThat(online.get("maxOpacity")).isEqualTo(0.85);
         Map<?, ?> firstPoint = (Map<?, ?>) ((List<?>) online.get("data")).get(0);
         assertThat(firstPoint.get("name")).isEqualTo("서울점");
-        assertThat(firstPoint.get("value")).isEqualTo(List.of(126.978, 37.5665, 120.0, 30.0));
+        assertThat(firstPoint.get("value")).isEqualTo(List.of(126.978, 37.5665, 120.0));
         assertThat((List<?>) ((Map<?, ?>) option.get("visualMap")).get("seriesTargets"))
                 .isEqualTo(List.of(
-                        Map.of("seriesId", "__chartsdk_geo_heatmap_0", "dimension", 3),
-                        Map.of("seriesId", "__chartsdk_geo_heatmap_1", "dimension", 3)
+                        Map.of("seriesId", "__chartsdk_geo_heatmap_0", "dimension", 2),
+                        Map.of("seriesId", "__chartsdk_geo_heatmap_1", "dimension", 2)
                 ));
     }
 
@@ -1100,13 +1100,9 @@ class ChartOptionConverterTest {
         Map<?, ?> firstPoint = (Map<?, ?>) ((List<?>) online.get("data")).get(0);
         assertThat(firstPoint.get("name")).isEqualTo("서울점");
         assertThat(firstPoint.get("value"))
-                .isEqualTo(List.of(126.978, 37.5665, 120, 10, 30));
+                .isEqualTo(List.of(126.978, 37.5665, 120, 10));
         assertThat(firstPoint.get("symbolSize")).isEqualTo(6);
-        assertThat((List<?>) ((Map<?, ?>) option.get("visualMap")).get("seriesTargets"))
-                .isEqualTo(List.of(
-                        Map.of("seriesId", "__chartsdk_geo_point_0", "dimension", 4),
-                        Map.of("seriesId", "__chartsdk_geo_point_1", "dimension", 4)
-                ));
+        assertThat(option).doesNotContainKey("visualMap");
     }
 
     private QueryRows groupedGeoPointRows() {
@@ -1117,13 +1113,12 @@ class ChartOptionConverterTest {
                         Map.of("name", "__chartsdk_point_name", "type", "text"),
                         Map.of("name", "__chartsdk_point_value", "type", "number"),
                         Map.of("name", "__chartsdk_size", "type", "number"),
-                        Map.of("name", "__chartsdk_color_value", "type", "number"),
                         Map.of("name", "__chartsdk_series", "type", "text")
                 ),
                 List.of(
-                        List.of(126.978, 37.5665, "서울점", 120, 10, 30, "온라인"),
-                        List.of(129.0756, 35.1796, "부산점", 80, 30, 15, "매장"),
-                        List.of(126.5312, 33.4996, "제주점", 55, 20, 24, "온라인")
+                        List.of(126.978, 37.5665, "서울점", 120, 10, "온라인"),
+                        List.of(129.0756, 35.1796, "부산점", 80, 30, "매장"),
+                        List.of(126.5312, 33.4996, "제주점", 55, 20, "온라인")
                 ),
                 3, false, 0
         );

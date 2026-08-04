@@ -30,7 +30,6 @@ final class TooltipFieldResolver {
     private static final String POINT_NAME = "__chartsdk_point_name";
     private static final String POINT_VALUE = "__chartsdk_point_value";
     private static final String POINT_SIZE = "__chartsdk_size";
-    private static final String POINT_COLOR = "__chartsdk_color_value";
     private static final String GEO_SERIES = "__chartsdk_series";
 
     private TooltipFieldResolver() {
@@ -298,7 +297,6 @@ final class TooltipFieldResolver {
                 point.get("sizeColumn"),
                 "geoscatter".equals(chartType) ? at(measures, 1).get("column") : null
         );
-        Object colorRef = point.get("colorColumn");
 
         if (nameRef != null || hasColumn(columns, POINT_NAME)) {
             Object source = nameRef == null ? POINT_NAME : nameRef;
@@ -334,19 +332,6 @@ final class TooltipFieldResolver {
                     true
             ));
         }
-        if (colorRef != null || hasColumn(columns, POINT_COLOR)) {
-            Object source = colorRef == null ? POINT_COLOR : colorRef;
-            fields.add(field(
-                    "geo:color:" + source,
-                    humanize(colorRef, "색상 값", builder),
-                    "색상 기준",
-                    "geoColor",
-                    null,
-                    "map".equals(chartType) ? 3 : 4,
-                    true
-            ));
-        }
-
         boolean spatial = "spatial".equals(string(point.get("mode"), ""));
         Object longitudeRef = spatial ? "경도" : firstNonNull(builder.get("xAxis"), LONGITUDE);
         Object latitudeRef = spatial ? "위도" : firstNonNull(at(measures, 0).get("column"), LATITUDE);

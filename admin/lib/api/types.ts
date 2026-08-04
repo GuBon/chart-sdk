@@ -52,7 +52,6 @@ export interface GeoPointConfig {
   nameColumn?: string | null; // 라벨·툴팁에 표시할 선택적 이름
   valueColumn?: string | null; // 툴팁/데이터 값에 사용할 선택적 숫자
   sizeColumn?: string | null; // 점 크기에 사용할 선택적 숫자
-  colorColumn?: string | null; // visualMap 색상 강도에 사용할 선택적 숫자
 }
 
 /** 지도 경계 입력. regions는 내장 행정구역, spatial은 DB Polygon/MultiPolygon 컬럼이다. */

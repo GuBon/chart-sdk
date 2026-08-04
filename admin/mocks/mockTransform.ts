@@ -241,7 +241,6 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
         ...(cfg.geoPoint.nameColumn ? [`CAST(${qcol(cfg.geoPoint.nameColumn)} AS text) AS ${qident('__chartsdk_point_name')}`] : []),
         ...(cfg.geoPoint.valueColumn ? [`${qcol(cfg.geoPoint.valueColumn)} AS ${qident('__chartsdk_point_value')}`] : []),
         ...(cfg.geoPoint.sizeColumn ? [`${qcol(cfg.geoPoint.sizeColumn)} AS ${qident('__chartsdk_size')}`] : []),
-        ...(cfg.geoPoint.colorColumn ? [`${qcol(cfg.geoPoint.colorColumn)} AS ${qident('__chartsdk_color_value')}`] : []),
         ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
       ];
       const finalSelects = [
@@ -250,7 +249,6 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
         ...(cfg.geoPoint.nameColumn ? [`${spatial}.${qident('__chartsdk_point_name')} AS ${qident('__chartsdk_point_name')}`] : []),
         ...(cfg.geoPoint.valueColumn ? [`${spatial}.${qident('__chartsdk_point_value')} AS ${qident('__chartsdk_point_value')}`] : []),
         ...(cfg.geoPoint.sizeColumn ? [`${spatial}.${qident('__chartsdk_size')} AS ${qident('__chartsdk_size')}`] : []),
-        ...(cfg.geoPoint.colorColumn ? [`${spatial}.${qident('__chartsdk_color_value')} AS ${qident('__chartsdk_color_value')}`] : []),
         ...(cfg.seriesBy ? [`${spatial}.${qident('__chartsdk_series')} AS ${qident('__chartsdk_series')}`] : []),
       ];
       return resultRandomSpatialSql(point, projected, finalSelects);
@@ -262,7 +260,6 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
       ...(cfg.geoPoint.nameColumn ? [`CAST(${qcol(cfg.geoPoint.nameColumn)} AS text) AS ${qident('__chartsdk_point_name')}`] : []),
       ...(cfg.geoPoint.valueColumn ? [`${qcol(cfg.geoPoint.valueColumn)} AS ${qident('__chartsdk_point_value')}`] : []),
       ...(cfg.geoPoint.sizeColumn ? [`${qcol(cfg.geoPoint.sizeColumn)} AS ${qident('__chartsdk_size')}`] : []),
-      ...(cfg.geoPoint.colorColumn ? [`${qcol(cfg.geoPoint.colorColumn)} AS ${qident('__chartsdk_color_value')}`] : []),
       ...(cfg.seriesBy ? [`CAST(${qcol(cfg.seriesBy)} AS text) AS ${qident('__chartsdk_series')}`] : []),
     ];
     return spatialProjectionSql(selects, point);
@@ -272,7 +269,6 @@ FROM ${sampledBase}${joinSql}${spatialWhere}`;
     ...(cfg.geoPoint?.nameColumn ? [{ column: cfg.geoPoint.nameColumn, alias: '__chartsdk_point_name', text: true }] : []),
     ...(cfg.geoPoint?.valueColumn ? [{ column: cfg.geoPoint.valueColumn, alias: '__chartsdk_point_value', text: false }] : []),
     ...(cfg.geoPoint?.sizeColumn ? [{ column: cfg.geoPoint.sizeColumn, alias: '__chartsdk_size', text: false }] : []),
-    ...(cfg.geoPoint?.colorColumn ? [{ column: cfg.geoPoint.colorColumn, alias: '__chartsdk_color_value', text: false }] : []),
   ];
   const rawMode = cfg.yAxis.some((y) => y.agg === 'none');
   if (rawMode) {
@@ -718,14 +714,12 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
     const hasName = !!cfg.geoPoint?.nameColumn;
     const hasValue = !!cfg.geoPoint?.valueColumn;
     const hasSize = chartType === 'geoscatter' && !!cfg.geoPoint?.sizeColumn;
-    const hasColor = !!cfg.geoPoint?.colorColumn;
     const columns: Cols = [
       { name: '__chartsdk_longitude', type: 'numeric' },
       { name: '__chartsdk_latitude', type: 'numeric' },
       ...(hasName ? [{ name: '__chartsdk_point_name', type: 'text' }] : []),
       ...(hasValue ? [{ name: '__chartsdk_point_value', type: 'numeric' }] : []),
       ...(hasSize ? [{ name: '__chartsdk_size', type: 'numeric' }] : []),
-      ...(hasColor ? [{ name: '__chartsdk_color_value', type: 'numeric' }] : []),
       ...(cfg.seriesBy ? [{ name: '__chartsdk_series', type: 'text' }] : []),
     ];
     const rows: Rows = SAMPLE_SPATIAL_POINTS.map(([longitude, latitude, size], index) => [
@@ -734,7 +728,6 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       ...(hasName ? [`포인트 ${index + 1}`] : []),
       ...(hasValue ? [Math.round(Number(size) * 1.7)] : []),
       ...(hasSize ? [size] : []),
-      ...(hasColor ? [Math.round(Number(size) * 2.3)] : []),
       ...(cfg.seriesBy ? [index % 2 === 0 ? 'A' : 'B'] : []),
     ]);
     const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
@@ -1474,7 +1467,6 @@ export function assembleOption(
     let sizeIndex = result.columns.findIndex((column) => column.name === '__chartsdk_size');
     if (chartType === 'geoscatter' && (longitudeFound < 0 || latitudeFound < 0)
       && sizeIndex < 0 && result.columns.length > 2) sizeIndex = 2;
-    const colorIndex = result.columns.findIndex((column) => column.name === '__chartsdk_color_value');
     const seriesIndex = result.columns.findIndex((column) => column.name === '__chartsdk_series');
     const base = typeof o.geoscatter?.symbolSize === 'number' ? o.geoscatter.symbolSize : 10;
     const sizes = sizeIndex >= 0 ? displayRows.map((row) => Number(row[sizeIndex])).filter(Number.isFinite) : [];
@@ -1497,19 +1489,15 @@ export function assembleOption(
         : `${roundMockCoordinate(longitude)}, ${roundMockCoordinate(latitude)}`;
       const value = valueIndex >= 0 ? row[valueIndex] : chartType === 'map' ? 1 : null;
       const intensity = chartType === 'map' && typeof value === 'number' && Number.isFinite(value) ? value : 1;
-      const rawColorValue = colorIndex >= 0 ? row[colorIndex] : chartType === 'map' ? intensity : value;
-      const colorValue = typeof rawColorValue === 'number' && Number.isFinite(rawColorValue)
-        ? rawColorValue
-        : chartType === 'map' ? intensity : Number.NaN;
-      if (Number.isFinite(colorValue)) visualValues.push(colorValue);
+      if (chartType === 'map') visualValues.push(intensity);
       const dimensions: ItemColorDimension[] = [roundMockCoordinate(longitude), roundMockCoordinate(latitude)];
       const occurrence = nextMockOccurrence(occurrences, 'geoscatter', seriesName, dimensions);
       const itemColor = itemColorFor(itemColors, 'geoscatter', seriesName, dimensions, occurrence);
       const point: Record<string, unknown> = {
         name: pointName,
         value: chartType === 'map'
-          ? [longitude, latitude, intensity, Number.isFinite(colorValue) ? colorValue : intensity]
-          : [longitude, latitude, value, sizeIndex >= 0 ? row[sizeIndex] : null, colorIndex >= 0 ? row[colorIndex] : null],
+          ? [longitude, latitude, intensity]
+          : [longitude, latitude, value, sizeIndex >= 0 ? row[sizeIndex] : null],
         ...(chartType === 'geoscatter' && sizeIndex >= 0 ? { symbolSize: sizeOf(row[sizeIndex]) } : {}),
       };
       const current = bySeries.get(seriesName) ?? [];
@@ -1528,7 +1516,7 @@ export function assembleOption(
       map: o.map?.name === 'kr-sigungu' ? 'kr-sigungu' : 'kr-sido',
       roam: o.map?.roam === true,
       clip: true,
-      ...nonCartesianInsets(o, bySeries.size > 1, chartType === 'map' || colorIndex >= 0),
+      ...nonCartesianInsets(o, bySeries.size > 1, chartType === 'map'),
       label: { show: false },
       ...(boundary.show === false ? { show: false } : {}),
       ...(boundary.show !== false && Object.keys(boundaryItemStyle).length > 0
@@ -1587,14 +1575,14 @@ export function assembleOption(
       return series;
     });
     if (pointSeries.length <= 1) delete opt.legend;
-    if (chartType === 'map' || colorIndex >= 0) {
+    if (chartType === 'map') {
       let min = visualValues.length ? Math.min(...visualValues) : 0;
       let max = visualValues.length ? Math.max(...visualValues) : 1;
       if (min === max) max = min + 1;
       opt.visualMap = visualMapConfig(
         min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
         typography.legend, fonts.legend, o.colorTheme?.version === 2,
-        pointSeries.map((series) => ({ seriesId: String(series.id), dimension: chartType === 'map' ? 3 : 4 })),
+        pointSeries.map((series) => ({ seriesId: String(series.id), dimension: 2 })),
       );
     } else {
       delete opt.visualMap;

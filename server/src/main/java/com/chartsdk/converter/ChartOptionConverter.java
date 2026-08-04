@@ -46,7 +46,6 @@ public class ChartOptionConverter {
     private static final String GEO_POINT_NAME = "__chartsdk_point_name";
     private static final String GEO_POINT_VALUE = "__chartsdk_point_value";
     private static final String GEO_POINT_SIZE = "__chartsdk_size";
-    private static final String GEO_POINT_COLOR = "__chartsdk_color_value";
     private static final String GEO_SERIES = "__chartsdk_series";
     private static final List<String> LEGACY_DEFAULT_PALETTE = List.of(
             "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
@@ -727,7 +726,6 @@ public class ChartOptionConverter {
         int nameIndex = columnIndex(columns, GEO_POINT_NAME);
         int valueIndex = columnIndex(columns, GEO_POINT_VALUE);
         int sizeIndex = columnIndex(columns, GEO_POINT_SIZE);
-        int colorIndex = columnIndex(columns, GEO_POINT_COLOR);
         int seriesIndex = columnIndex(columns, GEO_SERIES);
         if (legacyColumns && sizeIndex < 0 && columns.size() > 2) sizeIndex = 2;
         boolean hasSize = sizeIndex >= 0;
@@ -738,15 +736,6 @@ public class ChartOptionConverter {
                     double v = n.doubleValue();
                     if (v < sMin) sMin = v;
                     if (v > sMax) sMax = v;
-                }
-            }
-        }
-        double colorMin = Double.POSITIVE_INFINITY, colorMax = Double.NEGATIVE_INFINITY;
-        if (colorIndex >= 0) {
-            for (List<Object> row : rows) {
-                if (row.size() > colorIndex && row.get(colorIndex) instanceof Number number) {
-                    colorMin = Math.min(colorMin, number.doubleValue());
-                    colorMax = Math.max(colorMax, number.doubleValue());
                 }
             }
         }
@@ -763,13 +752,12 @@ public class ChartOptionConverter {
                     ? String.valueOf(r.get(nameIndex)) : roundCoordinate(lng) + ", " + roundCoordinate(lat);
             Object pointValue = valueIndex >= 0 && r.size() > valueIndex ? r.get(valueIndex) : null;
             Object sizeValue = sizeIndex >= 0 && r.size() > sizeIndex ? r.get(sizeIndex) : null;
-            Object colorValue = colorIndex >= 0 && r.size() > colorIndex ? r.get(colorIndex) : null;
             List<Object> dimensions = List.of(roundCoordinate(lng), roundCoordinate(lat));
             int occurrence = itemOccurrences.next("geoscatter", seriesName, dimensions);
             Object itemColor = itemColors.color("geoscatter", seriesName, dimensions, occurrence);
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("name", pointName);
-            point.put("value", java.util.Arrays.asList(lng, lat, pointValue, sizeValue, colorValue));
+            point.put("value", java.util.Arrays.asList(lng, lat, pointValue, sizeValue));
             if (hasSize && !Double.isInfinite(sMin)) {
                 point.put("symbolSize", scaledBubbleSize(sizeValue, sMin, sMax, base));
             }
@@ -778,9 +766,8 @@ public class ChartOptionConverter {
         }
         if (dataBySeries.isEmpty()) dataBySeries.put("포인트", new ArrayList<>());
 
-        applyPointGeo(o, opt, dataBySeries.size() > 1, colorIndex >= 0);
+        applyPointGeo(o, opt, dataBySeries.size() > 1, false);
         List<Map<String, Object>> series = new ArrayList<>();
-        List<Map<String, Object>> targets = new ArrayList<>();
         int index = 0;
         for (Map.Entry<String, List<Object>> entry : dataBySeries.entrySet()) {
             String id = "__chartsdk_geo_point_" + index;
@@ -805,17 +792,10 @@ public class ChartOptionConverter {
             applySeriesEmphasis(s, opt, "scatter");
             s.put("data", entry.getValue());
             series.add(s);
-            if (colorIndex >= 0) targets.add(Map.of("seriesId", id, "dimension", 4));
             index++;
         }
         if (series.size() <= 1) o.remove("legend");
-        if (colorIndex >= 0) {
-            if (Double.isInfinite(colorMin)) { colorMin = 0; colorMax = 1; }
-            if (colorMin == colorMax) colorMax = colorMin + 1;
-            o.put("visualMap", visualMap(colorMin, colorMax, opt, targets));
-        } else {
-            o.remove("visualMap");
-        }
+        o.remove("visualMap");
         o.put("series", series);
         applyMapViewportMetadata(o, opt);
     }
@@ -830,7 +810,6 @@ public class ChartOptionConverter {
         if (latitudeIndex < 0) latitudeIndex = 1;
         int nameIndex = columnIndex(columns, GEO_POINT_NAME);
         int valueIndex = columnIndex(columns, GEO_POINT_VALUE);
-        int colorIndex = columnIndex(columns, GEO_POINT_COLOR);
         int seriesIndex = columnIndex(columns, GEO_SERIES);
         LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
         ItemColorResolver.Occurrences occurrences = new ItemColorResolver.Occurrences();
@@ -846,18 +825,16 @@ public class ChartOptionConverter {
                     ? String.valueOf(row.get(nameIndex)) : roundCoordinate(longitude) + ", " + roundCoordinate(latitude);
             double intensity = valueIndex >= 0 && row.size() > valueIndex && row.get(valueIndex) instanceof Number number
                     ? number.doubleValue() : 1;
-            double colorValue = colorIndex >= 0 && row.size() > colorIndex && row.get(colorIndex) instanceof Number number
-                    ? number.doubleValue() : intensity;
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("name", pointName);
-            point.put("value", List.of(longitude, latitude, intensity, colorValue));
+            point.put("value", List.of(longitude, latitude, intensity));
             List<Object> dimensions = List.of(roundCoordinate(longitude), roundCoordinate(latitude));
             int occurrence = occurrences.next("geoscatter", seriesName, dimensions);
             Object itemColor = itemColors.color("geoscatter", seriesName, dimensions, occurrence);
             dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
                     .add(withItemColor(point, itemColor, "color", false));
-            min = Math.min(min, colorValue);
-            max = Math.max(max, colorValue);
+            min = Math.min(min, intensity);
+            max = Math.max(max, intensity);
         }
         if (dataBySeries.isEmpty()) dataBySeries.put("밀도", new ArrayList<>());
         if (Double.isInfinite(min)) { min = 0; max = 1; }
@@ -882,7 +859,7 @@ public class ChartOptionConverter {
             heatmap.put("data", entry.getValue());
             applySeriesEmphasis(heatmap, opt, "heatmap");
             series.add(heatmap);
-            targets.add(Map.of("seriesId", id, "dimension", 3));
+            targets.add(Map.of("seriesId", id, "dimension", 2));
             index++;
         }
         if (series.size() <= 1) o.remove("legend");
