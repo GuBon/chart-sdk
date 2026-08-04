@@ -33,6 +33,14 @@ public final class BuilderSqlBuilder {
         }
     }
 
+    /**
+     * L1 result-sample source. The SQL returns only the rows selected by Bernoulli after the
+     * completed JOIN + WHERE population; aggregation is deliberately performed later from the
+     * cached rows.
+     */
+    public record ResultSampleSource(Sql sql) {
+    }
+
     private final Catalog catalog;
     private RefRenderer renderer; // INDEX_RANDOM 경로에서 CTE 별칭 렌더러로 교체(그 외 불변)
     private final Map<String, Object> cfg;
@@ -115,6 +123,23 @@ public final class BuilderSqlBuilder {
     public static Sql generateSamplingPopulation(SchemaCatalog catalog, Map<String, Object> cfg,
                                                  String chartType) {
         return generateSamplingPopulation(catalog, RefRenderer.SINGLE, cfg, chartType);
+    }
+
+    /** Single-source L1 row-sample SQL. Only valid for a RESULT_RANDOM execution plan. */
+    public static ResultSampleSource generateResultSampleSource(
+            SchemaCatalog catalog, Map<String, Object> cfg, String chartType, SamplePlan plan) {
+        return generateResultSampleSource(catalog, RefRenderer.SINGLE, cfg, chartType, plan);
+    }
+
+    /** Federated/single-source L1 row-sample SQL. */
+    public static ResultSampleSource generateResultSampleSource(
+            Catalog catalog, RefRenderer renderer, Map<String, Object> cfg,
+            String chartType, SamplePlan plan) {
+        if (plan == null || plan.method() != SamplePlan.Method.RESULT_RANDOM) {
+            throw invalidReq("L1 row sampling requires a RESULT_RANDOM execution plan.");
+        }
+        return new BuilderSqlBuilder(catalog, renderer, cfg, chartType, false, plan,
+                renderer == RefRenderer.FEDERATED).buildResultSampleSource();
     }
 
     /** builderConfig 가 참조하는 datasourceId 집합(명시된 것만). 실행 라우팅(단일 vs 페더레이션) 판정에 쓴다. */
@@ -273,6 +298,63 @@ public final class BuilderSqlBuilder {
         List<Object> params = new ArrayList<>();
         String where = buildWhere(params);
         return new Sql("SELECT 1 FROM " + render(baseRef) + joins + where, params, null);
+    }
+
+    private ResultSampleSource buildResultSampleSource() {
+        if (baseRef == null) throw invalidReq("table is required.");
+        assertTable(baseRef);
+        registerTable(baseRef);
+        String joinSql = buildJoins();
+        SamplingMetadata sampling = resolveSampling();
+        if (!isResultRandom(sampling)) {
+            throw invalidReq("L1 row sampling requires RESULT_RANDOM sampling.");
+        }
+
+        if (isSpatialGeoPoint()) {
+            return new ResultSampleSource(buildResultRandomSpatialPointSource(joinSql, sampling));
+        }
+        if (isSpatialGeoArea()) {
+            return new ResultSampleSource(buildResultRandomSpatialAreaSource(joinSql, sampling));
+        }
+
+        String xAxis = str(cfg.get("xAxis"));
+        String seriesBy = str(cfg.get("seriesBy"));
+        List<Map<String, Object>> yAxis = asMapList(cfg.get("yAxis"));
+        if (xAxis == null) throw invalidReq("xAxis is required.");
+        if (yAxis.isEmpty()) throw invalidReq("At least one yAxis is required.");
+        Ref x = resolveRef(xAxis);
+        Ref series = seriesBy == null ? null : resolveRef(seriesBy);
+        boolean allNone = yAxis.stream().allMatch(y -> "none".equals(str(y.get("agg"))));
+        validateChartShape(x, series, yAxis, allNone);
+
+        List<String> projected = new ArrayList<>();
+        List<String> aliases = new ArrayList<>();
+        addProjected(projected, aliases, render(x), RESULT_X);
+        if (series != null) addProjected(projected, aliases, render(series), RESULT_SERIES);
+        for (int i = 0; i < yAxis.size(); i++) {
+            Ref ref = resolveRef(str(yAxis.get(i).get("column")));
+            assertAggCompatible(str(yAxis.get(i).get("agg")), ref);
+            addProjected(projected, aliases, render(ref), RESULT_Y_PREFIX + i);
+        }
+        for (Map.Entry<String, Ref> entry : geoPointRoleRefs().entrySet()) {
+            String expression = render(entry.getValue());
+            if (GEO_POINT_NAME.equals(entry.getKey())) expression = "CAST(" + expression + " AS text)";
+            addProjected(projected, aliases, expression, entry.getKey());
+        }
+
+        List<Object> params = new ArrayList<>();
+        String where = buildWhere(params);
+        String population = SqlIdentifier.quote(POPULATION_CTE);
+        String sample = SqlIdentifier.quote(SAMPLE_CTE);
+        String barrier = hasJoins ? " OFFSET 0" : "";
+        String populationColumns = qualifiedColumns(population, aliases);
+        String sampleColumns = qualifiedColumns(sample, aliases);
+        String sql = "WITH " + population + " AS (SELECT " + String.join(", ", projected)
+                + " FROM " + render(baseRef) + joinSql + where + barrier + "), "
+                + sample + " AS MATERIALIZED (SELECT " + populationColumns + " FROM " + population
+                + " WHERE random() < ?) SELECT " + sampleColumns + " FROM " + sample;
+        params.add(resultBernoulliProbability(sampling));
+        return new ResultSampleSource(new Sql(sql, params, sampling));
     }
 
     /** 표본 스펙(sampling())을 실행 계획으로 해석 — 무플랜은 레거시(SYSTEM/exact) 해석 그대로. */
@@ -487,13 +569,18 @@ public final class BuilderSqlBuilder {
      */
     private Sql buildResultRandomSpatialPoint(String joins, SamplingMetadata sampling, String pointSql) {
         List<String> projected = new ArrayList<>();
-        projected.add(pointSql + " AS " + SqlIdentifier.quote(SPATIAL_SOURCE));
-        appendGeoPointRoleSelects(projected);
+        List<String> aliases = new ArrayList<>();
+        addProjected(projected, aliases, pointSql, SPATIAL_SOURCE);
+        for (Map.Entry<String, Ref> entry : geoPointRoleRefs().entrySet()) {
+            String expression = render(entry.getValue());
+            if (GEO_POINT_NAME.equals(entry.getKey())) expression = "CAST(" + expression + " AS text)";
+            addProjected(projected, aliases, expression, entry.getKey());
+        }
 
         String seriesColumn = str(cfg.get("seriesBy"));
         if (seriesColumn != null) {
-            projected.add("CAST(" + render(resolveRef(seriesColumn)) + " AS text) AS "
-                    + SqlIdentifier.quote(GEO_SERIES));
+            addProjected(projected, aliases,
+                    "CAST(" + render(resolveRef(seriesColumn)) + " AS text)", GEO_SERIES);
         }
 
         List<Object> params = new ArrayList<>();
@@ -504,16 +591,23 @@ public final class BuilderSqlBuilder {
         String sampleSource = sample + "." + SqlIdentifier.quote(SPATIAL_SOURCE);
         String spatialValue = spatial + "." + SqlIdentifier.quote(SPATIAL_VALUE);
         String barrier = hasJoins ? " OFFSET 0" : "";
+        String populationColumns = qualifiedColumns(population, aliases);
+        List<String> spatialProjection = new ArrayList<>();
+        for (String alias : aliases) {
+            if (SPATIAL_SOURCE.equals(alias)) continue;
+            spatialProjection.add(sample + "." + SqlIdentifier.quote(alias) + " AS " + SqlIdentifier.quote(alias));
+        }
 
         StringBuilder sql = new StringBuilder("WITH ")
                 .append(population).append(" AS (SELECT ").append(String.join(", ", projected))
                 .append(" FROM ").append(render(baseRef)).append(joins).append(where).append(barrier)
                 .append("), ").append(sample).append(" AS MATERIALIZED (SELECT ")
-                .append(population).append(".* FROM ").append(population)
+                .append(populationColumns).append(" FROM ").append(population)
                 .append(" WHERE random() < ?), ").append(spatial)
                 .append(" AS MATERIALIZED (SELECT ST_Transform((").append(sampleSource)
                 .append(")::geometry, 4326) AS ").append(SqlIdentifier.quote(SPATIAL_VALUE))
-                .append(", ").append(sample).append(".* FROM ").append(sample)
+                .append(spatialProjection.isEmpty() ? "" : ", " + String.join(", ", spatialProjection))
+                .append(" FROM ").append(sample)
                 .append(" WHERE ").append(sampleSource).append(" IS NOT NULL) SELECT ST_X(")
                 .append(spatialValue).append(") AS ").append(SqlIdentifier.quote(SPATIAL_LONGITUDE))
                 .append(", ST_Y(").append(spatialValue).append(") AS ")
@@ -530,6 +624,18 @@ public final class BuilderSqlBuilder {
 
         params.add(resultBernoulliProbability(sampling));
         return new Sql(sql.toString(), params, sampling);
+    }
+
+    private Sql buildResultRandomSpatialPointSource(String joins, SamplingMetadata sampling) {
+        Map<String, Object> geoPoint = asMap(cfg.get("geoPoint"));
+        String pointColumn = geoPoint == null ? null : str(geoPoint.get("spatialColumn"));
+        if (pointColumn == null) throw invalidReq("geoPoint.spatialColumn is required.");
+        Ref point = resolveRef(pointColumn);
+        if (!isSpatialPointType(typeOf(point))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "geoscatter spatial column must be geometry/geography Point with an SRID.");
+        }
+        return buildResultRandomSpatialPoint(joins, sampling, render(point));
     }
 
     private boolean isSpatialGeoPoint() {
@@ -611,16 +717,26 @@ public final class BuilderSqlBuilder {
         String sampleSource = sample + "." + SqlIdentifier.quote(SPATIAL_SOURCE);
         String spatialValue = spatial + "." + SqlIdentifier.quote(SPATIAL_VALUE);
         String barrier = hasJoins ? " OFFSET 0" : "";
+        List<String> aliases = new ArrayList<>(List.of(
+                SPATIAL_SOURCE, SPATIAL_AREA_NAME, SPATIAL_AREA_VALUE));
+        if (seriesColumn != null) aliases.add(GEO_SERIES);
+        String populationColumns = qualifiedColumns(population, aliases);
+        List<String> spatialProjection = new ArrayList<>();
+        for (String alias : aliases) {
+            if (SPATIAL_SOURCE.equals(alias)) continue;
+            spatialProjection.add(sample + "." + SqlIdentifier.quote(alias) + " AS " + SqlIdentifier.quote(alias));
+        }
 
         StringBuilder sql = new StringBuilder("WITH ")
                 .append(population).append(" AS (SELECT ").append(String.join(", ", projected))
                 .append(" FROM ").append(render(baseRef)).append(joins).append(where).append(barrier)
                 .append("), ").append(sample).append(" AS MATERIALIZED (SELECT ")
-                .append(population).append(".* FROM ").append(population)
+                .append(populationColumns).append(" FROM ").append(population)
                 .append(" WHERE random() < ?), ").append(spatial)
                 .append(" AS MATERIALIZED (SELECT ST_Transform((").append(sampleSource)
                 .append(")::geometry, 4326) AS ").append(SqlIdentifier.quote(SPATIAL_VALUE))
-                .append(", ").append(sample).append(".* FROM ").append(sample)
+                .append(spatialProjection.isEmpty() ? "" : ", " + String.join(", ", spatialProjection))
+                .append(" FROM ").append(sample)
                 .append(" WHERE ").append(sampleSource).append(" IS NOT NULL) SELECT ")
                 .append(spatial).append(".").append(SqlIdentifier.quote(SPATIAL_AREA_NAME))
                 .append(" AS ").append(SqlIdentifier.quote(SPATIAL_AREA_NAME)).append(", ")
@@ -636,6 +752,28 @@ public final class BuilderSqlBuilder {
 
         params.add(resultBernoulliProbability(sampling));
         return new Sql(sql.toString(), params, sampling);
+    }
+
+    private Sql buildResultRandomSpatialAreaSource(String joins, SamplingMetadata sampling) {
+        Map<String, Object> geoArea = asMap(cfg.get("geoArea"));
+        String spatialColumn = geoArea == null ? null : str(geoArea.get("spatialColumn"));
+        String nameColumn = geoArea == null ? null : str(geoArea.get("nameColumn"));
+        String valueColumn = geoArea == null ? null : str(geoArea.get("valueColumn"));
+        if (spatialColumn == null) throw invalidReq("geoArea.spatialColumn is required.");
+        if (nameColumn == null) throw invalidReq("geoArea.nameColumn is required.");
+        if (valueColumn == null) throw invalidReq("geoArea.valueColumn is required.");
+        Ref area = resolveRef(spatialColumn);
+        Ref name = resolveRef(nameColumn);
+        Ref value = resolveRef(valueColumn);
+        if (!isSpatialAreaType(typeOf(area))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "map spatial column must be geometry/geography Polygon or MultiPolygon with an SRID.");
+        }
+        if (!isNumeric(typeOf(value))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "AGG_TYPE_MISMATCH",
+                    "map spatial value column must be numeric.");
+        }
+        return buildResultRandomSpatialArea(joins, sampling, render(area), name, value);
     }
 
     private static boolean isResultRandom(SamplingMetadata sampling) {
@@ -722,6 +860,18 @@ public final class BuilderSqlBuilder {
 
     private static String sampleColumn(String column) {
         return SqlIdentifier.quote(SAMPLE_CTE) + "." + SqlIdentifier.quote(column);
+    }
+
+    private static void addProjected(List<String> projected, List<String> aliases,
+                                     String expression, String alias) {
+        projected.add(expression + " AS " + SqlIdentifier.quote(alias));
+        aliases.add(alias);
+    }
+
+    private static String qualifiedColumns(String relation, List<String> aliases) {
+        return String.join(", ", aliases.stream()
+                .map(alias -> relation + "." + SqlIdentifier.quote(alias))
+                .toList());
     }
 
     /** 목표 K를 모집단 추정치 N̂의 독립 포함 확률로 변환한다. 추정 불가 시 전량을 보존한다. */

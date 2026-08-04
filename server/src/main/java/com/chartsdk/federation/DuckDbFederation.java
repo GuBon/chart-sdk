@@ -56,6 +56,10 @@ public class DuckDbFederation {
     public record PlannedBernoulli(QueryRows rows, BuilderSqlBuilder.Sql sql, long populationEstimate) {
     }
 
+    public record PlannedResultSample(QueryRows rows, BuilderSqlBuilder.ResultSampleSource source,
+                                      long populationEstimate) {
+    }
+
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor) {
         this.datasources = datasources;
         this.queryExecutor = queryExecutor;
@@ -131,6 +135,49 @@ public class DuckDbFederation {
                     chartResult ? QueryExecutor.MAX_CHART_ROWS + 1 : QueryExecutor.MAX_ROWS);
             if (chartResult) rows = QueryExecutor.enforceChartResultLimit(rows);
             return new PlannedBernoulli(rows, sql, estimate);
+        } catch (SQLTimeoutException e) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
+        } catch (ApiException e) {
+            throw e;
+        } catch (SQLException e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        }
+    }
+
+    /**
+     * Plans and materializes only the bounded post-JOIN Bernoulli rows on one attached DuckDB
+     * session. Final aggregation is performed from the L1 cache after this method returns.
+     */
+    public PlannedResultSample executePlannedResultSample(
+            Collection<Long> datasourceIds,
+            String populationSql,
+            List<Object> populationParams,
+            LongFunction<BuilderSqlBuilder.ResultSampleSource> sourceFactory,
+            long seed
+    ) {
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
+            configure(conn, datasourceIds, true);
+            long estimate;
+            try {
+                estimate = explainEstimatedRows(conn, populationSql, populationParams);
+            } catch (Exception ignored) {
+                estimate = 0;
+            }
+            BuilderSqlBuilder.ResultSampleSource source = sourceFactory.apply(estimate);
+            setRandomSeed(conn, seed);
+            QueryRows rows = execute(conn, source.sql().text(), source.sql().params(),
+                    QueryExecutor.MAX_CACHED_SAMPLE_ROWS + 1);
+            if (rows.rowCount() > QueryExecutor.MAX_CACHED_SAMPLE_ROWS) {
+                throw new ApiException(
+                        HttpStatus.PAYLOAD_TOO_LARGE,
+                        "SAMPLE_REALIZATION_TOO_LARGE",
+                        "Bernoulli sample exceeds " + QueryExecutor.MAX_CACHED_SAMPLE_ROWS
+                                + " rows. Reduce the requested sample size."
+                );
+            }
+            return new PlannedResultSample(rows, source, estimate);
         } catch (SQLTimeoutException e) {
             throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
         } catch (ApiException e) {

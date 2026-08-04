@@ -522,7 +522,7 @@ class BuilderSqlBuilderTest {
     }
 
     @Test
-    void geoPointProjectsAllRolesAndSeriesGroupingForScatterAndMapHeatmap() {
+    void geoPointProjectsSupportedRolesAndIgnoresRemovedLegacyColorColumn() {
         Map<String, Object> config = Map.of(
                 "table", "sales",
                 "xAxis", "amount",
@@ -543,9 +543,8 @@ class BuilderSqlBuilderTest {
                 .contains("CAST(\"public\".\"sales\".\"category\" AS text) AS \"__chartsdk_point_name\"")
                 .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_point_value\"")
                 .contains("\"public\".\"sales\".\"customer_id\" AS \"__chartsdk_size\"")
-                .contains("\"public\".\"sales\".\"amount\" AS \"__chartsdk_color_value\"")
                 .contains("CAST(\"public\".\"sales\".\"category\" AS text) AS \"__chartsdk_series\"")
-                .doesNotContain("GROUP BY");
+                .doesNotContain("\"__chartsdk_color_value\"", "GROUP BY");
 
         Map<String, Object> heatmapConfig = new java.util.LinkedHashMap<>(config);
         heatmapConfig.put("geoSeriesType", "heatmap");
@@ -554,9 +553,8 @@ class BuilderSqlBuilderTest {
                 .contains("\"__chartsdk_longitude\"")
                 .contains("\"__chartsdk_latitude\"")
                 .contains("\"__chartsdk_point_value\"")
-                .contains("\"__chartsdk_color_value\"")
                 .contains("\"__chartsdk_series\"")
-                .doesNotContain("\"__chartsdk_area_name\"", "GROUP BY");
+                .doesNotContain("\"__chartsdk_color_value\"", "\"__chartsdk_area_name\"", "GROUP BY");
     }
 
     @Test

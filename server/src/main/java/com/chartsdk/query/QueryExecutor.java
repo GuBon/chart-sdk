@@ -30,6 +30,8 @@ public class QueryExecutor {
     public static final int MAX_ROWS = 1000;
     /** Hard safety ceiling for complete chart datasets kept in the application heap. */
     public static final int MAX_CHART_ROWS = 50_000;
+    /** Bernoulli realizations vary around the requested target; this is a non-truncating guard. */
+    public static final int MAX_CACHED_SAMPLE_ROWS = 75_000;
     private static final long CATALOG_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private final DatasourcePoolRegistry pools;
@@ -70,6 +72,18 @@ public class QueryExecutor {
         QueryRows rows = execute(datasourceId, sql, params,
                 chartResult ? MAX_CHART_ROWS + 1 : MAX_ROWS, seed);
         return chartResult ? enforceChartResultLimit(rows) : rows;
+    }
+
+    /** Executes the pre-aggregation L1 Bernoulli projection without silently truncating it. */
+    public QueryRows executeCachedSample(long datasourceId, String sql, List<Object> params, long seed) {
+        QueryRows rows = execute(datasourceId, sql, params, MAX_CACHED_SAMPLE_ROWS + 1, seed);
+        if (rows.rowCount() <= MAX_CACHED_SAMPLE_ROWS) return rows;
+        throw new ApiException(
+                HttpStatus.PAYLOAD_TOO_LARGE,
+                "SAMPLE_REALIZATION_TOO_LARGE",
+                "Bernoulli sample exceeds " + MAX_CACHED_SAMPLE_ROWS
+                        + " rows. Reduce the requested sample size."
+        );
     }
 
     public static QueryRows enforceChartResultLimit(QueryRows rows) {
