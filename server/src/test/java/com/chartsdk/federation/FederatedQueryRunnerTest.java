@@ -1,5 +1,10 @@
 package com.chartsdk.federation;
 
+import com.chartsdk.cache.CachedResultSample;
+import com.chartsdk.cache.SampleRowCacheService;
+import com.chartsdk.cache.SamplingMetadata;
+import com.chartsdk.query.BuilderSqlBuilder;
+import com.chartsdk.query.CachedSampleExecutor;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.FederatedCatalog;
@@ -10,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,11 +25,53 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class FederatedQueryRunnerTest {
 
     private static final QueryRows EMPTY = new QueryRows(List.of(), List.of(), 0, false, 1);
+
+    @Test
+    void l1HitAggregatesCachedRowsBeforeTouchingCustomerCatalogOrPlanner() {
+        QueryExecutor queries = mock(QueryExecutor.class);
+        DuckDbFederation federation = mock(DuckDbFederation.class);
+        SamplingPlanner planner = mock(SamplingPlanner.class);
+        SampleRowCacheService cache = mock(SampleRowCacheService.class);
+        CachedSampleExecutor executor = mock(CachedSampleExecutor.class);
+        Map<String, Object> config = Map.of(
+                "table", Map.of("datasourceId", 1L, "schema", "public", "name", "points"),
+                "xAxis", "longitude",
+                "yAxis", List.of(Map.of("column", "latitude", "agg", "avg")),
+                "sample", Map.of("mode", "manual", "size", 1_000, "seed", 77));
+        SamplingMetadata sampling = SamplingMetadata.fromBuilderConfig(config)
+                .asResultRandom(100_000, 1_000);
+        QueryRows sample = new QueryRows(
+                List.of(
+                        Map.of("name", "__chartsdk_x", "type", "double precision"),
+                        Map.of("name", "__chartsdk_y_0", "type", "double precision")),
+                List.of(List.of(127.0, 37.0)), 1, false, 1);
+        BuilderSqlBuilder.Sql source = new BuilderSqlBuilder.Sql(
+                "SELECT longitude AS \"__chartsdk_x\", latitude AS \"__chartsdk_y_0\" "
+                        + "FROM points WHERE random() < ?",
+                List.of(0.01), sampling);
+        CachedResultSample cached = new CachedResultSample(sample, sampling, source);
+        QueryRows finalRows = new QueryRows(
+                List.of(
+                        Map.of("name", "longitude", "type", "DOUBLE"),
+                        Map.of("name", "avg_latitude", "type", "DOUBLE")),
+                List.of(List.of(127.0, 37.0)), 1, false, 1);
+        when(cache.find(anyString(), eq(900))).thenReturn(Optional.of(cached));
+        when(executor.execute(eq(sample), any())).thenReturn(finalRows);
+
+        FederatedQueryRunner.BuiltResult result = new FederatedQueryRunner(
+                queries, federation, planner, cache, executor)
+                .runBuilder(1L, config, "bar", false, 900);
+
+        assertThat(result.rows()).isSameAs(finalRows);
+        assertThat(result.sql().text()).contains("__chartsdk_l1_source").doesNotContain("SELECT *");
+        verifyNoInteractions(queries, federation, planner);
+    }
 
     @Test
     void routesOrdinaryBuilderChartsThroughChartExecution() {

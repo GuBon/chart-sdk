@@ -3,6 +3,8 @@ package com.chartsdk.chart;
 import com.chartsdk.cache.CachedChartRows;
 import com.chartsdk.cache.ChartCacheService;
 import com.chartsdk.cache.ChartRefreshCoordinator;
+import com.chartsdk.cache.SampleFingerprint;
+import com.chartsdk.cache.SampleRowCacheService;
 import com.chartsdk.crypto.DatasourcePasswordCodec;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.dto.ChartSaveRequest;
@@ -18,8 +20,10 @@ import java.net.Socket;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,6 +62,7 @@ class MultiSourceChartLifecycleIT {
     @Autowired DatasourcePasswordCodec codec;
     @Autowired ChartRefreshCoordinator refreshes;
     @Autowired ChartCacheService cache;
+    @Autowired SampleRowCacheService sampleRows;
 
     @Test
     void multiSourceChartSaveSeedsJunctionAndCacheThenServesSnapshot() {
@@ -73,7 +78,8 @@ class MultiSourceChartLifecycleIT {
                         "type", "inner",
                         "on", Map.of("leftColumn", "exercise_logs.user_id", "rightColumn", "users.id"))),
                 "xAxis", "users.id",
-                "yAxis", List.of(Map.of("column", "exercise_logs.calories_burned", "agg", "sum", "alias", "cal")));
+                "yAxis", List.of(Map.of("column", "exercise_logs.calories_burned", "agg", "sum", "alias", "cal")),
+                "sample", Map.of("mode", "manual", "size", 1_000, "seed", 77));
         ChartSaveRequest req = new ChartSaveRequest(
                 "멀티소스 IT", null, tId, "builder", null, cfg, "bar", Map.of(), null, null, null);
 
@@ -126,6 +132,24 @@ class MultiSourceChartLifecycleIT {
         // 1) junction — 두 소스가 기록된다(§12.1).
         assertThat(meta.queryForObject(
                 "SELECT count(*) FROM mc_chart_datasource WHERE chart_id=?", Integer.class, chartId)).isEqualTo(2);
+        // JOIN + WHERE 이후 Bernoulli로 만든 역할 열만 L1에 저장한다.
+        assertThat(meta.queryForObject(
+                "SELECT count(*) FROM mc_sample_row_cache", Integer.class)).isEqualTo(1);
+        assertThat(meta.queryForObject("""
+                SELECT payload->'columns' @> '[{"name":"__chartsdk_x"}]'::jsonb
+                   AND payload->'columns' @> '[{"name":"__chartsdk_y_0"}]'::jsonb
+                  FROM mc_sample_row_cache
+                """, Boolean.class)).isTrue();
+        assertThat(sampleRows.find(
+                SampleFingerprint.of(tId, Set.of(tId, dId), cfg, "bar"), 3_600)).isPresent();
+        Map<String, Object> averageCfg = new LinkedHashMap<>(cfg);
+        averageCfg.put("yAxis", List.of(Map.of(
+                "column", "exercise_logs.calories_burned", "agg", "avg", "alias", "average_cal")));
+        chartService.create(new ChartSaveRequest(
+                "same L1, different aggregate", null, tId, "builder", null,
+                averageCfg, "bar", Map.of(), null, null, null));
+        assertThat(meta.queryForObject(
+                "SELECT count(*) FROM mc_sample_row_cache", Integer.class)).isEqualTo(1);
         // 2) refresh_mode — 다중 소스는 스냅샷 → manual 로 고정(§7).
         assertThat(meta.queryForObject(
                 "SELECT refresh_mode FROM mc_chart WHERE id=?", String.class, chartId)).isEqualTo("manual");

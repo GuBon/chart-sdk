@@ -15,7 +15,7 @@ import java.util.SplittableRandom;
 @Service
 public class SamplingPlanner {
 
-    static final int DEFAULT_SIZE = 10_000;      // auto 기본 목표 행 수. 오차는 집계·분산·그룹별 유효 n에 따라 별도 계산한다.
+    public static final int DEFAULT_SIZE = 10_000;      // auto 기본 목표 행 수. 오차는 집계·분산·그룹별 유효 n에 따라 별도 계산한다.
     static final int MAX_PROBES = 60_000;        // 인덱스 프로브 예산(10s 타임아웃)
     static final double MIN_DENSITY = 0.5;       // 키 밀도 하한 — 미만이면 오버샘플 비용 과다
     static final long FULL_SCAN_ROWS = 100_000;  // 이하 테이블은 스캔이 프로브보다 싸고 정확
