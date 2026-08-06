@@ -26,6 +26,7 @@ import {
   normalizeBuilder,
   normalizeBuilderForChartType,
   normalizeSampleConfig,
+  supportsAutomaticPointSampling,
   orderTargets,
   parseColumn,
   tableHandle,
@@ -172,6 +173,18 @@ describe('표본 설정', () => {
 
   it('레거시 rate 전용 설정은 수동 모드와 기본 seed로 정규화한다', () => {
     expect(normalizeSampleConfig({ rate: 10 })).toEqual({ mode: 'manual', rate: 10, seed: 48_291 });
+  });
+
+  it('자동 표본은 원본 점 렌더러에만 적용한다', () => {
+    const rawPoints = bar({ yAxis: [{ column: 'amount', agg: 'none' }] });
+    expect(supportsAutomaticPointSampling(rawPoints, 'scatter')).toBe(true);
+    expect(supportsAutomaticPointSampling(rawPoints, 'bar')).toBe(false);
+    expect(supportsAutomaticPointSampling({ ...rawPoints, geoSeriesType: 'heatmap' }, 'map')).toBe(true);
+    expect(supportsAutomaticPointSampling({
+      ...rawPoints,
+      yAxis: [],
+      geoPoint: { mode: 'spatial', spatialColumn: 'location' },
+    }, 'geoscatter')).toBe(true);
   });
 });
 

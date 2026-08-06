@@ -27,6 +27,7 @@ import {
   orderTargets,
   relationDisplayName,
   supportsSeriesByForChart,
+  supportsAutomaticPointSampling,
   tableHandle,
   tableRefKey,
   updateSampleMode,
@@ -214,7 +215,11 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const unusedTable = !!config.table && tables.some(
     (t) => isRelationSelectable(t) && !activeTables(config).some((ref) => tableRefKey(ref) === tableRefKey(t)),
   );
-  const sampleSourceHint = joins.length > 0
+  const automaticSamplingDisabled = config.sample?.mode === 'auto'
+    && !supportsAutomaticPointSampling(config, chartType);
+  const sampleSourceHint = automaticSamplingDisabled
+    ? '자동 표본은 원본 점을 그리는 산점도·지도 포인트에만 적용됩니다. 현재 차트는 정확 실행됩니다.'
+    : joins.length > 0
     ? '조인 결과에서 무작위 행 표본'
     : baseSchemaTable?.relationType === 'VIEW'
       ? 'View 조회 결과에서 무작위 행 표본'

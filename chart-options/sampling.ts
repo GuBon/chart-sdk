@@ -1,5 +1,5 @@
-/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v7 — 결과집합 Bernoulli 행 표본 포함). */
-export const SAMPLING_CONTRACT_VERSION = 7;
+/** server API·Admin·SDK가 공유하는 표본 설정·실행 결과 계약(v9 — 런타임 reservoir 포함). */
+export const SAMPLING_CONTRACT_VERSION = 9;
 export const MIN_SAMPLE_RATE = 0.1;
 export const MAX_SAMPLE_RATE = 100;
 export const DEFAULT_SAMPLE_SEED = 48_291;
@@ -12,12 +12,13 @@ export const FULL_SCAN_ROWS = 100_000;
 
 export type SamplingMode = 'auto' | 'manual';
 export type SamplingRequestedMethod = 'auto' | 'system';
-export type SamplingMethod = 'INDEX_RANDOM' | 'RESULT_RANDOM' | 'SYSTEM' | 'FULL_SCAN';
+export type SamplingMethod = 'INDEX_RANDOM' | 'RESULT_RANDOM' | 'RESERVOIR_RANDOM' | 'SYSTEM' | 'FULL_SCAN';
 export type SamplingValueMode = 'sample' | 'population_estimate' | 'exact'; // population_estimate는 v4 이하 읽기 호환
 export type SamplingWarningCode =
   | 'BLOCK_SAMPLE_CLUSTERING'
   | 'INDEX_RANDOM_SAMPLE'
   | 'RESULT_RANDOM_SAMPLE'
+  | 'RESERVOIR_RANDOM_SAMPLE'
   | 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE'
   | 'INDEX_SAMPLE_ESTIMATED_TOTAL'
   | 'SMALL_SAMPLE_GROUPS'
@@ -71,6 +72,7 @@ export interface SamplingMetadata {
   method: SamplingMethod;
   valueMode: SamplingValueMode;
   populationEstimate?: number;
+  populationCount?: number; // RESERVOIR_RANDOM이 전체 scan 중 실측한 정확한 모집단 행 수.
   sampleSize?: number; // 실행 목표. RESULT_RANDOM의 가변 실측치는 sampledRowCount.
   sampledRowCount?: number;
   confidenceLevel?: number;
@@ -126,10 +128,12 @@ export function samplingWarningMessage(code: SamplingWarningCode): string {
       return '전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.';
     case 'RESULT_RANDOM_SAMPLE':
       return '조회 결과의 각 행을 같은 확률로 독립 선택한 Bernoulli 표본입니다. 실제 행 수는 목표와 다를 수 있습니다.';
+    case 'RESERVOIR_RANDOM_SAMPLE':
+      return '예상보다 큰 조회 결과를 끝까지 확인한 뒤 동일한 포함 확률로 선택한 행 표본입니다.';
     case 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE':
       return '조회 결과 행 수를 추정하지 못해 Bernoulli 확률을 100%로 적용했습니다.';
     case 'INDEX_SAMPLE_ESTIMATED_TOTAL':
-      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v7로 다시 계산하는 것을 권장합니다.';
+      return '이 결과는 이전 계약에서 만든 전체 추정값입니다. 최신 sampling v9로 다시 계산하는 것을 권장합니다.';
     case 'SMALL_SAMPLE_GROUPS':
       return '표본이 30개 미만인 항목은 오차범위를 산출하지 않았습니다. 표본 크기를 늘리면 정확도가 올라갑니다.';
     case 'STDDEV_CI_NORMALITY_ASSUMED':
@@ -150,6 +154,8 @@ export function samplingMethodLabel(method: SamplingMethod): string {
       return '무작위 행 표본';
     case 'RESULT_RANDOM':
       return '결과 Bernoulli 행 표본';
+    case 'RESERVOIR_RANDOM':
+      return '결과 Reservoir 행 표본';
     case 'SYSTEM':
       return '블록 표본';
     case 'FULL_SCAN':
@@ -176,7 +182,8 @@ export function normalizeSampling(source: SamplingSource): SamplingMetadata | un
 
   const exact = approximate === false;
   const method: SamplingMethod = (nested?.method as SamplingMethod) ?? (exact ? 'FULL_SCAN' : 'SYSTEM');
-  if (exact ? method !== 'FULL_SCAN' : method !== 'SYSTEM' && method !== 'INDEX_RANDOM' && method !== 'RESULT_RANDOM') return undefined;
+  if (exact ? method !== 'FULL_SCAN' : method !== 'SYSTEM' && method !== 'INDEX_RANDOM'
+    && method !== 'RESULT_RANDOM' && method !== 'RESERVOIR_RANDOM') return undefined;
 
   // 정식 nested 계약이 있으면 그 안의 스펙만 신뢰한다. top-level sampleRate는 nested 자체가 없는 레거시 응답에만 사용한다.
   const rateSource = nested ? nested.rate : source.sampleRate;
@@ -192,6 +199,7 @@ export function normalizeSampling(source: SamplingSource): SamplingMetadata | un
   if (typeof nested?.sizeTarget === 'number') metadata.sizeTarget = nested.sizeTarget;
   if (!exact && typeof nested?.seed === 'number' && Number.isFinite(nested.seed)) metadata.seed = nested.seed;
   if (typeof nested?.populationEstimate === 'number') metadata.populationEstimate = nested.populationEstimate;
+  if (typeof nested?.populationCount === 'number' && nested.populationCount >= 0) metadata.populationCount = nested.populationCount;
   if (typeof nested?.sampleSize === 'number') metadata.sampleSize = nested.sampleSize;
   if (typeof nested?.sampledRowCount === 'number' && nested.sampledRowCount >= 0) metadata.sampledRowCount = nested.sampledRowCount;
   if (typeof nested?.confidenceLevel === 'number') metadata.confidenceLevel = nested.confidenceLevel;

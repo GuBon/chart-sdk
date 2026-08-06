@@ -116,6 +116,21 @@ describe('renderChart', () => {
       .toContain('조회 결과의 각 행을 같은 확률로 독립 선택한 Bernoulli 표본');
   });
 
+  it('RESERVOIR_RANDOM은 런타임 안전 표본임을 구분해 표시한다', () => {
+    const el = document.createElement('div');
+    renderChart(el, {}, undefined, {
+      version: 9, mode: 'auto', requestedMethod: 'auto', approximate: true,
+      method: 'RESERVOIR_RANDOM', seed: 77, valueMode: 'sample',
+      populationCount: 1_000_000, sampleSize: 10_000, sampledRowCount: 10_000,
+      warnings: ['RESERVOIR_RANDOM_SAMPLE'],
+    });
+
+    expect(el.querySelector('[data-chart-caption]')?.textContent)
+      .toContain('결과 Reservoir 행 표본 10,000행 · 표본 결과');
+    expect(el.querySelector('[data-chart-sampling-warning]')?.textContent)
+      .toContain('예상보다 큰 조회 결과를 끝까지 확인');
+  });
+
   it('표본 SUM·COUNT는 전체 추정 배지 없이 표본값 주의문구를 표시한다', () => {
     const el = document.createElement('div');
     renderChart(el, {}, undefined, {

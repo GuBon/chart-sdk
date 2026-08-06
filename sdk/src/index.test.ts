@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 
 // index.ts 는 로드 시 부수효과(apiBase 확정 + 자동 scan)가 있어, 테스트마다 resetModules + 동적 import 로 재평가한다.
 // api·chart 는 mock — 네트워크·echarts 를 차단하고 index 의 분기 로직만 검증.
@@ -142,6 +143,27 @@ describe('render', () => {
     expect(sampling.sampleSize).toBe(10_000);
   });
 
+  it('RESERVOIR_RANDOM의 실측 모집단을 손실 없이 렌더러에 전달한다', async () => {
+    mocks.fetchChartOption.mockResolvedValue({
+      option: { x: 1 },
+      computedAt: 'c',
+      sampling: {
+        version: SAMPLING_CONTRACT_VERSION,
+        mode: 'auto', requestedMethod: 'auto', approximate: true,
+        method: 'RESERVOIR_RANDOM', valueMode: 'sample', seed: 77,
+        populationCount: 1_000_000, sampleSize: 10_000, sampledRowCount: 10_000,
+        warnings: ['RESERVOIR_RANDOM_SAMPLE'],
+      },
+    });
+    const mod = await import('./index');
+    const el = document.createElement('div');
+    await mod.render(el, { chartId: '3', token: 'T' });
+
+    const sampling = mocks.renderChart.mock.calls[0][3] as Record<string, unknown>;
+    expect(sampling.method).toBe('RESERVOIR_RANDOM');
+    expect(sampling.populationCount).toBe(1_000_000);
+  });
+
   it('레거시 approximate/sampleRate 응답도 정식 sampling 계약으로 승격한다', async () => {
     mocks.fetchChartOption.mockResolvedValue({ option: {}, computedAt: 'c', approximate: true, sampleRate: 25 });
     const mod = await import('./index');
@@ -152,7 +174,7 @@ describe('render', () => {
       {},
       'c',
       {
-        version: 7, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
+        version: SAMPLING_CONTRACT_VERSION, mode: 'manual', requestedMethod: 'auto', approximate: true, method: 'SYSTEM', rate: 25,
         valueMode: 'sample',
       },
     );

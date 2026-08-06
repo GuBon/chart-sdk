@@ -116,6 +116,13 @@ export function usesGeoPointInput(cfg: BuilderConfig, chartType: ChartType): boo
   return chartType === 'geoscatter' || (chartType === 'map' && geoSeriesTypeFor(cfg, chartType) === 'heatmap');
 }
 
+/** Mirrors the backend gate for system-controlled sampling; manual sampling remains unrestricted. */
+export function supportsAutomaticPointSampling(cfg: BuilderConfig, chartType: ChartType): boolean {
+  if (chartType !== 'scatter' && !usesGeoPointInput(cfg, chartType)) return false;
+  if (cfg.geoPoint?.mode === 'spatial') return true;
+  return cfg.yAxis.length > 0 && cfg.yAxis.every((axis) => axis.agg === 'none');
+}
+
 export function supportsSeriesByForChart(chartType: ChartType): boolean {
   return chartType === 'bar' || chartType === 'line' || chartType === 'map' || chartType === 'geoscatter';
 }

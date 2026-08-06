@@ -678,7 +678,7 @@ describe('mock 변환기 표본 집계 계약', () => {
     expect(buildAggregateRows(config, 'bar').sampling?.sampledRowCount).toBeLessThan(12_000);
   });
 
-  it('일반 VIEW는 TABLESAMPLE 대신 조회 결과 행 표본을 사용한다', () => {
+  it('자동 표본은 집계 차트에 적용하지 않는다', () => {
     const config: BuilderConfig = {
       table: { datasourceId: 1, schema: 'analytics', name: 'sales_summary' },
       joins: [], xAxis: 'category', xAxisBucket: null,
@@ -687,11 +687,28 @@ describe('mock 변환기 표본 집계 계약', () => {
     };
 
     expect(buildGeneratedSql(config)).toContain('FROM "analytics"."sales_summary"');
-    expect(buildGeneratedSql(config)).toContain('"__chartsdk_population" AS');
+    expect(buildGeneratedSql(config)).not.toContain('"__chartsdk_population" AS');
     expect(buildGeneratedSql(config)).not.toContain('TABLESAMPLE');
     expect(buildAggregateRows(config, 'bar').sampling).toMatchObject({
+      approximate: false,
+      method: 'FULL_SCAN',
+    });
+  });
+
+  it('자동 포인트 표본은 일반 VIEW에서 조회 결과 행을 사용한다', () => {
+    const config: BuilderConfig = {
+      table: { datasourceId: 1, schema: 'analytics', name: 'sales_summary' },
+      joins: [], xAxis: 'category', xAxisBucket: null,
+      yAxis: [{ column: 'amount', agg: 'none' }], where: [], orderBy: null,
+      sample: { mode: 'auto', seed: 9 },
+    };
+
+    expect(buildGeneratedSql(config, 'scatter')).toContain('"__chartsdk_population" AS');
+    expect(buildGeneratedSql(config, 'scatter')).not.toContain('TABLESAMPLE');
+    expect(buildAggregateRows(config, 'scatter').sampling).toMatchObject({
+      approximate: true,
       method: 'RESULT_RANDOM',
-      warnings: ['RESULT_RANDOM_SAMPLE', 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE', 'SAMPLE_AGGREGATE_ONLY'],
+      warnings: ['RESULT_RANDOM_SAMPLE', 'RESULT_POPULATION_ESTIMATE_UNAVAILABLE'],
     });
   });
 

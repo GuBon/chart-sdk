@@ -1,5 +1,5 @@
 // ⚠ MSW 목 전용 — 프로덕션 변환기는 서버 단일(Java). 여기 로직은 server 구현 전까지
-// 미리보기를 채우기 위한 스탠드인이며, 변환기 매핑 스펙(변환기_매핑스펙_차트옵션.md)의 MVP 부분만 모사한다.
+// 미리보기를 채우기 위한 스탠드인이며, 변환기 매핑 스펙(차트옵션_변환_규칙.md)의 MVP 부분만 모사한다.
 // (프론트 코드가 아니라 가짜 백엔드 자리이므로 "이중 변환기 금지" 원칙과 충돌하지 않는다.)
 import type { BuilderConfig, ChartType, QueryResult, SchemaTable } from '@/lib/api';
 import {
@@ -57,7 +57,7 @@ import {
   movingAverageOverridesSort,
 } from '@chartsdk/chart-options/statisticalOverlays';
 import { optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
-import { columnsForBuilder, fieldDisplayNameForRef } from '@/lib/builder';
+import { columnsForBuilder, fieldDisplayNameForRef, supportsAutomaticPointSampling } from '@/lib/builder';
 import { schemaTables } from './seed';
 
 type Cols = { name: string; type: string; displayName?: string }[];
@@ -163,7 +163,7 @@ export function buildGeneratedSql(cfg: BuilderConfig, chartType?: ChartType): st
     const pos = cfg.orderBy.target === 'x' ? 1 : Number(cfg.orderBy.target.slice(1)) + (cfg.seriesBy ? 3 : 2);
     return ` ORDER BY ${pos} ${cfg.orderBy.direction.toUpperCase()}`;
   };
-  const plan = samplePlanForConfig(cfg);
+  const plan = samplePlanForConfig(cfg, chartType);
   const resultRandomSpatialSql = (
     spatialExpression: string,
     projected: string[],
@@ -470,6 +470,7 @@ type MockSamplePlan = {
   method: SamplingMetadata['method'];
   approximate: boolean;
   populationEstimate: number;
+  populationCount?: number;
   sampleSize: number;
   executionRate: number;
   seed?: number;
@@ -481,10 +482,16 @@ function resultBernoulliProbability(plan: MockSamplePlan): number {
 }
 
 /** 서버 SamplingPlanner의 관계 종류·크기·레거시 SYSTEM 결정 순서를 미러한다. */
-function samplePlanForConfig(cfg: BuilderConfig): MockSamplePlan | undefined {
+function samplePlanForConfig(cfg: BuilderConfig, chartType?: ChartType): MockSamplePlan | undefined {
   if (!cfg.sample) return undefined;
   const legacyRate = cfg.sample.rate;
   const seed = Math.trunc(cfg.sample.seed ?? DEFAULT_SAMPLE_SEED);
+  if (cfg.sample.mode === 'auto' && (!chartType || !supportsAutomaticPointSampling(cfg, chartType))) {
+    return {
+      method: 'FULL_SCAN', approximate: false,
+      populationEstimate: populationEstimateForConfig(cfg), sampleSize: 0, executionRate: 100,
+    };
+  }
   if (legacyRate != null && legacyRate >= 100) {
     return { method: 'FULL_SCAN', approximate: false, populationEstimate: populationEstimateForConfig(cfg), sampleSize: 0, executionRate: 100 };
   }
@@ -522,18 +529,37 @@ function samplePlanForConfig(cfg: BuilderConfig): MockSamplePlan | undefined {
 function legacySampleRate(sampling: SamplingMetadata): number {
   if (!sampling.approximate) return 100;
   if (sampling.rate != null) return sampling.rate;
-  if (sampling.populationEstimate && sampling.sampleSize != null) {
-    return normalizeSampleRate((sampling.sampleSize / sampling.populationEstimate) * 100);
+  const population = sampling.populationCount ?? sampling.populationEstimate;
+  if (population && sampling.sampleSize != null) {
+    return normalizeSampleRate((sampling.sampleSize / population) * 100);
   }
   return normalizeSampleRate(Number.NaN);
 }
 
-function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetadata | undefined {
+function samplingForConfig(cfg: BuilderConfig, labels: unknown[], chartType?: ChartType): SamplingMetadata | undefined {
   if (!cfg.sample) return undefined;
   const mode = cfg.sample.mode === 'auto' ? 'auto' : 'manual';
   const requestedMethod = cfg.sample.method === 'system' ? 'system' : 'auto';
   const legacyRate = cfg.sample.rate;
-  const plan = samplePlanForConfig(cfg)!;
+  const planned = samplePlanForConfig(cfg, chartType)!;
+  const targetSize = normalizeSampleSize(cfg.sample.size ?? DEFAULT_SAMPLE_SIZE);
+  // 서버와 동일하게 planner가 FULL_SCAN을 골랐더라도 자동 포인트의 실측 결과가 K를 넘으면
+  // 결과 SQL은 유지한 채 collector 결과 메타데이터만 RESERVOIR_RANDOM으로 전환한다.
+  const runtimeReservoir = cfg.sample.mode === 'auto'
+    && !!chartType
+    && supportsAutomaticPointSampling(cfg, chartType)
+    && planned.method === 'FULL_SCAN'
+    && labels.length > targetSize;
+  const plan: MockSamplePlan = runtimeReservoir
+    ? {
+        ...planned,
+        method: 'RESERVOIR_RANDOM',
+        approximate: true,
+        populationCount: labels.length,
+        sampleSize: targetSize,
+        executionRate: normalizeSampleRate((targetSize / labels.length) * 100),
+      }
+    : planned;
 
   if (!plan.approximate) {
     return {
@@ -545,11 +571,12 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
     };
   }
 
-  const { method, populationEstimate, sampleSize, executionRate } = plan;
-  const uniformRandom = method === 'INDEX_RANDOM' || method === 'RESULT_RANDOM';
+  const { method, populationEstimate, populationCount, sampleSize, executionRate } = plan;
+  const uniformRandom = method === 'INDEX_RANDOM' || method === 'RESULT_RANDOM' || method === 'RESERVOIR_RANDOM';
   const realizedSampleSize = method === 'RESULT_RANDOM'
     ? Math.max(0, Math.min(populationEstimate || Number.MAX_SAFE_INTEGER,
       Math.round(sampleSize - Math.sqrt(sampleSize))))
+    : method === 'RESERVOIR_RANDOM' ? Math.min(populationCount ?? labels.length, sampleSize)
     : sampleSize;
   const rowSample = cfg.yAxis.length > 0 && cfg.yAxis.every((y) => y.agg === 'none');
   const groups = rowSample ? [] : labels.map((key, index) => ({
@@ -579,7 +606,8 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
   });
   const methodWarning: SamplingWarningCode = method === 'SYSTEM'
     ? 'BLOCK_SAMPLE_CLUSTERING'
-    : method === 'RESULT_RANDOM' ? 'RESULT_RANDOM_SAMPLE' : 'INDEX_RANDOM_SAMPLE';
+    : method === 'RESULT_RANDOM' ? 'RESULT_RANDOM_SAMPLE'
+      : method === 'RESERVOIR_RANDOM' ? 'RESERVOIR_RANDOM_SAMPLE' : 'INDEX_RANDOM_SAMPLE';
   const warnings = new Set<SamplingWarningCode>([methodWarning]);
   if (method === 'RESULT_RANDOM' && populationEstimate <= 0) {
     warnings.add('RESULT_POPULATION_ESTIMATE_UNAVAILABLE');
@@ -595,7 +623,8 @@ function samplingForConfig(cfg: BuilderConfig, labels: unknown[]): SamplingMetad
     ...(cfg.sample.size != null ? { sizeTarget: cfg.sample.size } : {}),
     seed: plan.seed,
     valueMode: 'sample',
-    ...(method === 'RESULT_RANDOM' && populationEstimate <= 0 ? {} : { populationEstimate }), sampleSize,
+    ...(method === 'RESULT_RANDOM' && populationEstimate <= 0 ? {} : { populationEstimate }),
+    ...(populationCount != null ? { populationCount } : {}), sampleSize,
     sampledRowCount: rowSample
       ? labels.length
       : groups.reduce((sum, group) => sum + group.sampleCount, 0),
@@ -635,7 +664,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       category,
       ...years.map((_year, yearIndex) => 2_500_000 + categoryIndex * 1_150_000 + yearIndex * 85_000),
     ]);
-    const sampling = samplingForConfig(cfg, categories);
+    const sampling = samplingForConfig(cfg, categories, chartType);
     return {
       columns,
       rows,
@@ -656,7 +685,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       for (let k = 0; k < 9; k++) rows.push([cat, Math.round(center + (k - 4) * spread + (k % 3) * 6)]);
       rows.push([cat, center + spread * 12]);
     });
-    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]), chartType);
     return {
       columns,
       rows,
@@ -680,7 +709,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
         cfg.seriesBy
           ? [['A', 1], ['B', 0.72]].map(([series, ratio]) => [name, Number(value) * Number(ratio), JSON.stringify(geometry), series])
           : [[name, value, JSON.stringify(geometry)]]);
-      const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+      const sampling = samplingForConfig(cfg, rows.map((row) => row[0]), chartType);
       return {
         columns,
         rows,
@@ -695,7 +724,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       { name: '__chartsdk_area_value', type: 'numeric' },
       ...(cfg.seriesBy ? [{ name: '__chartsdk_series', type: 'text' }] : []),
     ];
-    const sampling = samplingForConfig(cfg, SAMPLE_REGIONS);
+    const sampling = samplingForConfig(cfg, SAMPLE_REGIONS, chartType);
     const rows: Rows = SAMPLE_REGIONS.flatMap((region, index) => {
       const value = Math.round(500 - index * 32 + (index % 3) * 45);
       return cfg.seriesBy ? [[region, value, 'A'], [region, Math.round(value * 0.72), 'B']] : [[region, value]];
@@ -730,7 +759,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       ...(hasSize ? [size] : []),
       ...(cfg.seriesBy ? [index % 2 === 0 ? 'A' : 'B'] : []),
     ]);
-    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]), chartType);
     return {
       columns,
       rows,
@@ -754,7 +783,7 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
       sampleValue(xType, i),
       ...yTypes.map((type) => sampleValue(type, i)),
     ]);
-    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]));
+    const sampling = samplingForConfig(cfg, rows.map((row) => row[0]), chartType);
     return {
       columns,
       rows,
@@ -767,8 +796,8 @@ export function buildAggregateRows(cfg: BuilderConfig, chartType?: ChartType): Q
   const xType = builderColumnType(cfg, cfg.xAxis);
   const labels = cfg.xAxisBucket || isTemporalColumnType(xType) ? SAMPLE_MONTHS : SAMPLE_CATS;
   const columns: Cols = [{ name: cfg.xAxis ? colName(cfg.xAxis) : 'x', type: xType }, ...cfg.yAxis.map((y) => ({ name: aliasOf(y), type: 'numeric' }))];
-  const sampling = samplingForConfig(cfg, labels);
-  // sampling v7: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
+  const sampling = samplingForConfig(cfg, labels, chartType);
+  // sampling v9: 모든 집계값은 선택된 표본에서 계산한 값을 그대로 표시한다.
   const rows: Rows = labels.map((label, i) => [
     label,
     ...cfg.yAxis.map((_y, j) => Math.round(500 - i * 70 + j * 130 + (i % 2) * 40)),
