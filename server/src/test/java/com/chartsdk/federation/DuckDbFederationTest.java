@@ -3,13 +3,11 @@ package com.chartsdk.federation;
 import com.chartsdk.datasource.DatasourceCredentials;
 import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.QueryExecutor;
-import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -19,7 +17,7 @@ import static org.mockito.Mockito.mock;
 class DuckDbFederationTest {
 
     @Test
-    void jdbcRowLimitAndChartSafetyCeilingAreEnforced() {
+    void rawPreviewIsBoundedButChartExecutionIsComplete() {
         DuckDbFederation federation = new DuckDbFederation(
                 mock(DatasourceService.class), mock(QueryExecutor.class));
 
@@ -27,10 +25,23 @@ class DuckDbFederationTest {
         assertThat(preview.rowCount()).isEqualTo(QueryExecutor.MAX_ROWS);
         assertThat(preview.truncated()).isTrue();
 
-        assertThatThrownBy(() -> federation.executeChart(
-                List.of(), "SELECT * FROM range(60000)", List.of()))
-                .isInstanceOfSatisfying(ApiException.class,
-                        error -> assertThat(error.code()).isEqualTo("RESULT_TOO_LARGE"));
+        var chart = federation.executeChart(List.of(), "SELECT * FROM range(60000)", List.of());
+        assertThat(chart.rowCount()).isEqualTo(60_000);
+        assertThat(chart.truncated()).isFalse();
+    }
+
+    @Test
+    void adaptivePointExecutionScansPopulationButRetainsOnlyTheReservoir() {
+        DuckDbFederation federation = new DuckDbFederation(
+                mock(DatasourceService.class), mock(QueryExecutor.class));
+
+        var sampled = federation.executeAutoPointChart(
+                List.of(), "SELECT * FROM range(60000)", List.of(), 10_000, 77);
+
+        assertThat(sampled.populationCount()).isEqualTo(60_000);
+        assertThat(sampled.rows().rowCount()).isEqualTo(10_000);
+        assertThat(sampled.sampled()).isTrue();
+        assertThat(sampled.rows().truncated()).isFalse();
     }
 
     @Test

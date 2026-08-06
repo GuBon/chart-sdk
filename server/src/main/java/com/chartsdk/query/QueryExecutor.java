@@ -4,6 +4,7 @@ import com.chartsdk.datasource.DatasourcePoolRegistry;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -20,21 +21,22 @@ import java.util.concurrent.TimeUnit;
 /**
  * 모든 고객 DB 조회의 단일 실행 경로. 읽기 전용·타임아웃·행 제한 정책·에러코드 매핑을 한 곳에서 강제한다
  * (노코드 빌더·raw SQL·스키마 미리보기가 공유 — 별도 실행 경로를 만들지 않는다, 노코드 SQL생성규칙 §1.1).
- * 데이터 미리보기·검증 조회는 기본 1,000행으로 제한한다. 실제 차트 계산은 전체 결과가 렌더 계약이므로
- * 차트 계산은 {@link #executeChart(long, String, List)}의 별도 안전 상한을 사용한다.
+ * 데이터 미리보기·원본 탐색은 기본 1,000행으로 제한한다. 실제 차트 계산은 제품 행 상한 없이
+ * JDBC cursor fetch를 사용하며, 동시성은 {@link QueryExecutionCoordinator}가 제한한다.
  */
 @Service
 public class QueryExecutor {
     private static final int QUERY_TIMEOUT_SECONDS = 10;
     private static final ObjectMapper JSON = new ObjectMapper();
     public static final int MAX_ROWS = 1000;
-    /** Hard safety ceiling for complete chart datasets kept in the application heap. */
-    public static final int MAX_CHART_ROWS = 50_000;
+    /** JDBC maxRows value for complete chart datasets. Zero means no product-level row cap. */
+    public static final int UNBOUNDED_CHART_ROWS = 0;
     /** Bernoulli realizations vary around the requested target; this is a non-truncating guard. */
     public static final int MAX_CACHED_SAMPLE_ROWS = 75_000;
     private static final long CATALOG_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private final DatasourcePoolRegistry pools;
+    private final AdmissionController coordinator;
     private final ConcurrentHashMap<Long, CachedCatalog> catalogs = new ConcurrentHashMap<>();
 
     private record CachedCatalog(SchemaCatalog value, long expiresAtNanos) {
@@ -44,7 +46,13 @@ public class QueryExecutor {
     }
 
     public QueryExecutor(DatasourcePoolRegistry pools) {
+        this(pools, null);
+    }
+
+    @Autowired
+    public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator) {
         this.pools = pools;
+        this.coordinator = coordinator;
     }
 
     public QueryRows execute(long datasourceId, String sql) {
@@ -53,30 +61,39 @@ public class QueryExecutor {
 
     /** PreparedStatement 바인딩 실행(노코드 빌더 경로). params 가 비면 정적 실행과 동일. */
     public QueryRows execute(long datasourceId, String sql, List<Object> params) {
-        return execute(datasourceId, sql, params, MAX_ROWS, null);
+        return execute(datasourceId, sql, params, MAX_ROWS, null, AdmissionController.Kind.PREVIEW);
+    }
+
+    /** Executes the complete chart result. Raw-data exploration remains capped by {@link #MAX_ROWS}. */
+    public QueryRows executeChart(long datasourceId, String sql, List<Object> params) {
+        return execute(datasourceId, sql, params, UNBOUNDED_CHART_ROWS, null,
+                AdmissionController.Kind.CHART);
     }
 
     /**
-     * Executes a chart query with one sentinel row beyond the supported result size. This keeps
-     * normal chart results complete while rejecting accidental full-table payloads before they
-     * can consume unbounded heap in conversion, caching, and JSON serialization.
+     * Scans the complete automatic point result but retains at most {@code targetSize} rows in
+     * deterministic reservoir memory. Manual and sampling-off paths do not call this method.
      */
-    public QueryRows executeChart(long datasourceId, String sql, List<Object> params) {
-        return enforceChartResultLimit(
-                execute(datasourceId, sql, params, MAX_CHART_ROWS + 1, null));
+    public PointCollectionResult executeAutoPointChart(long datasourceId, String sql,
+                                                       List<Object> params, int targetSize, long seed) {
+        return execute(datasourceId, sql, params, UNBOUNDED_CHART_ROWS, null,
+                AdmissionController.Kind.CHART,
+                (resultSet, startNanos, ignoredMaxRows) -> ReservoirPointCollector.collect(
+                        resultSet, startNanos, targetSize, seed));
     }
 
     /** 동일 연결에서 seed를 먼저 설정한 뒤 Bernoulli 표본 SQL을 실행한다. */
     public QueryRows executeBernoulli(long datasourceId, String sql, List<Object> params,
                                       boolean chartResult, long seed) {
-        QueryRows rows = execute(datasourceId, sql, params,
-                chartResult ? MAX_CHART_ROWS + 1 : MAX_ROWS, seed);
-        return chartResult ? enforceChartResultLimit(rows) : rows;
+        return execute(datasourceId, sql, params,
+                chartResult ? UNBOUNDED_CHART_ROWS : MAX_ROWS, seed,
+                AdmissionController.Kind.SAMPLE);
     }
 
     /** Executes the pre-aggregation L1 Bernoulli projection without silently truncating it. */
     public QueryRows executeCachedSample(long datasourceId, String sql, List<Object> params, long seed) {
-        QueryRows rows = execute(datasourceId, sql, params, MAX_CACHED_SAMPLE_ROWS + 1, seed);
+        QueryRows rows = execute(datasourceId, sql, params, MAX_CACHED_SAMPLE_ROWS + 1, seed,
+                AdmissionController.Kind.SAMPLE);
         if (rows.rowCount() <= MAX_CACHED_SAMPLE_ROWS) return rows;
         throw new ApiException(
                 HttpStatus.PAYLOAD_TOO_LARGE,
@@ -86,19 +103,10 @@ public class QueryExecutor {
         );
     }
 
-    public static QueryRows enforceChartResultLimit(QueryRows rows) {
-        if (rows.rowCount() <= MAX_CHART_ROWS) return rows;
-        throw new ApiException(
-                HttpStatus.PAYLOAD_TOO_LARGE,
-                "RESULT_TOO_LARGE",
-                "Chart result exceeds " + MAX_CHART_ROWS
-                        + " rows. Aggregate the data, enable sampling, or add a LIMIT."
-        );
-    }
-
     /** EXPLAIN JSON 최상위 Plan Rows. 쿼리를 실행하지 않고 JOIN+WHERE 결과 행 수를 추정한다. */
     public long explainEstimatedRows(long datasourceId, String sql, List<Object> params) {
-        QueryRows explained = execute(datasourceId, "EXPLAIN (FORMAT JSON) " + sql, params, MAX_ROWS, null);
+        QueryRows explained = execute(datasourceId, "EXPLAIN (FORMAT JSON) " + sql, params, MAX_ROWS, null,
+                AdmissionController.Kind.EXPLAIN);
         if (explained.rows().isEmpty() || explained.rows().get(0).isEmpty()) return 0;
         try {
             JsonNode root = JSON.readTree(String.valueOf(explained.rows().get(0).get(0)));
@@ -108,13 +116,39 @@ public class QueryExecutor {
         }
     }
 
-    private QueryRows execute(long datasourceId, String sql, List<Object> params, int maxRows, Long bernoulliSeed) {
+    private QueryRows execute(long datasourceId, String sql, List<Object> params, int maxRows,
+                              Long bernoulliSeed, AdmissionController.Kind kind) {
+        return execute(datasourceId, sql, params, maxRows, bernoulliSeed, kind,
+                (resultSet, startNanos, limit) -> QueryRows.from(resultSet, startNanos, limit));
+    }
+
+    private <T> T execute(long datasourceId, String sql, List<Object> params, int maxRows,
+                          Long bernoulliSeed, AdmissionController.Kind kind,
+                          ResultCollector<T> collector) {
+        if (coordinator == null) {
+            return executeAdmitted(datasourceId, sql, params, maxRows, bernoulliSeed, collector);
+        }
+        try {
+            return coordinator.execute(datasourceId, kind,
+                    () -> executeAdmitted(datasourceId, sql, params, maxRows, bernoulliSeed, collector));
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR", e.getMessage());
+        }
+    }
+
+    private <T> T executeAdmitted(long datasourceId, String sql, List<Object> params,
+                                  int maxRows, Long bernoulliSeed, ResultCollector<T> collector) {
         long start = System.nanoTime();
         try (Connection conn = pools.connection(datasourceId)) {
+            boolean cursorFetch = maxRows == UNBOUNDED_CHART_ROWS && conn.getAutoCommit();
+            if (cursorFetch) conn.setAutoCommit(false);
             if (bernoulliSeed != null) setRandomSeed(conn, bernoulliSeed);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
                 ps.setMaxRows(maxRows);
+                if (cursorFetch) ps.setFetchSize(1_000);
                 for (int i = 0; i < params.size(); i++) {
                     Object p = params.get(i);
                     if (p instanceof long[] keys) {
@@ -127,7 +161,9 @@ public class QueryExecutor {
                     }
                 }
                 try (ResultSet rs = ps.executeQuery()) {
-                    return QueryRows.from(rs, start, maxRows);
+                    T result = collector.collect(rs, start, maxRows);
+                    if (cursorFetch) conn.rollback();
+                    return result;
                 }
             }
         } catch (SQLTimeoutException e) {
@@ -137,6 +173,11 @@ public class QueryExecutor {
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR", e.getMessage());
         }
+    }
+
+    @FunctionalInterface
+    private interface ResultCollector<T> {
+        T collect(ResultSet resultSet, long startNanos, int maxRows) throws Exception;
     }
 
     private static void setRandomSeed(Connection connection, long seed) throws Exception {
@@ -168,6 +209,18 @@ public class QueryExecutor {
     }
 
     private SchemaCatalog loadCatalog(long datasourceId) {
+        if (coordinator == null) return loadCatalogAdmitted(datasourceId);
+        try {
+            return coordinator.execute(datasourceId, AdmissionController.Kind.CATALOG,
+                    () -> loadCatalogAdmitted(datasourceId));
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
+        }
+    }
+
+    private SchemaCatalog loadCatalogAdmitted(long datasourceId) {
         Map<SchemaCatalog.Key, Map<String, String>> tables = new LinkedHashMap<>();
         Map<SchemaCatalog.Key, RelationType> relationTypes = new LinkedHashMap<>();
         Map<SchemaCatalog.Key, Long> estimates = new LinkedHashMap<>();

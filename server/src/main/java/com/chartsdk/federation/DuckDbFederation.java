@@ -5,7 +5,10 @@ import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.FederatedCatalog;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
+import com.chartsdk.query.AdmissionController;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.query.PointCollectionResult;
+import com.chartsdk.query.ReservoirPointCollector;
 import com.chartsdk.query.RefRenderer;
 import com.chartsdk.query.SchemaCatalog;
 import com.chartsdk.query.SamplingSeed;
@@ -15,6 +18,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -51,6 +55,7 @@ public class DuckDbFederation {
 
     private final DatasourceService datasources;
     private final QueryExecutor queryExecutor;
+    private final AdmissionController coordinator;
 
     /** SQL produced after the population estimate and executed on that same attached connection. */
     public record PlannedBernoulli(QueryRows rows, BuilderSqlBuilder.Sql sql, long populationEstimate) {
@@ -61,8 +66,15 @@ public class DuckDbFederation {
     }
 
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor) {
+        this(datasources, queryExecutor, null);
+    }
+
+    @Autowired
+    public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor,
+                            AdmissionController coordinator) {
         this.datasources = datasources;
         this.queryExecutor = queryExecutor;
+        this.coordinator = coordinator;
     }
 
     /** 참조 소스들의 카탈로그를 union 해 식별자 화이트리스트를 만든다(각 소스 mc_·시스템 스키마 제외 유지). */
@@ -85,22 +97,60 @@ public class DuckDbFederation {
         return execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_ROWS, null);
     }
 
-    /** Complete chart execution with the same heap-safety ceiling as direct PostgreSQL queries. */
+    /** Complete chart execution without a product-level row cap. */
     public QueryRows executeChart(Collection<Long> datasourceIds, String federatedSql, List<Object> params) {
-        return QueryExecutor.enforceChartResultLimit(
-                execute(datasourceIds, federatedSql, params, QueryExecutor.MAX_CHART_ROWS + 1, null));
+        return execute(datasourceIds, federatedSql, params, QueryExecutor.UNBOUNDED_CHART_ROWS, null);
+    }
+
+    /** Full federated scan with bounded deterministic reservoir retention for automatic points. */
+    public PointCollectionResult executeAutoPointChart(Collection<Long> datasourceIds,
+                                                       String federatedSql, List<Object> params,
+                                                       int targetSize, long seed) {
+        return admitted(datasourceIds, () -> executeAutoPointChartAdmitted(
+                datasourceIds, federatedSql, params, targetSize, seed));
+    }
+
+    private PointCollectionResult executeAutoPointChartAdmitted(Collection<Long> datasourceIds,
+                                                                String federatedSql,
+                                                                List<Object> params,
+                                                                int targetSize, long seed) {
+        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:")) {
+            configure(connection, datasourceIds, true);
+            long start = System.nanoTime();
+            try (PreparedStatement statement = connection.prepareStatement(federatedSql)) {
+                statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                statement.setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
+                for (int index = 0; index < params.size(); index++) {
+                    statement.setObject(index + 1, params.get(index));
+                }
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    return ReservoirPointCollector.collect(resultSet, start, targetSize, seed);
+                }
+            }
+        } catch (SQLTimeoutException failure) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
+        } catch (ApiException failure) {
+            throw failure;
+        } catch (SQLException failure) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "FEDERATION_ERROR", firstLine(failure.getMessage()));
+        }
     }
 
     /** 동일 DuckDB 연결에서 seed를 설정한 뒤 Bernoulli 표본 SQL을 실행한다. */
     public QueryRows executeBernoulli(Collection<Long> datasourceIds, String federatedSql, List<Object> params,
                                       boolean chartResult, long seed) {
         QueryRows rows = execute(datasourceIds, federatedSql, params,
-                chartResult ? QueryExecutor.MAX_CHART_ROWS + 1 : QueryExecutor.MAX_ROWS, seed);
-        return chartResult ? QueryExecutor.enforceChartResultLimit(rows) : rows;
+                chartResult ? QueryExecutor.UNBOUNDED_CHART_ROWS : QueryExecutor.MAX_ROWS, seed);
+        return rows;
     }
 
     /** DuckDB EXPLAIN JSON 최상위 Estimated Cardinality. 원격 JOIN+WHERE 쿼리는 실행하지 않는다. */
     public long explainEstimatedRows(Collection<Long> datasourceIds, String sql, List<Object> params) {
+        return admitted(datasourceIds, () -> explainEstimatedRowsAdmitted(datasourceIds, sql, params));
+    }
+
+    private long explainEstimatedRowsAdmitted(Collection<Long> datasourceIds, String sql, List<Object> params) {
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
             configure(conn, datasourceIds, false);
             return explainEstimatedRows(conn, sql, params);
@@ -121,6 +171,18 @@ public class DuckDbFederation {
             boolean chartResult,
             long seed
     ) {
+        return admitted(datasourceIds, () -> executePlannedBernoulliAdmitted(
+                datasourceIds, populationSql, populationParams, sqlFactory, chartResult, seed));
+    }
+
+    private PlannedBernoulli executePlannedBernoulliAdmitted(
+            Collection<Long> datasourceIds,
+            String populationSql,
+            List<Object> populationParams,
+            LongFunction<BuilderSqlBuilder.Sql> sqlFactory,
+            boolean chartResult,
+            long seed
+    ) {
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
             configure(conn, datasourceIds, true);
             long estimate;
@@ -132,8 +194,7 @@ public class DuckDbFederation {
             BuilderSqlBuilder.Sql sql = sqlFactory.apply(estimate);
             setRandomSeed(conn, seed);
             QueryRows rows = execute(conn, sql.text(), sql.params(),
-                    chartResult ? QueryExecutor.MAX_CHART_ROWS + 1 : QueryExecutor.MAX_ROWS);
-            if (chartResult) rows = QueryExecutor.enforceChartResultLimit(rows);
+                    chartResult ? QueryExecutor.UNBOUNDED_CHART_ROWS : QueryExecutor.MAX_ROWS);
             return new PlannedBernoulli(rows, sql, estimate);
         } catch (SQLTimeoutException e) {
             throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Federated query timed out.");
@@ -151,6 +212,17 @@ public class DuckDbFederation {
      * session. Final aggregation is performed from the L1 cache after this method returns.
      */
     public PlannedResultSample executePlannedResultSample(
+            Collection<Long> datasourceIds,
+            String populationSql,
+            List<Object> populationParams,
+            LongFunction<BuilderSqlBuilder.ResultSampleSource> sourceFactory,
+            long seed
+    ) {
+        return admitted(datasourceIds, () -> executePlannedResultSampleAdmitted(
+                datasourceIds, populationSql, populationParams, sourceFactory, seed));
+    }
+
+    private PlannedResultSample executePlannedResultSampleAdmitted(
             Collection<Long> datasourceIds,
             String populationSql,
             List<Object> populationParams,
@@ -191,6 +263,12 @@ public class DuckDbFederation {
 
     private QueryRows execute(Collection<Long> datasourceIds, String federatedSql, List<Object> params,
                               int maxRows, Long bernoulliSeed) {
+        return admitted(datasourceIds, () -> executeAdmitted(
+                datasourceIds, federatedSql, params, maxRows, bernoulliSeed));
+    }
+
+    private QueryRows executeAdmitted(Collection<Long> datasourceIds, String federatedSql, List<Object> params,
+                                      int maxRows, Long bernoulliSeed) {
         try (Connection conn = DriverManager.getConnection("jdbc:duckdb:")) {
             configure(conn, datasourceIds, bernoulliSeed != null);
             if (bernoulliSeed != null) setRandomSeed(conn, bernoulliSeed);
@@ -200,6 +278,26 @@ public class DuckDbFederation {
         } catch (ApiException e) {
             throw e;
         } catch (SQLException e) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+        }
+    }
+
+    private <T> T admitted(Collection<Long> datasourceIds,
+                           AdmissionController.CheckedSupplier<T> task) {
+        if (coordinator == null) {
+            try {
+                return task.get();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            }
+        }
+        try {
+            return coordinator.executeFederated(datasourceIds, task);
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
         }
     }

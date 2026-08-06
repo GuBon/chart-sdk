@@ -1,7 +1,6 @@
 package com.chartsdk.query;
 
 import com.chartsdk.datasource.DatasourcePoolRegistry;
-import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -11,7 +10,6 @@ import java.sql.ResultSetMetaData;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.inOrder;
@@ -38,13 +36,14 @@ class QueryExecutorTest {
     }
 
     @Test
-    void chartExecutionUsesOneSentinelRowBeyondTheSafetyLimit() throws Exception {
+    void chartExecutionHasNoProductLevelRowCapAndUsesCursorFetch() throws Exception {
         DatasourcePoolRegistry pools = mock(DatasourcePoolRegistry.class);
         Connection connection = mock(Connection.class);
         PreparedStatement statement = mock(PreparedStatement.class);
         ResultSet resultSet = mock(ResultSet.class);
         ResultSetMetaData metadata = mock(ResultSetMetaData.class);
         when(pools.connection(7L)).thenReturn(connection);
+        when(connection.getAutoCommit()).thenReturn(true);
         when(connection.prepareStatement("SELECT * FROM chart_data")).thenReturn(statement);
         when(statement.executeQuery()).thenReturn(resultSet);
         when(resultSet.getMetaData()).thenReturn(metadata);
@@ -53,20 +52,11 @@ class QueryExecutorTest {
         QueryRows rows = new QueryExecutor(pools).executeChart(
                 7L, "SELECT * FROM chart_data", List.of());
 
-        verify(statement).setMaxRows(QueryExecutor.MAX_CHART_ROWS + 1);
+        verify(connection).setAutoCommit(false);
+        verify(statement).setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
+        verify(statement).setFetchSize(1_000);
+        verify(connection).rollback();
         assertThat(rows.rowCount()).isZero();
-    }
-
-    @Test
-    void chartExecutionRejectsResultsBeyondTheSafetyLimit() {
-        QueryRows tooLarge = new QueryRows(
-                List.of(), List.of(), QueryExecutor.MAX_CHART_ROWS + 1, true, 1);
-
-        assertThatThrownBy(() -> QueryExecutor.enforceChartResultLimit(tooLarge))
-                .isInstanceOfSatisfying(ApiException.class, error -> {
-                    assertThat(error.code()).isEqualTo("RESULT_TOO_LARGE");
-                    assertThat(error.getMessage()).contains("Aggregate", "sampling", "LIMIT");
-                });
     }
 
     @Test
@@ -78,6 +68,7 @@ class QueryExecutorTest {
         ResultSet resultSet = mock(ResultSet.class);
         ResultSetMetaData metadata = mock(ResultSetMetaData.class);
         when(pools.connection(7L)).thenReturn(connection);
+        when(connection.getAutoCommit()).thenReturn(true);
         when(connection.prepareStatement("SELECT setseed(?)")).thenReturn(seedStatement);
         when(connection.prepareStatement("SELECT * FROM sampled WHERE random() < ?")).thenReturn(queryStatement);
         when(queryStatement.executeQuery()).thenReturn(resultSet);
@@ -93,6 +84,6 @@ class QueryExecutorTest {
         order.verify(seedStatement).execute();
         order.verify(connection).prepareStatement("SELECT * FROM sampled WHERE random() < ?");
         verify(queryStatement).setObject(1, 0.02);
-        verify(queryStatement).setMaxRows(QueryExecutor.MAX_CHART_ROWS + 1);
+        verify(queryStatement).setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
     }
 }
