@@ -84,6 +84,14 @@
     ],
     "options": {
       "palette": ["#111111", "#222222"],
+      "palettePreset": "category10",
+      "colorTheme": {
+        "version": 3,
+        "seriesPreset": "category10",
+        "valuePreset": "blues",
+        "seriesReversed": false,
+        "valueReversed": false
+      },
       "legend": {
         "show": true,
         "position": "bottom"
