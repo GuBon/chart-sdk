@@ -131,8 +131,8 @@ SELECT
     'localhost',
     5433,
     'chartsol_user',
-    'postgres',
-    '0218',
+    'chartsdk_source_reader',
+    'chartsdk-source-reader',
     5,
     now(),
     true
@@ -156,8 +156,8 @@ SELECT
     'localhost',
     55433,
     'chartsdk_spatial_test',
-    'postgres',
-    '0218',
+    'chartsdk_source_reader',
+    'chartsdk-source-reader',
     5,
     now(),
     true

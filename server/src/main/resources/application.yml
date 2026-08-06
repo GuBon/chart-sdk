@@ -16,8 +16,10 @@ spring:
       ddl-auto: none # 스키마는 Flyway 가 소유 (mc_ 테이블만). JPA 는 생성/변경하지 않는다.
     open-in-view: false
   flyway:
-    enabled: true
+    enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
+    validate-on-migrate: true
+    clean-disabled: true
     baseline-on-migrate: true
   lifecycle:
     timeout-per-shutdown-phase: 20s   # graceful shutdown 시 진행 중 요청 드레인 대기
@@ -34,7 +36,7 @@ management:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: ${MANAGEMENT_HEALTH_SHOW_DETAILS:never}
       probes:
         enabled: true   # /actuator/health/liveness · /readiness (컨테이너 프로브용)
   metrics:
@@ -42,6 +44,17 @@ management:
       application: chartsdk-server
 
 chartsdk:
+  chart:
+    require-update-version: ${CHART_REQUIRE_UPDATE_VERSION:false}
+  query:
+    max-concurrent: ${QUERY_MAX_CONCURRENT:24}
+    max-concurrent-per-datasource: ${QUERY_MAX_CONCURRENT_PER_DATASOURCE:4}
+    max-concurrent-federated: ${QUERY_MAX_CONCURRENT_FEDERATED:2}
+    admission-wait-millis: ${QUERY_ADMISSION_WAIT_MILLIS:2000}
+  refresh:
+    lease-seconds: ${CHART_REFRESH_LEASE_SECONDS:45}
+    wait-seconds: ${CHART_REFRESH_WAIT_SECONDS:35}
+    poll-millis: ${CHART_REFRESH_POLL_MILLIS:100}
   sampling-cache:
     default-max-age-seconds: ${SAMPLE_CACHE_DEFAULT_MAX_AGE_SECONDS:900}
     hard-ttl-seconds: ${SAMPLE_CACHE_HARD_TTL_SECONDS:86400}
@@ -49,8 +62,20 @@ chartsdk:
     max-datasource-bytes: ${SAMPLE_CACHE_MAX_DATASOURCE_BYTES:134217728}
     max-total-bytes: ${SAMPLE_CACHE_MAX_TOTAL_BYTES:536870912}
     max-concurrent-builds: ${SAMPLE_CACHE_MAX_CONCURRENT_BUILDS:2}
+    build-lease-seconds: ${SAMPLE_CACHE_BUILD_LEASE_SECONDS:45}
+    build-wait-seconds: ${SAMPLE_CACHE_BUILD_WAIT_SECONDS:35}
+    build-poll-millis: ${SAMPLE_CACHE_BUILD_POLL_MILLIS:100}
+  datasource-runtime:
+    invalidation-retry-ms: ${DATASOURCE_CACHE_INVALIDATION_RETRY_MS:30000}
   embed:
     jwt-secret: ${CHARTSDK_EMBED_JWT_SECRET:dev-chartsol-embed-secret-change-me}
   datasource:
     # 데이터소스 DB 비밀번호 AES-GCM 키 (.env DATASOURCE_ENC_KEY). 운영에서는 반드시 교체.
     enc-key: ${DATASOURCE_ENC_KEY:dev-chartsol-datasource-enc-change-me}
+    password:
+      allow-legacy-plaintext: ${DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT:true}
+      migrate-legacy-on-startup: ${DATASOURCE_PASSWORD_MIGRATE_LEGACY_ON_STARTUP:false}
+    pool-registry:
+      max-entries: ${DATASOURCE_POOL_REGISTRY_MAX:128}
+      idle-ttl-seconds: ${DATASOURCE_POOL_IDLE_TTL_SECONDS:1800}
+      cleanup-interval-seconds: ${DATASOURCE_POOL_CLEANUP_INTERVAL_SECONDS:60}

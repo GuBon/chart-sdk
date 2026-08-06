@@ -1,7 +1,7 @@
-# chartsdk — 사내 임베드 차트 솔루션
+# chartsdk — 임베드 차트 솔루션
 
-웹페이지에 `<div>` 한 줄 + 스크립트로 차트를 렌더하는 사내 전용 임베드 차트 솔루션.
-설계 문서는 [`docs/`](docs/) 참조 (PRD·화면설계서·API 계약서·노코드 SQL 생성규칙·변환기 매핑 스펙·DB 매핑·코드 구조 가이드). 과거 세션을 포함한 문제 근거·개선·효과는 [`UI·UX·백엔드·기획 트러블슈팅 전수 보고서`](docs/UI_UX_백엔드_기획_트러블슈팅_전수보고서.md)에 정리돼 있다.
+웹페이지에 `<div>` 한 줄 + 스크립트로 차트를 렌더하는 임베드 차트 솔루션.
+문서의 전체 목록과 영역별 권위는 [`문서 안내`](docs/문서안내.md)를 참조한다. 면접 준비는 [`기술선택 면접답변`](docs/기술선택_면접답변.md)과 [`문제해결 면접답변 카드`](docs/문제해결_면접답변카드.md)에서 시작하고, 상세 사건 원문은 [`개발 문제해결 이력`](docs/개발_문제해결_이력.md), 반복 원인·개선·남은 위험은 [`품질개선 종합분석`](docs/품질개선_종합분석.md)에서 확인한다.
 
 ## 모노레포 구조
 
@@ -19,13 +19,14 @@
 - server는 `mc_` 접두사 테이블만 소유한다(Type B 안전 요건).
 - 노코드 빌더의 `agg:"none"`은 모든 그래프에서 원본값 튜플을 그리는 모드다. 서버는 GROUP BY 없는 SQL을 만들고, 프론트는 no-code UI에서 이를 선택할 수 있어야 한다.
 - builder 저장 시 최종 SQL은 서버가 `builderConfig`에서 재생성한다. 클라이언트가 보낸 `sqlQuery`는 표시/상태 값일 뿐 신뢰 경계가 아니다.
-- 구현 책임과 공통화 기준은 [`docs/코드구조_가이드.md`](docs/코드구조_가이드.md)를 따른다. 파일 길이만으로 나누지 않고 변경 이유와 재사용 경계를 기준으로 분리한다.
+- 구현 책임과 공통화 기준은 [`docs/코드구조_안내.md`](docs/코드구조_안내.md)를 따른다. 파일 길이만으로 나누지 않고 변경 이유와 재사용 경계를 기준으로 분리한다.
 
 ## 현재 구현 상태
 
 - 백엔드는 `web` 컨트롤러, `chart` 서비스/저장소, `query` SQL 생성/실행, `converter` 옵션 변환으로 분리되어 있다.
 - 공통 에러 envelope은 `ApiExceptionHandler`, 임베드 JWT 검증은 `EmbedTokenInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
-- 검증 기준은 [`docs/PRD_차트솔루션.md`](docs/PRD_차트솔루션.md), [`docs/API계약서_차트솔루션.md`](docs/API계약서_차트솔루션.md), [`docs/노코드_SQL생성규칙.md`](docs/노코드_SQL생성규칙.md), [`docs/화면설계서_차트솔루션.md`](docs/화면설계서_차트솔루션.md)의 최신 문서 버전을 따른다.
+- 검증 기준은 [`docs/제품요구사항.md`](docs/제품요구사항.md), [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md), [`docs/노코드_질의생성_규칙.md`](docs/노코드_질의생성_규칙.md), [`docs/화면설계서.md`](docs/화면설계서.md)의 최신 문서 버전을 따른다.
+- 100개 독립 데이터소스·대용량 point 운영 경계와 배포 절차는 [`docs/대용량_운영_설계.md`](docs/대용량_운영_설계.md), 15/30/100 실행법은 [`load-tests/README.md`](load-tests/README.md)를 따른다.
 
 ## 개발
 
@@ -40,6 +41,21 @@ npm run build               # SDK를 admin/public/sdk.js에 포함한 전체 프
 # server (별도 빌드)
 cd server && ./gradlew bootRun   # Windows PowerShell: .\gradlew.bat bootRun
 ```
+
+### 개인 VS Code 탐색기 설정(선택)
+
+단위 테스트는 대상 모듈 옆에 두는 방식(`foo.ts` / `foo.test.ts`)으로 관리한다. 파일 목록을 간결하게 보려면 프로젝트에 `.vscode/settings.json`을 만들지 말고, VS Code에서 `Preferences: Open User Settings (JSON)`을 열어 다음 설정을 개인 환경에만 추가한다.
+
+```json
+"explorer.fileNesting.enabled": true,
+"explorer.fileNesting.expand": false,
+"explorer.fileNesting.patterns": {
+  "*.ts": "${capture}.test.ts, ${capture}.spec.ts",
+  "*.tsx": "${capture}.test.tsx, ${capture}.spec.tsx"
+}
+```
+
+이 설정은 운영 파일 아래에 관련 테스트 파일을 접어서 표시하며, 프로젝트 파일이나 Git에는 포함하지 않는다.
 
 ## 테스트
 
@@ -102,7 +118,20 @@ NEXT_PUBLIC_API_BASE=http://localhost:8080
 NEXT_PUBLIC_ENABLE_MSW=false
 ```
 
-S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/임베드_API명세서.md`](docs/임베드_API명세서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
+운영에서는 메타 DB runtime과 Flyway 계정을 분리한다. `chartsdk_app`은 `mc_*` DML만 수행하고,
+`chartsdk_migrator`가 Flyway를 실행한다. 별도 Flyway 설정을 생략하면 로컬·테스트 호환을 위해 runtime datasource를 재사용한다.
+
+```bash
+DATABASE_USER=chartsdk_app
+DATABASE_PASSWORD=<runtime-secret>
+SPRING_FLYWAY_USER=chartsdk_migrator
+SPRING_FLYWAY_PASSWORD=<migration-secret>
+SPRING_FLYWAY_URL=jdbc:postgresql://db.internal:5432/chartsol
+```
+
+운영 적용 순서와 평문 datasource 비밀번호 전환은 [`docs/운영_데이터베이스_권한과_비밀번호전환.md`](docs/운영_데이터베이스_권한과_비밀번호전환.md)를 따른다.
+
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
 
 ### 임베드 코드를 직접 붙여 확인하기
 

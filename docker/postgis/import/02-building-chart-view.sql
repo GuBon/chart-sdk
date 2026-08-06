@@ -102,4 +102,16 @@ COMMENT ON VIEW building_demo.buildings_chart IS
 COMMENT ON COLUMN building_demo.buildings_chart.legal_dong_name IS
     'Full legal-dong name from the source';
 
+DO $block$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chartsdk_source_reader') THEN
+        REVOKE CREATE ON SCHEMA building_demo FROM chartsdk_source_reader;
+        GRANT USAGE ON SCHEMA building_demo TO chartsdk_source_reader;
+        GRANT SELECT ON ALL TABLES IN SCHEMA building_demo TO chartsdk_source_reader;
+        ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA building_demo
+            GRANT SELECT ON TABLES TO chartsdk_source_reader;
+    END IF;
+END
+$block$;
+
 ANALYZE building_demo.gis_building_seoul;

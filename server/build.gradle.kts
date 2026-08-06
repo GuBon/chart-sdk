@@ -59,7 +59,56 @@ tasks.processTestResources {
 tasks.processResources {
     // 모든 Flyway 마이그레이션(V1, V2, …)을 복사 — docs 가 마이그레이션의 단일 소스
     from("../docs") { include("V*__*.sql"); into("db/migration") }
+    from("../docs") { include("afterMigrate__*.sql"); into("db/migration") }
     from("../chart-options/defaults.json") { rename { "chart-defaults.json" } }
     // 지도(map) 차트 GeoJSON — Spring 정적 리소스로 서빙(GET /maps/*.json). chart-options 가 단일 원본.
     from("../chart-options/maps") { include("*.json"); into("static/maps") }
 }
+
+val verifyFlywayResources by tasks.registering {
+    description = "Verify that every Flyway source migration is packaged without modification."
+    group = "verification"
+    dependsOn(tasks.processResources)
+
+    doLast {
+        val sourceDirectory = file("../docs")
+        val packagedDirectory = layout.buildDirectory.dir("resources/main/db/migration").get().asFile
+        val requiredMigration = "V8__refresh_lease.sql"
+        val requiredCallback = "afterMigrate__runtime_grants.sql"
+        val migrationPattern = Regex("V[0-9]+__.+\\.sql")
+
+        val sources = sourceDirectory.listFiles()
+            ?.filter { it.isFile && migrationPattern.matches(it.name) }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+        val packaged = packagedDirectory.listFiles()
+            ?.filter { it.isFile && migrationPattern.matches(it.name) }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+
+        check(sources.any { it.name == requiredMigration }) {
+            "Required Flyway migration is missing: docs/$requiredMigration"
+        }
+        check(sources.map { it.name } == packaged.map { it.name }) {
+            "Flyway source and packaged migration lists differ. " +
+                "source=${sources.map { it.name }}, packaged=${packaged.map { it.name }}"
+        }
+        sources.zip(packaged).forEach { (source, resource) ->
+            check(source.readBytes().contentEquals(resource.readBytes())) {
+                "Packaged Flyway migration differs from source: ${source.name}"
+            }
+        }
+
+        val callbackSource = sourceDirectory.resolve(requiredCallback)
+        val callbackResource = packagedDirectory.resolve(requiredCallback)
+        check(callbackSource.isFile && callbackResource.isFile) {
+            "Required Flyway callback is missing: $requiredCallback"
+        }
+        check(callbackSource.readBytes().contentEquals(callbackResource.readBytes())) {
+            "Packaged Flyway callback differs from source: $requiredCallback"
+        }
+    }
+}
+
+tasks.named("check") { dependsOn(verifyFlywayResources) }
+tasks.named("bootJar") { dependsOn(verifyFlywayResources) }
