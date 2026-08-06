@@ -1,10 +1,13 @@
 package com.chartsdk.federation;
 
 import com.chartsdk.crypto.DatasourcePasswordCodec;
+import com.chartsdk.datasource.DatasourcePasswordResolver;
 import com.chartsdk.datasource.DatasourcePoolRegistry;
 import com.chartsdk.datasource.DatasourceService;
+import com.chartsdk.metrics.DatasourcePasswordMetrics;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.SamplingPlanner;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
@@ -44,7 +47,9 @@ class FederationRoutingIT {
         dsDocker = idByDatabase(meta, "chartsol_user");
         assumeTrue(dsTandanji != null && dsDocker != null, "등록된 tandanji/docker 데이터소스 미존재 — skip");
 
-        DatasourceService dss = new DatasourceService(meta, codec);
+        DatasourcePasswordResolver passwords = new DatasourcePasswordResolver(
+                codec, new DatasourcePasswordMetrics(new SimpleMeterRegistry()), true);
+        DatasourceService dss = new DatasourceService(meta, passwords);
         QueryExecutor qe = new QueryExecutor(new DatasourcePoolRegistry(dss));
         runner = new FederatedQueryRunner(qe, new DuckDbFederation(dss, qe), new SamplingPlanner(qe));
     }

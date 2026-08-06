@@ -1,11 +1,13 @@
 package com.chartsdk.datasource;
 
-import com.chartsdk.crypto.DatasourcePasswordCodec;
 import com.chartsdk.web.ApiException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -13,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 데이터소스의 저장·수정·삭제·연결 검증과 자격증명 조회를 한 곳에서 관리한다.
@@ -21,11 +24,19 @@ import java.util.List;
 @Service
 public class DatasourceService {
     private final JdbcTemplate jdbc;
-    private final DatasourcePasswordCodec passwordCodec;
+    private final DatasourcePasswordResolver passwords;
+    private final ApplicationEventPublisher events;
 
-    public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordCodec passwordCodec) {
+    public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordResolver passwords) {
+        this(jdbc, passwords, ignored -> { });
+    }
+
+    @Autowired
+    public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordResolver passwords,
+                             ApplicationEventPublisher events) {
         this.jdbc = jdbc;
-        this.passwordCodec = passwordCodec;
+        this.passwords = passwords;
+        this.events = events;
     }
 
     public List<DatasourceView> list() {
@@ -49,8 +60,10 @@ public class DatasourceService {
         return get(id);
     }
 
+    @Transactional
     public DatasourceView update(long id, DatasourceInput input) {
         validate(input, false);
+        ConnectionSettings before = connectionSettings(id);
         int updated;
         if (blank(input.dbPassword())) {
             updated = jdbc.update("""
@@ -68,9 +81,13 @@ public class DatasourceService {
                     encrypt(input.dbPassword()), input.resolvedMaxPoolSize(), id);
         }
         if (updated == 0) throw notFound();
-        return get(id);
+        DatasourceView result = get(id);
+        DatasourceChangedEvent.Impact impact = changeImpact(before, input);
+        if (impact != null) events.publishEvent(new DatasourceChangedEvent(id, impact));
+        return result;
     }
 
+    @Transactional
     public void delete(long id) {
         try {
             Integer inUse = jdbc.queryForObject(
@@ -80,6 +97,7 @@ public class DatasourceService {
             }
             int updated = jdbc.update("UPDATE mc_datasource SET is_active=false WHERE id=? AND is_active=true", id);
             if (updated == 0) throw notFound();
+            events.publishEvent(new DatasourceChangedEvent(id, DatasourceChangedEvent.Impact.DELETED));
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT, "DATASOURCE_IN_USE", "Datasource is used by a chart.");
         }
@@ -120,7 +138,7 @@ public class DatasourceService {
                     rs.getInt("port"),
                     rs.getString("database_name"),
                     rs.getString("db_user"),
-                    passwordCodec.decrypt(rs.getString("db_password_enc")),
+                    passwords.resolve(rs.getString("db_password_enc")),
                     rs.getInt("max_pool_size")
             );
         }, id);
@@ -135,6 +153,31 @@ public class DatasourceService {
             if (!rs.next()) throw notFound();
             return view(rs);
         }, id);
+    }
+
+    private ConnectionSettings connectionSettings(long id) {
+        return jdbc.query("""
+                SELECT host, port, database_name, db_user, max_pool_size
+                  FROM mc_datasource
+                 WHERE id=? AND is_active=true
+                """, rs -> {
+            if (!rs.next()) throw notFound();
+            return new ConnectionSettings(
+                    rs.getString("host"), rs.getInt("port"), rs.getString("database_name"),
+                    rs.getString("db_user"), rs.getInt("max_pool_size"));
+        }, id);
+    }
+
+    private static DatasourceChangedEvent.Impact changeImpact(ConnectionSettings before, DatasourceInput input) {
+        boolean identityChanged = !Objects.equals(before.host(), input.host())
+                || before.port() != input.resolvedPort()
+                || !Objects.equals(before.databaseName(), input.databaseName())
+                || !Objects.equals(before.dbUser(), input.dbUser());
+        if (identityChanged) return DatasourceChangedEvent.Impact.SOURCE_IDENTITY;
+        if (!blank(input.dbPassword()) || before.maxPoolSize() != input.resolvedMaxPoolSize()) {
+            return DatasourceChangedEvent.Impact.POOL_CONFIGURATION;
+        }
+        return null;
     }
 
     private static DatasourceView view(ResultSet rs) throws SQLException {
@@ -164,7 +207,7 @@ public class DatasourceService {
     }
 
     private String encrypt(String password) {
-        return passwordCodec.encrypt(password == null ? "" : password);
+        return passwords.encrypt(password == null ? "" : password);
     }
 
     private static ApiException notFound() {
@@ -180,5 +223,9 @@ public class DatasourceService {
     }
 
     public record ConnectionTestResult(boolean ok, String message) {
+    }
+
+    private record ConnectionSettings(
+            String host, int port, String databaseName, String dbUser, int maxPoolSize) {
     }
 }

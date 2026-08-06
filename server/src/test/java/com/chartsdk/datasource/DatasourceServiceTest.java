@@ -1,10 +1,11 @@
 package com.chartsdk.datasource;
 
-import com.chartsdk.crypto.DatasourcePasswordCodec;
 import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.ResultSetExtractor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.sql.ResultSet;
 import java.sql.Timestamp;
@@ -19,11 +20,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import org.mockito.ArgumentCaptor;
 
 class DatasourceServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
-    private final DatasourcePasswordCodec codec = mock(DatasourcePasswordCodec.class);
-    private final DatasourceService service = new DatasourceService(jdbc, codec);
+    private final DatasourcePasswordResolver passwords = mock(DatasourcePasswordResolver.class);
+    private final DatasourceService service = new DatasourceService(jdbc, passwords);
 
     @Test
     void inputResolvesOperationalDefaultsInOnePlace() {
@@ -43,7 +46,7 @@ class DatasourceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("INVALID_REQUEST");
-        verifyNoInteractions(jdbc, codec);
+        verifyNoInteractions(jdbc, passwords);
     }
 
     @Test
@@ -54,7 +57,7 @@ class DatasourceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("INVALID_REQUEST");
-        verifyNoInteractions(jdbc, codec);
+        verifyNoInteractions(jdbc, passwords);
     }
 
     @Test
@@ -65,7 +68,7 @@ class DatasourceServiceTest {
                 .isInstanceOf(ApiException.class)
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("DATASOURCE_NAME_RESERVED");
-        verifyNoInteractions(jdbc, codec);
+        verifyNoInteractions(jdbc, passwords);
     }
 
     @Test
@@ -102,5 +105,35 @@ class DatasourceServiceTest {
                 7L, "analytics", "db.internal", 5433, "warehouse", "reader", 8,
                 "2026-07-21T01:02:03Z", true
         ));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void identityUpdatePublishesPostCommitRuntimeInvalidationIntent() throws Exception {
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        DatasourceService eventService = new DatasourceService(jdbc, passwords, events);
+        when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
+        when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(7L))).thenAnswer(invocation -> {
+            ResultSet resultSet = mock(ResultSet.class);
+            when(resultSet.next()).thenReturn(true);
+            when(resultSet.getLong("id")).thenReturn(7L);
+            when(resultSet.getString("name")).thenReturn("analytics");
+            when(resultSet.getString("host")).thenReturn("old.internal");
+            when(resultSet.getInt("port")).thenReturn(5432);
+            when(resultSet.getString("database_name")).thenReturn("warehouse");
+            when(resultSet.getString("db_user")).thenReturn("reader");
+            when(resultSet.getInt("max_pool_size")).thenReturn(5);
+            ResultSetExtractor<?> extractor = invocation.getArgument(1);
+            return extractor.extractData(resultSet);
+        });
+        DatasourceInput changed = new DatasourceInput(
+                "analytics", "new.internal", 5432, "warehouse", "reader", null, 5);
+
+        eventService.update(7L, changed);
+
+        ArgumentCaptor<DatasourceChangedEvent> event = ArgumentCaptor.forClass(DatasourceChangedEvent.class);
+        verify(events).publishEvent(event.capture());
+        assertThat(event.getValue()).isEqualTo(new DatasourceChangedEvent(
+                7L, DatasourceChangedEvent.Impact.SOURCE_IDENTITY));
     }
 }
