@@ -9,10 +9,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v7).
+ * 표본 설정(스펙)과 실행 통계를 캐시·Admin·임베드·SDK가 공유하는 정식 계약(v9).
  *
  * <p><b>스펙</b>(캐시 판정 대상 — builderConfig 만으로 결정): {@code mode·requestedMethod·rate·sizeTarget·seed}.
- * <b>실행</b>(표시용 — 런타임 해석 결과): {@code approximate·method·valueMode·populationEstimate·sampleSize·
+ * <b>실행</b>(표시용 — 런타임 해석 결과): {@code approximate·method·valueMode·populationEstimate·populationCount·sampleSize·
  * sampledRowCount·confidenceLevel·groups·estimates·warnings}. {@link #matchesDefinition}은 스펙만 비교해
  * auto 해석이 INDEX_RANDOM/RESULT_RANDOM/SYSTEM/FULL_SCAN으로 갈려도 캐시가 영구 미스되지 않게 한다.
  */
@@ -29,6 +29,7 @@ public record SamplingMetadata(
         String method,
         String valueMode,
         Long populationEstimate,
+        Long populationCount,
         Integer sampleSize,
         Long sampledRowCount,
         Double confidenceLevel,
@@ -36,7 +37,8 @@ public record SamplingMetadata(
         List<Estimate> estimates,
         List<String> warnings
 ) {
-    public static final int CONTRACT_VERSION = 7;
+    public static final int CONTRACT_VERSION = 9;
+    private static final int LEGACY_COMPATIBLE_VERSION = 7;
     public static final double MIN_RATE = 0.1;
     public static final double MAX_RATE = 100.0;
     public static final long DEFAULT_SEED = 48_291L;
@@ -106,7 +108,7 @@ public record SamplingMetadata(
         return new SamplingMetadata(
                 CONTRACT_VERSION, mode, requestedMethod, rate, sizeTarget, exact ? null : seed,
                 !exact, method, exact ? "exact" : "sample",
-                null, null, null, null,
+                null, null, null, null, null,
                 List.of(), estimates, List.copyOf(warnings));
     }
 
@@ -116,14 +118,15 @@ public record SamplingMetadata(
         List<Estimate> exact = estimates.stream()
                 .map(e -> new Estimate(e.series(), e.aggregate(), "EXACT", null)).toList();
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
-                false, "FULL_SCAN", "exact", null, null, null, null, List.of(), exact, List.of());
+                false, "FULL_SCAN", "exact", null, null, null, null, null,
+                List.of(), exact, List.of());
     }
 
     /** SYSTEM 블록 표본 폴백. popEst/sampleSize는 "전체 약 N행 중 표본 K행" 표시용이다. */
     public SamplingMetadata asSystem(long populationEstimate, int sampleSize) {
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
                 true, "SYSTEM", "sample", populationEstimate,
-                sampleSize > 0 ? sampleSize : null, null, null,
+                null, sampleSize > 0 ? sampleSize : null, null, null,
                 List.of(), estimates, executionWarnings("SYSTEM", estimates));
     }
 
@@ -131,7 +134,7 @@ public record SamplingMetadata(
     public SamplingMetadata asIndexRandom(long populationEstimate, int sampleSize) {
         Double confidence = isRowSample() ? null : CONFIDENCE_LEVEL;
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
-                true, "INDEX_RANDOM", "sample", populationEstimate, sampleSize, null, confidence,
+                true, "INDEX_RANDOM", "sample", populationEstimate, null, sampleSize, null, confidence,
                 List.of(), estimates, executionWarnings("INDEX_RANDOM", estimates));
     }
 
@@ -142,8 +145,16 @@ public record SamplingMetadata(
         if (populationEstimate <= 0) warnings.add("RESULT_POPULATION_ESTIMATE_UNAVAILABLE");
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
                 true, "RESULT_RANDOM", "sample", populationEstimate > 0 ? populationEstimate : null,
-                sampleSize, null, confidence,
+                null, sampleSize, null, confidence,
                 List.of(), estimates, List.copyOf(warnings));
+    }
+
+    /** Runtime fallback after a planner FULL_SCAN underestimates an automatic point population. */
+    public SamplingMetadata asReservoir(long actualPopulationCount, int retainedRows) {
+        return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
+                true, "RESERVOIR_RANDOM", "sample", populationEstimate,
+                Math.max(0, actualPopulationCount), Math.max(1, retainedRows), null, null,
+                List.of(), estimates, executionWarnings("RESERVOIR_RANDOM", estimates));
     }
 
     /** 실행 통계(실측 표본수·그룹·오차범위·추가 경고) 주입. 정확 실행은 무시. */
@@ -153,7 +164,7 @@ public record SamplingMetadata(
         Set<String> merged = new LinkedHashSet<>(warnings);
         if (extraWarnings != null) merged.addAll(extraWarnings);
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
-                approximate, method, valueMode, populationEstimate, sampleSize,
+                approximate, method, valueMode, populationEstimate, populationCount, sampleSize,
                 Math.max(0, sampledRowCount), confidenceLevel,
                 groupCounts == null ? List.of() : groupCounts,
                 withMoe == null ? estimates : withMoe, List.copyOf(merged));
@@ -163,19 +174,35 @@ public record SamplingMetadata(
     public static SamplingMetadata system(double rate) {
         if (!validRate(rate) || rate >= MAX_RATE) return null;
         return new SamplingMetadata(CONTRACT_VERSION, "manual", "system", rate, null, DEFAULT_SEED,
-                true, "SYSTEM", "sample", null, null, null, null,
+                true, "SYSTEM", "sample", null, null, null, null, null,
                 List.of(), List.of(), List.of("BLOCK_SAMPLE_CLUSTERING"));
     }
 
     /** 실행 통계는 무시하고 캐시가 현재 sample 스펙으로 계산됐는지만 비교한다(스펙 필드 한정). */
     public boolean matchesDefinition(SamplingMetadata expected) {
         if (expected == null) return false;
-        return version == CONTRACT_VERSION && expected.version == CONTRACT_VERSION
+        return compatibleCachedVersion(version) && expected.version == CONTRACT_VERSION
                 && Objects.equals(mode, expected.mode)
                 && Objects.equals(requestedMethod, expected.requestedMethod)
                 && Objects.equals(rate, expected.rate)
                 && Objects.equals(sizeTarget, expected.sizeTarget)
                 && Objects.equals(seed, expected.seed);
+    }
+
+    /** Converts a definition-compatible legacy cache payload to the current response contract. */
+    public SamplingMetadata toCurrentContract() {
+        if (version == CONTRACT_VERSION) return this;
+        if (!compatibleCachedVersion(version)) {
+            throw new IllegalStateException("Unsupported sampling contract version: " + version);
+        }
+        return new SamplingMetadata(
+                CONTRACT_VERSION, mode, requestedMethod, rate, sizeTarget, seed,
+                approximate, method, valueMode, populationEstimate, populationCount,
+                sampleSize, sampledRowCount, confidenceLevel, groups, estimates, warnings);
+    }
+
+    private static boolean compatibleCachedVersion(int version) {
+        return version == CONTRACT_VERSION || version == LEGACY_COMPATIBLE_VERSION;
     }
 
     // ── 직렬화 ──────────────────────────────────────────────
@@ -192,6 +219,7 @@ public record SamplingMetadata(
         Long seed = map.get("seed") instanceof Number n ? n.longValue() : null;
         String valueMode = string(map.get("valueMode"), approximate ? "sample" : "exact");
         Long populationEstimate = map.get("populationEstimate") instanceof Number n ? n.longValue() : null;
+        Long populationCount = map.get("populationCount") instanceof Number n ? n.longValue() : null;
         Integer sampleSize = map.get("sampleSize") instanceof Number n ? n.intValue() : null;
         Long sampledRowCount = map.get("sampledRowCount") instanceof Number n ? n.longValue() : null;
         Double confidenceLevel = map.get("confidenceLevel") instanceof Number n ? n.doubleValue() : null;
@@ -235,7 +263,8 @@ public record SamplingMetadata(
         List<String> warnings = map.get("warnings") instanceof List<?> list
                 ? list.stream().map(String::valueOf).toList() : List.of();
         return new SamplingMetadata(version, mode, requestedMethod, rate, sizeTarget, seed,
-                approximate, method, valueMode, populationEstimate, sampleSize, sampledRowCount, confidenceLevel,
+                approximate, method, valueMode, populationEstimate, populationCount,
+                sampleSize, sampledRowCount, confidenceLevel,
                 groups, estimates, warnings);
     }
 
@@ -251,6 +280,7 @@ public record SamplingMetadata(
         result.put("method", method);
         result.put("valueMode", valueMode);
         if (populationEstimate != null) result.put("populationEstimate", populationEstimate);
+        if (populationCount != null) result.put("populationCount", populationCount);
         if (sampleSize != null) result.put("sampleSize", sampleSize);
         if (sampledRowCount != null) result.put("sampledRowCount", sampledRowCount);
         if (confidenceLevel != null) result.put("confidenceLevel", confidenceLevel);
@@ -293,8 +323,10 @@ public record SamplingMetadata(
     private double effectiveRate() {
         if (!approximate) return MAX_RATE;
         if (rate != null) return rate;
-        if (populationEstimate != null && populationEstimate > 0 && sampleSize != null) {
-            return Math.max(MIN_RATE, Math.round(1000.0 * sampleSize / populationEstimate) / 10.0);
+        Long population = populationCount != null && populationCount > 0
+                ? populationCount : populationEstimate;
+        if (population != null && population > 0 && sampleSize != null) {
+            return Math.max(MIN_RATE, Math.round(1000.0 * sampleSize / population) / 10.0);
         }
         return MIN_RATE;
     }
@@ -320,6 +352,7 @@ public record SamplingMetadata(
             case "SYSTEM" -> List.of("BLOCK_SAMPLE_CLUSTERING");
             case "INDEX_RANDOM" -> List.of("INDEX_RANDOM_SAMPLE");
             case "RESULT_RANDOM" -> List.of("RESULT_RANDOM_SAMPLE");
+            case "RESERVOIR_RANDOM" -> List.of("RESERVOIR_RANDOM_SAMPLE");
             default -> List.of();
         };
     }

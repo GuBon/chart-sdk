@@ -25,7 +25,8 @@ public final class SamplingQueryRows {
         if (groupIndex < 0 || totalIndex < 0) {
             boolean rowSample = !sampling.estimates().isEmpty()
                     && sampling.estimates().stream().allMatch(estimate -> "none".equals(estimate.aggregate()));
-            boolean spatialRows = "RESULT_RANDOM".equals(sampling.method())
+            boolean spatialRows = ("RESULT_RANDOM".equals(sampling.method())
+                    || "RESERVOIR_RANDOM".equals(sampling.method()))
                     && columns.stream().map(column -> String.valueOf(column.get("name")))
                     .anyMatch(name -> "__chartsdk_longitude".equals(name)
                             || "__chartsdk_geojson".equals(name));
@@ -35,7 +36,9 @@ public final class SamplingQueryRows {
                     : new Result(source, sampling);
         }
 
-        boolean uniformRandom = "INDEX_RANDOM".equals(sampling.method()) || "RESULT_RANDOM".equals(sampling.method());
+        boolean uniformRandom = "INDEX_RANDOM".equals(sampling.method())
+                || "RESULT_RANDOM".equals(sampling.method())
+                || "RESERVOIR_RANDOM".equals(sampling.method());
         Map<Integer, Integer> seriesCountCols = prefixIndices(columns, SamplingMetadata.HIDDEN_SERIES_COUNT_PREFIX);
         Map<Integer, Integer> meanCols = prefixIndices(columns, SamplingMetadata.HIDDEN_MEAN_PREFIX); // series → col
         Map<Integer, Integer> sdCols = prefixIndices(columns, SamplingMetadata.HIDDEN_SD_PREFIX);

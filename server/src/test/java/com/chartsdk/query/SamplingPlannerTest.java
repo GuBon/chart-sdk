@@ -137,6 +137,52 @@ class SamplingPlannerTest {
     }
 
     @Test
+    void automaticBarSamplingIsDisabledButManualBarSamplingIsPreserved() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        Map<String, Object> automatic = Map.of(
+                "table", "sales",
+                "sample", Map.of("mode", "auto"),
+                "yAxis", List.of(Map.of("column", "amount", "agg", "sum")));
+
+        SamplePlan exact = new SamplingPlanner(qe).plan(1L, automatic, "bar", false);
+
+        assertThat(exact.method()).isEqualTo(SamplePlan.Method.FULL_SCAN);
+        verifyNoInteractions(qe);
+    }
+
+    @Test
+    void filteredAutomaticScatterUsesPostFilterEstimateAndSmallResultsStayExact() {
+        QueryExecutor qe = mock(QueryExecutor.class);
+        Map<String, Object> config = Map.of(
+                "table", "sales",
+                "where", List.of(Map.of("column", "amount", "op", "gt", "value", 0)),
+                "sample", Map.of("mode", "auto"),
+                "yAxis", List.of(Map.of("column", "amount", "agg", "none")));
+
+        SamplePlan planned = new SamplingPlanner(qe).plan(1L, config, "scatter", false);
+
+        assertThat(planned.method()).isEqualTo(SamplePlan.Method.RESULT_RANDOM);
+        assertThat(planned.automatic()).isTrue();
+        assertThat(planned.withPopulationEstimate(9_000).method()).isEqualTo(SamplePlan.Method.FULL_SCAN);
+        assertThat(planned.withPopulationEstimate(50_000).method()).isEqualTo(SamplePlan.Method.RESULT_RANDOM);
+        verifyNoInteractions(qe);
+    }
+
+    @Test
+    void unfilteredAutomaticScatterSamplesAboveThePointTarget() {
+        QueryExecutor qe = stub(20_000L, List.of(List.of("id")), 1L, 20_000L);
+        Map<String, Object> config = Map.of(
+                "table", "sales",
+                "sample", Map.of("mode", "auto", "seed", 7),
+                "yAxis", List.of(Map.of("column", "amount", "agg", "none")));
+
+        SamplePlan plan = new SamplingPlanner(qe).plan(1L, config, "scatter", false);
+
+        assertThat(plan.method()).isEqualTo(SamplePlan.Method.INDEX_RANDOM);
+        assertThat(plan.sampleSize()).isEqualTo(SamplingPlanner.DEFAULT_SIZE);
+    }
+
+    @Test
     void materializedViewKeepsPhysicalSystemSamplingFallback() {
         QueryExecutor qe = mock(QueryExecutor.class);
         when(qe.execute(anyLong(), contains("reltuples"), any())).thenReturn(rows(List.of(List.of("m", 2_000_000L))));

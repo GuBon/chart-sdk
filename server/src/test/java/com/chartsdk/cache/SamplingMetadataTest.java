@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SamplingMetadataTest {
     @Test
@@ -33,7 +34,7 @@ class SamplingMetadataTest {
                                 Map.of("column", "customer_id", "agg", "count_distinct")
                         )));
 
-        assertThat(sampling.version()).isEqualTo(7);
+        assertThat(sampling.version()).isEqualTo(9);
         assertThat(sampling.approximate()).isTrue();
         assertThat(sampling.method()).isEqualTo("SYSTEM");
         assertThat(sampling.mode()).isEqualTo("auto");
@@ -54,7 +55,7 @@ class SamplingMetadataTest {
         SamplingMetadata.system(25).putInto(response);
 
         assertThat(response.get("sampling")).isEqualTo(Map.of(
-                "version", 7,
+                "version", 9,
                 "mode", "manual",
                 "requestedMethod", "system",
                 "rate", 25.0,
@@ -83,7 +84,7 @@ class SamplingMetadataTest {
     }
 
     @Test
-    void cacheDefinitionMatchingIgnoresRuntimeCountsButIncludesSeedAndVersion() {
+    void cacheDefinitionMatchingAcceptsOnlyCompatibleContractsAndMatchingSpecs() {
         SamplingMetadata definition = SamplingMetadata.fromBuilderConfig(
                 Map.of("sample", Map.of("mode", "manual", "rate", 0.5, "seed", 7)));
         SamplingMetadata executed = definition.withExecution(123,
@@ -92,9 +93,21 @@ class SamplingMetadataTest {
         assertThat(executed.matchesDefinition(definition)).isTrue();
         assertThat(executed.matchesDefinition(SamplingMetadata.fromBuilderConfig(
                 Map.of("sample", Map.of("mode", "manual", "rate", 0.5, "seed", 8))))).isFalse();
-        SamplingMetadata oldVersion = SamplingMetadata.fromMap(Map.of(
-                "version", 1, "approximate", true, "method", "SYSTEM", "mode", "manual", "rate", 0.5, "seed", 7));
-        assertThat(oldVersion.matchesDefinition(definition)).isFalse();
+        SamplingMetadata legacyVersion = SamplingMetadata.fromMap(Map.of(
+                "version", 7, "approximate", true, "method", "SYSTEM", "valueMode", "sample",
+                "mode", "manual", "requestedMethod", "auto", "rate", 0.5, "seed", 7));
+        SamplingMetadata unsupportedVersion = SamplingMetadata.fromMap(Map.of(
+                "version", 8, "approximate", true, "method", "SYSTEM", "valueMode", "sample",
+                "mode", "manual", "requestedMethod", "auto", "rate", 0.5, "seed", 7));
+
+        assertThat(legacyVersion.matchesDefinition(definition)).isTrue();
+        assertThat(legacyVersion.toCurrentContract().version()).isEqualTo(SamplingMetadata.CONTRACT_VERSION);
+        assertThat(legacyVersion.toCurrentContract()).usingRecursiveComparison()
+                .ignoringFields("version")
+                .isEqualTo(legacyVersion);
+        assertThat(unsupportedVersion.matchesDefinition(definition)).isFalse();
+        assertThatThrownBy(unsupportedVersion::toCurrentContract)
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -136,5 +149,21 @@ class SamplingMetadataTest {
         assertThat(executed.populationEstimate()).isNull();
         assertThat(executed.confidenceLevel()).isEqualTo(0.95);
         assertThat(executed.warnings()).contains("RESULT_RANDOM_SAMPLE");
+    }
+
+    @Test
+    void reservoirUsesActualPopulationCountAndRoundTripsThroughTheContract() {
+        SamplingMetadata definition = SamplingMetadata.fromBuilderConfig(Map.of(
+                "sample", Map.of("mode", "auto", "size", 10_000, "seed", 77),
+                "yAxis", List.of(Map.of("column", "latitude", "agg", "none"))));
+
+        SamplingMetadata executed = definition.asReservoir(1_000_000, 10_000)
+                .withExecution(10_000, List.of(), definition.estimates(), List.of());
+
+        assertThat(executed.method()).isEqualTo("RESERVOIR_RANDOM");
+        assertThat(executed.populationCount()).isEqualTo(1_000_000);
+        assertThat(executed.sampleSize()).isEqualTo(10_000);
+        assertThat(executed.warnings()).contains("RESERVOIR_RANDOM_SAMPLE");
+        assertThat(SamplingMetadata.fromMap(executed.toMap())).isEqualTo(executed);
     }
 }

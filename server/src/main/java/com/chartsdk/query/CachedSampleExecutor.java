@@ -39,13 +39,12 @@ public class CachedSampleExecutor {
             long start = System.nanoTime();
             try (PreparedStatement statement = connection.prepareStatement(aggregate.text())) {
                 statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
-                statement.setMaxRows(QueryExecutor.MAX_CHART_ROWS + 1);
+                statement.setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
                 for (int i = 0; i < aggregate.params().size(); i++) {
                     statement.setObject(i + 1, aggregate.params().get(i));
                 }
                 try (ResultSet resultSet = statement.executeQuery()) {
-                    return QueryExecutor.enforceChartResultLimit(
-                            QueryRows.from(resultSet, start, QueryExecutor.MAX_CHART_ROWS + 1));
+                    return QueryRows.from(resultSet, start, QueryExecutor.UNBOUNDED_CHART_ROWS);
                 }
             }
         } catch (ApiException e) {

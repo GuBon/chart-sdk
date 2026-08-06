@@ -5,9 +5,11 @@ import com.chartsdk.cache.ChartCacheService;
 import com.chartsdk.cache.ChartRefreshCoordinator;
 import com.chartsdk.cache.SampleFingerprint;
 import com.chartsdk.cache.SampleRowCacheService;
+import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.crypto.DatasourcePasswordCodec;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.dto.ChartSaveRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,6 +65,54 @@ class MultiSourceChartLifecycleIT {
     @Autowired ChartRefreshCoordinator refreshes;
     @Autowired ChartCacheService cache;
     @Autowired SampleRowCacheService sampleRows;
+    @Autowired ObjectMapper mapper;
+
+    @Test
+    void multiSourceV7SamplingSnapshotRemainsAvailableAndIsReturnedAsV9() throws Exception {
+        long primaryId = insertDatasource(
+                "it-v7-primary-" + System.nanoTime(), "localhost", 5433, "unused", "unused", "unused");
+        long secondaryId = insertDatasource(
+                "it-v7-secondary-" + System.nanoTime(), "localhost", 5433, "unused", "unused", "unused");
+        Map<String, Object> builderConfig = Map.of(
+                "table", Map.of("datasourceId", primaryId, "schema", "public", "name", "load_points"),
+                "joins", List.of(),
+                "xAxis", "x_value",
+                "yAxis", List.of(Map.of("column", "y_value", "agg", "none")),
+                "sample", Map.of("mode", "auto", "size", 10_000, "seed", 77));
+        Long chartId = meta.queryForObject("""
+                INSERT INTO mc_chart(name, datasource_id, define_mode, sql_query, builder_config, chart_type,
+                                     refresh_mode, cache_ttl_seconds)
+                VALUES (?, ?, 'builder', 'SELECT 1', ?::jsonb, 'scatter', 'manual', 3600)
+                RETURNING id
+                """, Long.class, "v7-compatible-snapshot", primaryId, mapper.writeValueAsString(builderConfig));
+        assertThat(chartId).isNotNull();
+        meta.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES (?, ?)", chartId, primaryId);
+        meta.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES (?, ?)", chartId, secondaryId);
+
+        SamplingMetadata legacy = SamplingMetadata.fromMap(Map.of(
+                "version", 7, "mode", "auto", "requestedMethod", "auto",
+                "approximate", true, "method", "INDEX_RANDOM", "valueMode", "sample",
+                "sizeTarget", 10_000, "seed", 77, "populationEstimate", 1_000_000,
+                "sampleSize", 10_000));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("columns", List.of());
+        payload.put("rows", List.of());
+        payload.put("rowCount", 0);
+        payload.put("truncated", false);
+        payload.put("elapsedMs", 1);
+        payload.put("sampling", legacy.toMap());
+        meta.update("""
+                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)
+                VALUES (?, ?::jsonb, now(), 1, 0, 0)
+                """, chartId, mapper.writeValueAsString(payload));
+
+        Map<String, Object> preview = chartService.preview(chartId);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sampling = (Map<String, Object>) preview.get("sampling");
+        assertThat(sampling).containsEntry("version", SamplingMetadata.CONTRACT_VERSION);
+        assertThat(sampling).containsEntry("method", "INDEX_RANDOM");
+    }
 
     @Test
     void multiSourceChartSaveSeedsJunctionAndCacheThenServesSnapshot() {
@@ -163,7 +213,7 @@ class MultiSourceChartLifecycleIT {
     }
 
     @Test
-    void advisoryTransactionLockRunsConcurrentRefreshOnlyOnce() throws Exception {
+    void refreshLeaseRunsConcurrentRefreshOnlyOnce() throws Exception {
         long datasourceId = insertDatasource(
                 "it-lock-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
         Long chartId = meta.queryForObject("""
@@ -175,6 +225,7 @@ class MultiSourceChartLifecycleIT {
 
         QueryRows queryRows = new QueryRows(List.of(), List.of(), 0, false, 1);
         CountDownLatch winnerEntered = new CountDownLatch(1);
+        CountDownLatch followerEntered = new CountDownLatch(1);
         CountDownLatch releaseWinner = new CountDownLatch(1);
         AtomicInteger refreshCalls = new AtomicInteger();
         ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -188,13 +239,17 @@ class MultiSourceChartLifecycleIT {
                     }));
             assertThat(winnerEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-            Future<CachedChartRows> loser = pool.submit(() -> refreshes.refreshSingleFlight(
-                    chartId, 0, false, null, () -> {
-                        refreshCalls.incrementAndGet();
-                        return cache.upsert(chartId, queryRows, 0, null);
-                    }));
+            Future<CachedChartRows> loser = pool.submit(() -> {
+                followerEntered.countDown();
+                return refreshes.refreshSingleFlight(chartId, 0, false, null, () -> {
+                    refreshCalls.incrementAndGet();
+                    return cache.upsert(chartId, queryRows, 0, null);
+                });
+            });
 
-            assertThat(waitingOnAdvisoryLock()).isTrue();
+            assertThat(followerEntered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(loser).isNotDone();
+            assertThat(refreshCalls).hasValue(1);
             releaseWinner.countDown();
 
             CachedChartRows winnerResult = winner.get(5, TimeUnit.SECONDS);
@@ -223,7 +278,7 @@ class MultiSourceChartLifecycleIT {
                 """, Long.class, "failure-test", datasourceId);
         assertThat(chartId).isNotNull();
 
-        cache.recordFailure(chartId, new RuntimeException("source unavailable"));
+        cache.recordFailure(chartId, 0, new RuntimeException("source unavailable"));
 
         Map<String, Object> failureState = meta.queryForMap("""
                 SELECT result, computed_at, last_error, last_error_at
@@ -287,26 +342,10 @@ class MultiSourceChartLifecycleIT {
         return id;
     }
 
-    private boolean waitingOnAdvisoryLock() throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (System.nanoTime() < deadline) {
-            Integer waiting = meta.queryForObject("""
-                    SELECT count(*)
-                      FROM pg_stat_activity
-                     WHERE datname=current_database()
-                       AND wait_event_type='Lock'
-                       AND lower(wait_event)='advisory'
-                    """, Integer.class);
-            if (waiting != null && waiting > 0) return true;
-            Thread.sleep(20);
-        }
-        return false;
-    }
-
     private static void await(CountDownLatch latch) {
         try {
             if (!latch.await(5, TimeUnit.SECONDS)) {
-                throw new IllegalStateException("advisory lock test release timed out");
+                throw new IllegalStateException("refresh lease test release timed out");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

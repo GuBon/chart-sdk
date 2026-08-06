@@ -28,6 +28,11 @@ public class SamplingPlanner {
 
     /** 관계/조인 결과 표본 계획. 표본 미설정·rows 모드이면 NONE이다. */
     public SamplePlan plan(long datasourceId, Map<String, Object> cfg, boolean rawMode) {
+        return plan(datasourceId, cfg, null, rawMode);
+    }
+
+    public SamplePlan plan(long datasourceId, Map<String, Object> cfg,
+                           String chartType, boolean rawMode) {
         if (rawMode || !(cfg.get("sample") instanceof Map<?, ?> sample)) return SamplePlan.none();
         Table table = parseBaseTable(cfg.get("table"));
         if (table == null) return SamplePlan.none();
@@ -39,11 +44,25 @@ public class SamplingPlanner {
         Integer size = sample.get("size") instanceof Number n ? n.intValue() : null;
         long seed = sample.get("seed") instanceof Number n ? n.longValue() : SamplingMetadata.DEFAULT_SEED;
 
+        boolean automatic = "auto".equals(mode);
+        if (automatic && chartType != null
+                && !PointSamplingPolicy.supportsAutomaticSampling(chartType, cfg)) {
+            return SamplePlan.fullScan(0, seed);
+        }
+
         if (rate != null && rate >= SamplingMetadata.MAX_RATE) return SamplePlan.fullScan(0, seed);
+
+        // Filters and joins can reduce a huge base table to a tiny point set. Plan from the
+        // post-WHERE/JOIN cardinality so automatic mode never samples merely because the source is large.
+        if (automatic && chartType != null && PointSamplingPolicy.hasResultShapingFilters(cfg)) {
+            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed,
+                    "AUTO_POINT_RESULT", true);
+        }
 
         // 조인 결과 자체가 모집단이다. 어떤 base 관계를 먼저 뽑지 않고 JOIN+WHERE 뒤에서 행 표본을 적용한다.
         if (cfg.get("joins") instanceof List<?> joins && !joins.isEmpty()) {
-            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed, "JOIN_RESULT");
+            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed,
+                    "JOIN_RESULT", automatic);
         }
 
         try {
@@ -54,13 +73,17 @@ public class SamplingPlanner {
             // 일반 VIEW와 파티션 부모에는 TABLESAMPLE을 붙일 수 없다. 관계 조회 결과를 행 단위로 뽑는다.
             if (stats == null || "v".equals(relkind) || "p".equals(relkind)) {
                 String reason = stats == null ? "UNKNOWN_RELATION_KIND" : "v".equals(relkind) ? "VIEW_RESULT" : "PARTITIONED_RESULT";
-                return SamplePlan.resultRandom(pop, resolveSize(mode, size, rate, pop), seed, reason);
+                return SamplePlan.resultRandom(pop, resolveSize(mode, size, rate, pop), seed,
+                        reason, automatic);
             }
             if (systemPinned) {
                 double blockRate = rate != null ? rate : effectiveRate(DEFAULT_SIZE, pop);
                 return SamplePlan.system(pop, resolveSize(mode, size, rate, pop), blockRate, seed, "SYSTEM_PINNED");
             }
-            if (pop > 0 && pop <= FULL_SCAN_ROWS) return SamplePlan.fullScan(pop, seed);
+            long exactThreshold = automatic && chartType != null
+                    ? resolveSize(mode, size, rate, pop)
+                    : FULL_SCAN_ROWS;
+            if (pop > 0 && pop <= exactThreshold) return SamplePlan.fullScan(pop, seed);
             if (pop <= 0) return systemFallback(size, rate, mode, pop, seed, "NO_ROW_STATS");
 
             Pk pk = primaryKey(datasourceId, table);
@@ -83,7 +106,8 @@ public class SamplingPlanner {
             return SamplePlan.indexRandom(keys, pk.column(), pop, k, seed);
         } catch (RuntimeException e) {
             // 관계 종류를 모르면 VIEW에 불법 TABLESAMPLE을 붙이지 않도록 범용 결과 행 표본으로 폴백한다.
-            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed, "PLANNER_ERROR");
+            return SamplePlan.resultRandom(0, resolveSize(mode, size, rate, 0), seed,
+                    "PLANNER_ERROR", automatic);
         }
     }
 

@@ -9,8 +9,12 @@ import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.CachedSampleExecutor;
 import com.chartsdk.query.CachedSampleSqlBuilder;
 import com.chartsdk.query.FederatedCatalog;
+import com.chartsdk.query.GeoHeatmapSamplingWeights;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.query.PointSamplingPolicy;
+import com.chartsdk.query.PointCollectionResult;
+import com.chartsdk.query.PointSamplingMetrics;
 import com.chartsdk.query.RefRenderer;
 import com.chartsdk.query.SamplePlan;
 import com.chartsdk.query.SamplingPlanner;
@@ -32,20 +36,28 @@ public class FederatedQueryRunner {
     private final SamplingPlanner planner;
     private final SampleRowCacheService sampleCache;
     private final CachedSampleExecutor sampleExecutor;
+    private final PointSamplingMetrics pointMetrics;
 
     /** Test/legacy constructor. Production injection uses the L1-aware constructor below. */
     public FederatedQueryRunner(QueryExecutor queries, DuckDbFederation federation, SamplingPlanner planner) {
-        this(queries, federation, planner, null, null);
+        this(queries, federation, planner, null, null, PointSamplingMetrics.noOp());
+    }
+
+    public FederatedQueryRunner(QueryExecutor queries, DuckDbFederation federation, SamplingPlanner planner,
+                                SampleRowCacheService sampleCache, CachedSampleExecutor sampleExecutor) {
+        this(queries, federation, planner, sampleCache, sampleExecutor, PointSamplingMetrics.noOp());
     }
 
     @Autowired
     public FederatedQueryRunner(QueryExecutor queries, DuckDbFederation federation, SamplingPlanner planner,
-                                SampleRowCacheService sampleCache, CachedSampleExecutor sampleExecutor) {
+                                SampleRowCacheService sampleCache, CachedSampleExecutor sampleExecutor,
+                                PointSamplingMetrics pointMetrics) {
         this.queries = queries;
         this.federation = federation;
         this.planner = planner;
         this.sampleCache = sampleCache;
         this.sampleExecutor = sampleExecutor;
+        this.pointMetrics = pointMetrics;
     }
 
     public record BuiltResult(QueryRows rows, BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds,
@@ -70,9 +82,10 @@ public class FederatedQueryRunner {
         Set<Long> resolvedRefs = refs.isEmpty() ? Set.of(primaryDatasourceId) : refs;
 
         String fingerprint = null;
-        if (sampleCache != null && chartResult && cfg.get("sample") instanceof Map<?, ?>) {
+        if (sampleCache != null && chartResult && PointSamplingPolicy.shouldApply(chartType, cfg)) {
             fingerprint = SampleFingerprint.of(primaryDatasourceId, resolvedRefs, cfg, chartType);
-            Optional<CachedResultSample> cached = sampleCache.find(fingerprint, sampleCacheMaxAgeSeconds);
+            Optional<CachedResultSample> cached = sampleCache.findCurrent(
+                    fingerprint, sampleCacheMaxAgeSeconds, primaryDatasourceId, resolvedRefs);
             if (cached.isPresent()) return executeCachedSample(cached.get(), cfg, chartType, resolvedRefs);
         }
 
@@ -89,8 +102,19 @@ public class FederatedQueryRunner {
                                      String chartType, boolean rawMode, boolean chartResult,
                                      Set<Long> refs, String fingerprint, int maxAgeSeconds) {
         FederatedCatalog catalog = federation.catalog(refs);
-        SamplePlan plan = planner.plan(primaryDatasourceId, cfg, rawMode);
+        SamplePlan plan = planner.plan(primaryDatasourceId, cfg, chartType, rawMode);
         if (plan.method() == SamplePlan.Method.RESULT_RANDOM) {
+            BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(
+                    catalog, RefRenderer.FEDERATED, cfg, chartType);
+            if (plan.automatic()) {
+                plan = plan.withPopulationEstimate(federation.explainEstimatedRows(
+                        refs, population.text(), population.params()));
+                if (plan.method() == SamplePlan.Method.FULL_SCAN) {
+                    BuilderSqlBuilder.Sql exact = BuilderSqlBuilder.generate(
+                            catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
+                    return executeFederated(exact, refs, cfg, chartType, chartResult, plan);
+                }
+            }
             if (sampleCache != null) {
                 String cacheKey = fingerprint == null
                         ? SampleFingerprint.of(primaryDatasourceId, refs, cfg, chartType)
@@ -98,8 +122,6 @@ public class FederatedQueryRunner {
                 SamplePlan unestimated = plan;
                 CachedResultSample cached = sampleCache.getOrLoad(
                         cacheKey, primaryDatasourceId, refs, maxAgeSeconds, () -> {
-                            BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(
-                                    catalog, RefRenderer.FEDERATED, cfg, chartType);
                             DuckDbFederation.PlannedResultSample planned = federation.executePlannedResultSample(
                                     refs,
                                     population.text(),
@@ -119,11 +141,7 @@ public class FederatedQueryRunner {
 
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(
                 catalog, RefRenderer.FEDERATED, cfg, chartType, rawMode, plan);
-        QueryRows executed = chartResult
-                ? federation.executeChart(refs, sql.text(), sql.params())
-                : federation.execute(refs, sql.text(), sql.params());
-        SamplingQueryRows.Result result = SamplingQueryRows.extract(executed, sql.sampling());
-        return new BuiltResult(result.rows(), sql, refs, result.sampling());
+        return executeFederated(sql, refs, cfg, chartType, chartResult, plan);
     }
 
     private BuiltResult runLegacyFederatedResultRandom(
@@ -141,9 +159,7 @@ public class FederatedQueryRunner {
                         unestimated.withPopulationEstimate(estimate)),
                 chartResult,
                 plan.seed());
-        SamplingQueryRows.Result result = SamplingQueryRows.extract(
-                planned.rows(), planned.sql().sampling());
-        return new BuiltResult(result.rows(), planned.sql(), refs, result.sampling());
+        return complete(planned.rows(), planned.sql(), refs, cfg, chartType);
     }
 
     private BuiltResult runSingle(long primaryDatasourceId, long datasourceId,
@@ -151,10 +167,19 @@ public class FederatedQueryRunner {
                                   boolean rawMode, boolean chartResult,
                                   String fingerprint, int maxAgeSeconds) {
         SchemaCatalog catalog = queries.catalog(datasourceId);
-        SamplePlan plan = planner.plan(datasourceId, cfg, rawMode);
+        SamplePlan plan = planner.plan(datasourceId, cfg, chartType, rawMode);
         if (plan.method() == SamplePlan.Method.RESULT_RANDOM) {
             BuilderSqlBuilder.Sql population = BuilderSqlBuilder.generateSamplingPopulation(
                     catalog, cfg, chartType);
+            if (plan.automatic()) {
+                plan = plan.withPopulationEstimate(queries.explainEstimatedRows(
+                        datasourceId, population.text(), population.params()));
+                if (plan.method() == SamplePlan.Method.FULL_SCAN) {
+                    BuilderSqlBuilder.Sql exact = BuilderSqlBuilder.generate(
+                            catalog, cfg, chartType, rawMode, plan);
+                    return executeSingle(exact, datasourceId, cfg, chartType, chartResult, plan);
+                }
+            }
             if (sampleCache != null) {
                 String cacheKey = fingerprint == null
                         ? SampleFingerprint.of(primaryDatasourceId, Set.of(datasourceId), cfg, chartType)
@@ -162,8 +187,10 @@ public class FederatedQueryRunner {
                 SamplePlan unestimated = plan;
                 CachedResultSample cached = sampleCache.getOrLoad(
                         cacheKey, datasourceId, Set.of(datasourceId), maxAgeSeconds, () -> {
-                            long estimate = queries.explainEstimatedRows(
-                                    datasourceId, population.text(), population.params());
+                            long estimate = unestimated.populationEstimate() > 0
+                                    ? unestimated.populationEstimate()
+                                    : queries.explainEstimatedRows(
+                                            datasourceId, population.text(), population.params());
                             BuilderSqlBuilder.ResultSampleSource source =
                                     BuilderSqlBuilder.generateResultSampleSource(
                                             catalog, cfg, chartType,
@@ -179,13 +206,7 @@ public class FederatedQueryRunner {
         }
 
         BuilderSqlBuilder.Sql sql = BuilderSqlBuilder.generate(catalog, cfg, chartType, rawMode, plan);
-        QueryRows executed = plan.method() == SamplePlan.Method.RESULT_RANDOM
-                ? queries.executeBernoulli(datasourceId, sql.text(), sql.params(), chartResult, plan.seed())
-                : chartResult
-                        ? queries.executeChart(datasourceId, sql.text(), sql.params())
-                        : queries.execute(datasourceId, sql.text(), sql.params());
-        SamplingQueryRows.Result result = SamplingQueryRows.extract(executed, sql.sampling());
-        return new BuiltResult(result.rows(), sql, Set.of(datasourceId), result.sampling());
+        return executeSingle(sql, datasourceId, cfg, chartType, chartResult, plan);
     }
 
     private BuiltResult executeCachedSample(CachedResultSample cached, Map<String, Object> cfg,
@@ -203,8 +224,77 @@ public class FederatedQueryRunner {
         CachedSampleSqlBuilder.Plan finalPlan = CachedSampleSqlBuilder.build(
                 cfg, chartType, cached.rows(), source);
         QueryRows aggregated = sampleExecutor.execute(cached.rows(), finalPlan.aggregate());
-        SamplingQueryRows.Result result = SamplingQueryRows.extract(aggregated, current);
-        return new BuiltResult(result.rows(), finalPlan.display(), datasourceIds, result.sampling());
+        return complete(aggregated, finalPlan.display(), datasourceIds, cfg, chartType);
+    }
+
+    private BuiltResult complete(QueryRows rows, BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds,
+                                 Map<String, Object> cfg, String chartType) {
+        SamplingQueryRows.Result result = SamplingQueryRows.extract(rows, sql.sampling());
+        QueryRows displayRows = GeoHeatmapSamplingWeights.apply(
+                result.rows(), chartType, cfg, result.sampling());
+        return new BuiltResult(displayRows, sql, datasourceIds, result.sampling());
+    }
+
+    private BuiltResult executeSingle(BuilderSqlBuilder.Sql sql, long datasourceId,
+                                      Map<String, Object> cfg, String chartType,
+                                      boolean chartResult, SamplePlan plan) {
+        if (useAdaptiveCollector(chartResult, plan, cfg, chartType)) {
+            int target = pointTarget(cfg);
+            PointCollectionResult points = queries.executeAutoPointChart(
+                    datasourceId, sql.text(), sql.params(), target, plan.seed());
+            return completeAdaptive(points, sql, Set.of(datasourceId), cfg, chartType);
+        }
+        QueryRows rows = plan.method() == SamplePlan.Method.RESULT_RANDOM
+                ? queries.executeBernoulli(datasourceId, sql.text(), sql.params(), chartResult, plan.seed())
+                : chartResult
+                        ? queries.executeChart(datasourceId, sql.text(), sql.params())
+                        : queries.execute(datasourceId, sql.text(), sql.params());
+        return complete(rows, sql, Set.of(datasourceId), cfg, chartType);
+    }
+
+    private BuiltResult executeFederated(BuilderSqlBuilder.Sql sql, Set<Long> datasourceIds,
+                                         Map<String, Object> cfg, String chartType,
+                                         boolean chartResult, SamplePlan plan) {
+        if (useAdaptiveCollector(chartResult, plan, cfg, chartType)) {
+            int target = pointTarget(cfg);
+            PointCollectionResult points = federation.executeAutoPointChart(
+                    datasourceIds, sql.text(), sql.params(), target, plan.seed());
+            return completeAdaptive(points, sql, datasourceIds, cfg, chartType);
+        }
+        QueryRows rows = chartResult
+                ? federation.executeChart(datasourceIds, sql.text(), sql.params())
+                : federation.execute(datasourceIds, sql.text(), sql.params());
+        return complete(rows, sql, datasourceIds, cfg, chartType);
+    }
+
+    private BuiltResult completeAdaptive(PointCollectionResult points, BuilderSqlBuilder.Sql sql,
+                                         Set<Long> datasourceIds, Map<String, Object> cfg,
+                                         String chartType) {
+        pointMetrics.record(chartType, points);
+        if (!points.sampled()) return complete(points.rows(), sql, datasourceIds, cfg, chartType);
+        SamplingMetadata definition = SamplingMetadata.fromBuilderConfig(cfg);
+        if (definition == null) return complete(points.rows(), sql, datasourceIds, cfg, chartType);
+        SamplingMetadata runtime = definition.asReservoir(
+                points.populationCount(), points.rows().rowCount());
+        BuilderSqlBuilder.Sql sampledSql = new BuilderSqlBuilder.Sql(sql.text(), sql.params(), runtime);
+        return complete(points.rows(), sampledSql, datasourceIds, cfg, chartType);
+    }
+
+    private static boolean useAdaptiveCollector(boolean chartResult, SamplePlan plan,
+                                                Map<String, Object> cfg, String chartType) {
+        if (!chartResult || plan.method() != SamplePlan.Method.FULL_SCAN
+                || !PointSamplingPolicy.supportsAutomaticSampling(chartType, cfg)) return false;
+        return cfg.get("sample") instanceof Map<?, ?> sample
+                && "auto".equals(String.valueOf(sample.get("mode")));
+    }
+
+    private static int pointTarget(Map<String, Object> cfg) {
+        if (cfg.get("sample") instanceof Map<?, ?> sample
+                && sample.get("size") instanceof Number size) {
+            return Math.max(SamplingMetadata.MIN_SIZE,
+                    Math.min(SamplingMetadata.MAX_SIZE, size.intValue()));
+        }
+        return SamplingPlanner.DEFAULT_SIZE;
     }
 
     public QueryRows runStored(Set<Long> datasourceIds, long primaryDatasourceId, String storedSql) {
