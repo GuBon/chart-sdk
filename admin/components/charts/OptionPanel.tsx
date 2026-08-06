@@ -11,7 +11,6 @@ import {
   optionEditorTabOf,
   optionEditorTabsFor,
   setPath,
-  switchMajor,
   visibleDefs,
   type MajorType,
   type OptionDef,
@@ -54,7 +53,7 @@ interface Props {
   hasResult: boolean;
   dockPreference: OptionDockPreference;
   actualDock: OptionDock;
-  onChangeChartType: (next: MajorType, nextOptions: Options) => void;
+  onChangeChartType: (next: MajorType) => void;
   onChangeOptions: (next: Options) => void;
   onChangeDockPreference: (next: OptionDockPreference) => void;
   mapViewportSession: MapViewportSession;
@@ -271,8 +270,7 @@ export function OptionPanel({
   };
   const changeType = (nextType: MajorType) => {
     if (nextType === chartType) return;
-    const { next } = switchMajor(options, chartType, nextType);
-    onChangeChartType(nextType, next);
+    onChangeChartType(nextType);
   };
   const setActiveTab = (tab: OptionEditorTab) => {
     setActiveTabByType((previous) => ({ ...previous, [chartType]: tab }));

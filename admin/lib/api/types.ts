@@ -149,6 +149,7 @@ export interface ChartListResponse {
 /** S2 진입 시 복원용 단건 */
 export interface Chart {
   id: number;
+  version: number;
   name: string;
   description: string | null;
   datasourceId: number;
@@ -164,7 +165,10 @@ export interface Chart {
   updatedAt: string;
 }
 
-export type ChartInput = Omit<Chart, 'id' | 'mainTable' | 'createdAt' | 'updatedAt'>;
+export type ChartInput = Omit<Chart, 'id' | 'version' | 'mainTable' | 'createdAt' | 'updatedAt'> & {
+  /** Optimistic-lock token returned by the most recent create/get/update response. */
+  version?: number;
+};
 
 /** 데이터소스 — 비밀번호는 응답에 절대 포함되지 않는다 */
 export interface Datasource {

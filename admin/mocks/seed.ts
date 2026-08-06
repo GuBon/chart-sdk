@@ -246,6 +246,7 @@ export const tokens: UserToken[] = [
 /** 저장된 차트 편집 복원용 상세(목록 항목을 기반으로 빌더 기본형 부여) */
 export function chartDetail(summary: ChartSummary): Chart {
   return {
+    version: 0,
     ...summary, // chartType·datasourceId 포함
     defineMode: 'builder',
     sqlQuery: 'SELECT category, SUM(amount) AS total FROM sales GROUP BY category',

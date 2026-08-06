@@ -27,6 +27,16 @@ import {
 } from '@/lib/builder';
 import { chartEditPath } from '@/lib/chartRoutes';
 import { chartSaveIssue } from '@/lib/chartSave';
+import {
+  captureChartDataDraft,
+  captureChartTypeDraft,
+  chartSourceFingerprint,
+  clearChartDataDrafts,
+  createChartTypeDraftStore,
+  resolveChartDataForOptions,
+  resolveChartTypeTransition,
+  type ChartTypeDraftStore,
+} from '@/lib/chartTypeDrafts';
 import { optionDockThresholds, resolveAutoOptionDock } from '@/lib/chartPreviewLayout';
 import {
   cloneEditorSnapshot,
@@ -240,6 +250,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const rawRequestId = useRef(0);
   const runRequestId = useRef(0);
   const optionPreviewRequestId = useRef(0);
+  const chartTypeDraftsRef = useRef<ChartTypeDraftStore>(createChartTypeDraftStore());
   const requestedCatalogIds = useRef(new Set<number>());
   const editorBodyRef = useRef<HTMLDivElement>(null);
   const builderWorkspaceRef = useRef<HTMLElement>(null);
@@ -254,6 +265,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [tableSelectionFocusKey, setTableSelectionFocusKey] = useState(0);
   const [leavePath, setLeavePath] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
   const [embedOpen, setEmbedOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false);
   const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false);
@@ -326,8 +338,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 기존 차트 진입 → 정의와 마지막 저장 캐시를 함께 복원한다. 고객 DB 쿼리를 자동 재실행하지 않는다.
   // 레거시 문자열 테이블 참조는 TableRef 로 승격한다.
   useEffect(() => {
-    if (chartId == null) return;
+    if (chartId == null) {
+      chartTypeDraftsRef.current = createChartTypeDraftStore();
+      setSavedVersion(null);
+      return;
+    }
     let cancelled = false;
+    chartTypeDraftsRef.current = createChartTypeDraftStore();
+    setSavedVersion(null);
     setTableSelectionTarget(null);
     setAxisColumnSelectionTarget(null);
     setInitialPreviewLoading(true);
@@ -370,6 +388,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           if (restoredAutoColors) restoredOptions = { ...restoredOptions, autoColorMap: restoredAutoColors };
 
           setName(c.name);
+          setSavedVersion(c.version);
           setDatasourceId(c.datasourceId);
           setBuilder(restoredBuilder);
           setChartType(c.chartType);
@@ -609,6 +628,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       tables,
     );
     const rawQueryChanged = rawPreviewSignature(normalized) !== rawPreviewSignature(builder);
+    const sourceChanged = chartSourceFingerprint(normalized) !== chartSourceFingerprint(builder);
+    if (sourceChanged) {
+      chartTypeDraftsRef.current = clearChartDataDrafts(chartTypeDraftsRef.current);
+    }
     if ((normalized.seriesBy ?? null) !== (builder.seriesBy ?? null)) {
       // The series namespace changes when a grouping dimension is added, removed, or replaced.
       // Start that namespace at the beginning of the selected palette; filters and sorting keep
@@ -650,6 +673,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   // 원본 테이블 확정(나머지 구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
+    chartTypeDraftsRef.current = clearChartDataDrafts(chartTypeDraftsRef.current);
     setBuilder({
       ...emptyBuilder(),
       table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name },
@@ -851,15 +875,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         options: jsonb,
         refreshMode: (cols.refreshMode as RefreshMode) ?? 'ttl',
         cacheTtlSeconds: Number(cols.cacheTtlSeconds ?? 3600),
+        ...(savedId != null && savedVersion != null ? { version: savedVersion } : {}),
       };
       let persistedChartId = savedId;
       if (savedId == null) {
         const created = await chartsApi.create(input);
         persistedChartId = created.id;
         setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
+        setSavedVersion(created.version);
         replaceEditorPath(chartEditPath(created.id, created.mainTable));
       } else {
         const updated = await chartsApi.update(savedId, input);
+        setSavedVersion(updated.version);
         replaceEditorPath(chartEditPath(savedId, updated.mainTable));
       }
       setOptions(optionsToSave);
@@ -953,17 +980,84 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const goList = () => navigateFromEditor('/');
   const createChart = () => navigateFromEditor('/charts/new');
 
+  const changeChartType = (nextType: MajorType) => {
+    if (nextType === chartType) return;
+    const currentOptions = optionsWithMapViewport(
+      options,
+      chartType,
+      pendingMapViewport(mapViewportSession),
+    );
+    const captured = captureChartTypeDraft(
+      chartTypeDraftsRef.current,
+      chartType,
+      builder,
+      currentOptions,
+    );
+    chartTypeDraftsRef.current = captured;
+
+    const transition = resolveChartTypeTransition(
+      captured,
+      chartType,
+      nextType,
+      builder,
+      currentOptions,
+    );
+    const nextBuilder = withFieldDisplayNameSnapshots(transition.builder, tables);
+    const builderChanged = JSON.stringify(nextBuilder) !== JSON.stringify(builder);
+
+    setPendingBaseTable(null);
+    setTableSelectionTarget(null);
+    setAxisColumnSelectionTarget(null);
+    setColorSelection(null);
+    setColorPicking(false);
+    if (builderChanged) resetResults();
+    else if (!result) setOption(null);
+
+    setChartType(nextType);
+    setOptions(transition.options);
+    setBuilder(nextBuilder);
+    if (nextType === 'map' || nextType === 'geoscatter') {
+      dispatchMapViewport({
+        type: 'restoreGlobal',
+        viewport: normalizeMapViewport(transition.options.map?.viewport),
+      });
+    } else {
+      dispatchMapViewport({ type: 'setEditing', editing: false });
+    }
+    setDirty(true);
+  };
+
   const changeOptions = (next: Options) => {
     if ((chartType === 'map' || chartType === 'geoscatter') && next.variant !== options.variant) {
-      const geoSeriesType = next.variant as GeoSeriesType;
-      const normalized = normalizeBuilderForChartType({ ...builder, geoSeriesType }, chartType);
+      const currentOptions = optionsWithMapViewport(
+        options,
+        chartType,
+        pendingMapViewport(mapViewportSession),
+      );
+      const nextOptions = optionsWithMapViewport(
+        next,
+        chartType,
+        pendingMapViewport(mapViewportSession),
+      );
+      const captured = captureChartDataDraft(
+        chartTypeDraftsRef.current,
+        chartType,
+        builder,
+        currentOptions,
+      );
+      chartTypeDraftsRef.current = captured;
+      const transition = resolveChartDataForOptions(captured, chartType, builder, nextOptions);
+      const normalized = withFieldDisplayNameSnapshots(transition.builder, tables);
+      const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
       setBuilder(normalized);
       setAxisColumnSelectionTarget(null);
       setColorSelection(null);
       setColorPicking(false);
-      resetResults();
+      if (builderChanged) resetResults();
+      setOptions(nextOptions);
+    } else {
+      setOptions(next);
     }
-    setOptions(next);
     if (!result || resultKind !== 'chart') setOption(null);
     setDirty(true);
   };
@@ -978,6 +1072,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     runRequestId.current += 1;
     optionPreviewRequestId.current += 1;
     rawRequestId.current += 1;
+    chartTypeDraftsRef.current = createChartTypeDraftStore();
 
     const restored = cloneEditorSnapshot(savedSnapshot);
     setName(restored.definition.name);
@@ -1306,34 +1401,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   onColorSelectionChange={setColorSelection}
                   onColorPickingChange={changeColorPicking}
                   onCollapse={() => setOptionEditorCollapsed(true)}
-                  onChangeChartType={(to, next) => {
-                    // 데이터 구성은 비파괴 전환(PRD 4.1). 분포 전환(집계 none·버킷 해제)·원형 전환(시리즈 1개)처럼
-                    // 구성이 실제로 바뀔 때만 기존 실행 결과가 stale → 무효화. 동일 구조(막대↔선↔원형) 전환은 미리보기 유지.
-                    const normalized = normalizeBuilderForChartType(
-                      to === 'map' || to === 'geoscatter'
-                        ? { ...builder, geoSeriesType: next.variant as GeoSeriesType }
-                        : builder,
-                      to,
-                    );
-                    const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
-                    setColorSelection(null);
-                    setColorPicking(false);
-                    if (to === 'map' || to === 'geoscatter') {
-                      dispatchMapViewport({
-                        type: 'restoreGlobal',
-                        viewport: normalizeMapViewport(next.map?.viewport),
-                      });
-                    } else {
-                      dispatchMapViewport({ type: 'setEditing', editing: false });
-                    }
-                    setChartType(to);
-                    setOptions(next);
-                    setBuilder(normalized);
-                    setAxisColumnSelectionTarget(null);
-                    if (builderChanged) resetResults();
-                    else if (!result) setOption(null);
-                    setDirty(true);
-                  }}
+                  onChangeChartType={changeChartType}
                   onChangeOptions={changeOptions}
                 />
                 </div>

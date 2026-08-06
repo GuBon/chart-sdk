@@ -216,7 +216,7 @@ export const handlers = [
     const datasourceId = Number(body.datasourceId) || 1;
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId);
     if (!mainTable) return err(400, 'MAIN_TABLE_REQUIRED', 'A primary table is required to save a chart.');
-    const chart = { id, ...body, mainTable, createdAt: now, updatedAt: now };
+    const chart = { id, ...body, version: 0, mainTable, createdAt: now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
     chartList = [{
@@ -235,13 +235,14 @@ export const handlers = [
     const id = Number(params.id);
     const body = (await request.json()) as Record<string, unknown>;
     const now = '2026-06-22T00:00:00Z';
-    const prev = savedCharts[id] as { createdAt?: string } | undefined;
+    const prev = savedCharts[id] as { createdAt?: string; version?: number } | undefined;
     const builderConfig = body.builderConfig as Partial<BuilderConfig> | undefined;
     const current = chartList.find((item) => item.id === id);
     const datasourceId = Number(body.datasourceId) || current?.datasourceId || 1;
     const mainTable = mainTableResponse(builderConfig?.table, datasourceId) ?? current?.mainTable;
     if (!mainTable) return err(400, 'MAIN_TABLE_REQUIRED', 'A primary table is required to save a chart.');
-    const chart = { id, ...body, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
+    const version = (prev?.version ?? (Number(body.version) || 0)) + 1;
+    const chart = { id, ...body, version, mainTable, createdAt: prev?.createdAt ?? now, updatedAt: now };
     savedCharts[id] = chart;
     computedAtByChart[id] = now;
     chartList = chartList.map((c) => (c.id === id ? {

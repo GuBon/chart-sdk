@@ -1065,6 +1065,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.getByPlaceholder('차트 이름').fill('저장하지 않은 이름');
     await page.locator('#option-title').fill('저장하지 않은 제목');
     await useXAxis(page, 'dept');
+    await page.getByRole('button', { name: '원형', exact: true }).click();
     await expect(reset).toBeEnabled();
     await reset.click();
 
@@ -1073,6 +1074,12 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.locator('#option-title')).toHaveValue('');
     await expect(page.getByText('마지막 저장 상태로 복원했습니다')).toBeVisible();
     await expect(reset).toBeDisabled();
+
+    // 초기화 전에 저장된 숨은 막대 초안(dept)이 이후 왕복에서 되살아나지 않는다.
+    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await page.getByRole('button', { name: '막대', exact: true }).click();
+    await expect(page.getByTestId('builder-x-axis')).toContainText('category');
+    await expect(page.locator('#option-title')).toHaveValue('');
   });
 
   test('저장 후 임베드 코드 버튼 활성화 + S3 모달 연결', async ({ page }) => {
@@ -1243,6 +1250,70 @@ test.describe('S2 노코드 구성 — 날짜 묶기·조건·정렬·실행', (
 });
 
 test.describe('S2 차트 유형 제약', () => {
+  test('막대·원형·선을 여러 번 왕복해도 종류별 데이터와 옵션을 복원하고 원본 변경 시 데이터만 초기화한다', async ({ page }) => {
+    await newSalesBase(page);
+    await useXAxis(page, 'category');
+    await addValue(page, 'amount');
+    await page.getByRole('combobox', { name: 'Y축 1 값 방식' }).selectOption('sum');
+    await addValue(page, 'id');
+    await page.getByRole('combobox', { name: 'Y축 2 값 방식' }).selectOption('count');
+    await page.getByLabel('Y축 2 표시 이름').fill('막대 건수');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.locator('#option-title').fill('막대 초안');
+
+    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await expect(page.locator('#builder-y-column-1')).toHaveCount(0);
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.locator('#option-title').fill('원형 초안');
+
+    await page.getByRole('button', { name: '선', exact: true }).click();
+    await page.locator('#option-title').fill('선 초안');
+    await addValue(page, 'id');
+    await page.getByRole('combobox', { name: 'Y축 2 값 방식' }).selectOption('count');
+    await page.getByLabel('Y축 2 표시 이름').fill('선 건수');
+
+    await page.getByRole('button', { name: '막대', exact: true }).click();
+    await expect(page.locator('#builder-y-column-1')).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Y축 2 값 방식' })).toHaveValue('count');
+    await expect(page.getByLabel('Y축 2 표시 이름')).toHaveValue('막대 건수');
+    await expect(page.locator('#option-title')).toHaveValue('막대 초안');
+
+    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await expect(page.locator('#builder-y-column-1')).toHaveCount(0);
+    await expect(page.locator('#option-title')).toHaveValue('원형 초안');
+
+    await page.getByRole('button', { name: '선', exact: true }).click();
+    await expect(page.locator('#builder-y-column-1')).toBeVisible();
+    await expect(page.getByLabel('Y축 2 표시 이름')).toHaveValue('선 건수');
+    await expect(page.locator('#option-title')).toHaveValue('선 초안');
+
+    // 원본 변경은 모든 종류의 축 초안을 폐기하지만 각 차트의 시각화 옵션은 보존한다.
+    await selectBase(page, /users/);
+    await page.getByRole('button', { name: '예', exact: true }).click();
+    await page.getByRole('button', { name: '막대', exact: true }).click();
+    await expect(page.getByTestId('builder-x-axis')).toContainText('데이터 패널에서 컬럼 선택');
+    await expect(page.locator('#builder-y-column-0')).toHaveCount(0);
+    await expect(page.locator('#option-title')).toHaveValue('막대 초안');
+  });
+
+  test('JOIN 변경도 숨은 차트 데이터 초안만 폐기하고 종류별 옵션은 유지한다', async ({ page }) => {
+    await newSalesBase(page);
+    await useXAxis(page, 'category');
+    await addValue(page, 'amount');
+    await page.getByRole('combobox', { name: 'Y축 1 값 방식' }).selectOption('sum');
+    await addValue(page, 'id');
+    await page.getByRole('combobox', { name: 'Y축 2 값 방식' }).selectOption('count');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.locator('#option-title').fill('JOIN 전 막대 옵션');
+
+    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await selectNewJoin(page, 'orders public');
+    await page.getByRole('button', { name: '막대', exact: true }).click();
+
+    await expect(page.locator('#builder-y-column-1')).toHaveCount(0);
+    await expect(page.locator('#option-title')).toHaveValue('JOIN 전 막대 옵션');
+  });
+
   test('원형은 시리즈를 1개로 제한한다', async ({ page }) => {
     await newSalesBase(page);
     await useXAxis(page, 'category');
@@ -1713,7 +1784,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
 
     await page.getByRole('combobox', { name: '좌표 방식' }).selectOption('spatial');
     await expect(page.getByRole('combobox', { name: '공간 Point 컬럼' })).toHaveValue('location');
-    await page.getByRole('combobox', { name: '점 크기 컬럼' }).selectOption('amount');
+    await page.getByRole('combobox', { name: '지도 포인트 크기값 컬럼' }).selectOption('amount');
 
     const requestPromise = page.waitForRequest((request) =>
       request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/query/run-builder');
@@ -1723,6 +1794,8 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
       mode: 'spatial',
       spatialColumn: 'location',
       sizeColumn: 'amount',
+      nameColumn: null,
+      valueColumn: null,
     });
 
     await expect(page.getByRole('columnheader', { name: '__chartsdk_longitude' })).toBeVisible();
