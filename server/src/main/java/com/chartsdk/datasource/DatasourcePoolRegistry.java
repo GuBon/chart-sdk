@@ -1,64 +1,181 @@
 package com.chartsdk.datasource;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
+import java.util.Comparator;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 고객 데이터소스별 커넥션 풀 레지스트리(HikariCP). 매 요청 DriverManager 새 연결 대신 풀에서 빌려준다(정합성 I2).
- * - 풀은 datasourceId 별로 1개, 상한 = mc_datasource.max_pool_size (운영 DB 보호).
- * - 고객 DB 는 항상 읽기 전용 풀 + connect timeout 으로 무한 대기 방지.
- * - 데이터소스 수정/삭제 시 evict 로 폐기(다음 사용 시 새 자격증명으로 재생성).
+ * Bounded registry of lazily created customer-database pools.
+ *
+ * <p>The cap is soft: an in-use pool is never closed or rejected merely to meet the cap. Idle
+ * pools are retired by LRU and TTL, and a retired pool closes after its final borrowed connection
+ * is returned.
  */
 @Component
 public class DatasourcePoolRegistry {
-    private static final int CONNECT_TIMEOUT_MS = 10_000;
-    private static final int VALIDATION_TIMEOUT_MS = 5_000;
+    public static final int DEFAULT_MAX_ENTRIES = 128;
+    public static final long DEFAULT_IDLE_TTL_SECONDS = 30 * 60;
+    public static final long DEFAULT_CLEANUP_INTERVAL_SECONDS = 60;
 
-    private final DatasourceService datasources;
-    private final Map<Long, HikariDataSource> pools = new ConcurrentHashMap<>();
+    private final DatasourcePoolFactory factory;
+    private final Map<Long, DatasourcePoolHandle> pools = new ConcurrentHashMap<>();
+    private final Set<DatasourcePoolHandle> retiringPools = ConcurrentHashMap.newKeySet();
+    private final Object creationLock = new Object();
+    private final int maxEntries;
+    private final long idleTtlNanos;
+    private final ScheduledExecutorService cleaner;
 
+    /** Compatibility constructor for focused tests and integration fixtures. */
     public DatasourcePoolRegistry(DatasourceService datasources) {
-        this.datasources = datasources;
+        this(new DatasourcePoolFactory(datasources), new SimpleMeterRegistry(),
+                DEFAULT_MAX_ENTRIES, DEFAULT_IDLE_TTL_SECONDS, DEFAULT_CLEANUP_INTERVAL_SECONDS);
     }
 
-    /** 데이터소스 풀에서 읽기 전용 커넥션을 빌린다(try-with-resources 로 반납). */
+    @Autowired
+    public DatasourcePoolRegistry(
+            DatasourcePoolFactory factory,
+            MeterRegistry metrics,
+            @Value("${chartsdk.datasource.pool-registry.max-entries:128}") int maxEntries,
+            @Value("${chartsdk.datasource.pool-registry.idle-ttl-seconds:1800}") long idleTtlSeconds,
+            @Value("${chartsdk.datasource.pool-registry.cleanup-interval-seconds:60}") long cleanupIntervalSeconds
+    ) {
+        this.factory = factory;
+        this.maxEntries = Math.max(1, maxEntries);
+        this.idleTtlNanos = Duration.ofSeconds(Math.max(1, idleTtlSeconds)).toNanos();
+        this.cleaner = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "datasource-pool-registry-cleaner");
+            thread.setDaemon(true);
+            return thread;
+        });
+        long interval = Math.max(1, cleanupIntervalSeconds);
+        cleaner.scheduleWithFixedDelay(this::evictIdlePoolsSafely, interval, interval, TimeUnit.SECONDS);
+        registerMetrics(metrics);
+    }
+
+    /** Borrows a read-only connection whose close operation also releases the pool handle. */
     public Connection connection(long datasourceId) throws SQLException {
-        return pools.computeIfAbsent(datasourceId, this::createPool).getConnection();
+        while (true) {
+            DatasourcePoolHandle handle = pool(datasourceId);
+            Connection connection = handle.borrow();
+            if (connection != null) return connection;
+            pools.remove(datasourceId, handle);
+        }
     }
 
-    /** 자격증명/설정 변경·삭제 시 호출 — 기존 풀을 닫아 다음 사용 때 재생성되게 한다. */
+    /** Retires the current generation without disrupting borrowers that are still using it. */
     public void evict(long datasourceId) {
-        HikariDataSource pool = pools.remove(datasourceId);
-        if (pool != null) pool.close();
+        DatasourcePoolHandle handle;
+        synchronized (creationLock) {
+            // A metadata change must not miss a pool that is still being constructed.
+            handle = pools.remove(datasourceId);
+        }
+        if (handle != null) retire(handle);
     }
 
-    private HikariDataSource createPool(long datasourceId) {
-        DatasourceCredentials c = datasources.credentials(datasourceId);
-        HikariConfig cfg = new HikariConfig();
-        cfg.setPoolName("ds-" + datasourceId);
-        cfg.setJdbcUrl(c.jdbcUrl());
-        cfg.setUsername(c.dbUser());
-        cfg.setPassword(c.dbPassword());
-        cfg.setReadOnly(true);                       // 고객 DB 는 읽기 전용 — 풀 레벨에서 강제
-        cfg.setMaximumPoolSize(Math.max(1, c.maxPoolSize()));
-        cfg.setMinimumIdle(0);                        // 유휴 시 0까지 줄여 고객 DB 연결 점유 최소화
-        cfg.setConnectionTimeout(CONNECT_TIMEOUT_MS); // 풀 고갈/도달 불가 시 빠르게 실패(무한 대기 금지)
-        cfg.setValidationTimeout(VALIDATION_TIMEOUT_MS);
-        cfg.setIdleTimeout(60_000);
-        cfg.setMaxLifetime(600_000);
-        return new HikariDataSource(cfg);
+    private DatasourcePoolHandle pool(long datasourceId) {
+        DatasourcePoolHandle existing = pools.get(datasourceId);
+        if (existing != null) return existing;
+        synchronized (creationLock) {
+            existing = pools.get(datasourceId);
+            if (existing != null) return existing;
+            evictOldestIdleWhenAtCapacity();
+            DatasourcePoolHandle created = new DatasourcePoolHandle(
+                    datasourceId, factory.create(datasourceId), () -> onRetiredPoolClosed(datasourceId));
+            pools.put(datasourceId, created);
+            return created;
+        }
+    }
+
+    private void evictOldestIdleWhenAtCapacity() {
+        while (pools.size() >= maxEntries) {
+            DatasourcePoolHandle oldest = oldestIdlePool();
+            if (oldest == null || !pools.remove(oldest.datasourceId(), oldest)) return;
+            retire(oldest);
+        }
+    }
+
+    void evictIdlePools() {
+        long now = System.nanoTime();
+        pools.values().stream()
+                .filter(handle -> handle.idleForAtLeast(now, idleTtlNanos))
+                .toList()
+                .forEach(handle -> {
+                    if (pools.remove(handle.datasourceId(), handle)) retire(handle);
+                });
+        while (pools.size() > maxEntries) {
+            DatasourcePoolHandle oldest = oldestIdlePool();
+            if (oldest == null || !pools.remove(oldest.datasourceId(), oldest)) return;
+            retire(oldest);
+        }
+    }
+
+    private DatasourcePoolHandle oldestIdlePool() {
+        return pools.values().stream()
+                .filter(DatasourcePoolHandle::isIdle)
+                .min(Comparator.comparingLong(DatasourcePoolHandle::lastUsedNanos))
+                .orElse(null);
+    }
+
+    private void retire(DatasourcePoolHandle handle) {
+        retiringPools.add(handle);
+        handle.retire();
+    }
+
+    private void onRetiredPoolClosed(long ignoredDatasourceId) {
+        retiringPools.removeIf(DatasourcePoolHandle::isClosed);
+    }
+
+    private void evictIdlePoolsSafely() {
+        try {
+            evictIdlePools();
+        } catch (RuntimeException ignored) {
+            // Cleanup is best-effort; query paths and the next cleanup cycle remain available.
+        }
+    }
+
+    private void registerMetrics(MeterRegistry metrics) {
+        Gauge.builder("chartsdk.datasource_pool.registry_size", pools, Map::size).register(metrics);
+        Gauge.builder("chartsdk.datasource_pool.retiring", retiringPools, Set::size).register(metrics);
+        Gauge.builder("chartsdk.datasource_pool.borrowers", this, DatasourcePoolRegistry::borrowerCount)
+                .register(metrics);
+        Gauge.builder("chartsdk.datasource_pool.idle", this, DatasourcePoolRegistry::idleCount)
+                .register(metrics);
+        Gauge.builder("chartsdk.datasource_pool.pending", this, DatasourcePoolRegistry::pendingCount)
+                .register(metrics);
+    }
+
+    private double borrowerCount() {
+        return pools.values().stream().mapToInt(DatasourcePoolHandle::borrowerCount).sum()
+                + retiringPools.stream().mapToInt(DatasourcePoolHandle::borrowerCount).sum();
+    }
+
+    private double idleCount() {
+        return pools.values().stream().filter(DatasourcePoolHandle::isIdle).count();
+    }
+
+    private double pendingCount() {
+        return pools.values().stream().mapToInt(DatasourcePoolHandle::pendingThreads).sum();
     }
 
     @PreDestroy
     void closeAll() {
-        pools.values().forEach(HikariDataSource::close);
+        cleaner.shutdownNow();
+        pools.values().forEach(this::retire);
         pools.clear();
     }
 }
