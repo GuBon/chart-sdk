@@ -1,0 +1,88 @@
+groups:
+  - name: chartsdk-capacity
+    rules:
+      - alert: ChartSdkUpdateVersionMissing
+        expr: increase(chartsdk_chart_update_version_missing_total[30m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "차트 수정 요청에 version이 누락되고 있습니다"
+          description: "30분 동안 version 없는 수정 요청이 발생했습니다. 0이 안정화되기 전 강제 모드를 켜지 마십시오."
+
+      - alert: ChartSdkQueryAdmissionRejecting
+        expr: increase(chartsdk_customer_query_rejected_total{reason="admission_timeout"}[5m]) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "고객 쿼리 admission 거절이 지속됩니다"
+          description: "DB 예산, 쿼리 지연, 재시도 backoff를 함께 확인하십시오."
+
+      - alert: ChartSdkQueryQueueStuck
+        expr: max_over_time(chartsdk_customer_query_queued[10m]) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "고객 쿼리 대기가 10분 이상 관찰됩니다"
+
+      - alert: ChartSdkQueryP95Slow
+        expr: histogram_quantile(0.95, sum(rate(chartsdk_customer_query_duration_seconds_bucket{outcome="success"}[10m])) by (le)) > 8
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "고객 쿼리 p95가 8초를 넘었습니다"
+
+      - alert: ChartSdkQueryTimeout
+        expr: increase(chartsdk_customer_query_failures_total{reason="timeout"}[5m]) > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "고객 쿼리 timeout이 발생했습니다"
+
+      - alert: ChartSdkDatasourcePoolRegistryNearCap
+        expr: chartsdk_datasource_pool_registry_size > 120
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "데이터소스 pool registry가 soft cap 128에 근접했습니다"
+
+      - alert: ChartSdkDatasourcePoolPending
+        expr: max_over_time(chartsdk_datasource_pool_pending[5m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "고객 DB connection pool 대기가 지속됩니다"
+
+      - alert: ChartSdkDatasourcePoolRetirementStuck
+        expr: min_over_time(chartsdk_datasource_pool_retiring[35m]) > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "retiring pool이 idle TTL보다 오래 닫히지 않았습니다"
+
+      - alert: ChartSdkCoordinationBusy
+        expr: increase(chartsdk_capacity_rejected_total[10m]) > 3
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "refresh 또는 sample-cache coordination 대기가 실패했습니다"
+
+      - alert: ChartSdkDatasourceInvalidationFailed
+        expr: increase(chartsdk_datasource_runtime_invalidations_total{outcome="error"}[10m]) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "데이터소스 runtime/cache 무효화가 실패했습니다"
+
+      - alert: ChartSdkHeapPressure
+        expr: sum(jvm_memory_used_bytes{area="heap"}) / sum(jvm_memory_max_bytes{area="heap"}) > 0.80
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "ChartSDK heap 사용률이 80%를 넘었습니다"
+
+      - alert: ChartSdkGcPausePressure
+        expr: rate(jvm_gc_pause_seconds_sum[10m]) > 0.15
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "GC pause가 실행 시간의 15%를 넘었습니다"
