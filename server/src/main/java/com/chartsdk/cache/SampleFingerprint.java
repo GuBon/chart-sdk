@@ -12,7 +12,7 @@ import java.util.TreeMap;
 
 /** Stable tenant-scoped key for a post-JOIN Bernoulli row sample. */
 public final class SampleFingerprint {
-    private static final int CONTRACT_VERSION = 2;
+    private static final int CONTRACT_VERSION = 4;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private SampleFingerprint() {

@@ -1,6 +1,7 @@
 package com.chartsdk.cache;
 
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.datasource.DatasourceRuntimeVersions;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -8,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -24,24 +26,49 @@ public class ChartComputeService {
     private final ChartCacheService cache;
     private final ChartRefreshCoordinator refreshes;
     private final ObjectMapper mapper;
+    private final DatasourceRuntimeVersions runtimeVersions;
 
     public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
                                ChartRefreshCoordinator refreshes, ObjectMapper mapper) {
+        this(jdbc, runner, cache, refreshes, mapper, new DatasourceRuntimeVersions());
+    }
+
+    @Autowired
+    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
+                               ChartRefreshCoordinator refreshes, ObjectMapper mapper,
+                               DatasourceRuntimeVersions runtimeVersions) {
         this.jdbc = jdbc;
         this.runner = runner;
         this.cache = cache;
         this.refreshes = refreshes;
         this.mapper = mapper;
+        this.runtimeVersions = runtimeVersions;
     }
 
     /** 차트를 즉시 재계산해 캐시에 반영. 차트 없으면 404. */
     public CachedChartRows recompute(long chartId) {
+        return recompute(chartId, null);
+    }
+
+    private CachedChartRows recompute(long chartId, Integer expectedVersion) {
         Chart chart = definition(chartId);
+        if (expectedVersion != null && chart.version() != expectedVersion) {
+            throw new StaleChartDefinitionException(chartId, expectedVersion, chart.version());
+        }
         try {
-            Computed computed = execute(chartId, chart);
-            return cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling());
+            Set<Long> datasourceIds = datasources(chartId);
+            datasourceIds.add(chart.datasourceId());
+            Map<Long, Long> sourceVersions = runtimeVersions.snapshot(datasourceIds);
+            Computed computed = execute(chart, datasourceIds);
+            return runtimeVersions.whileCurrent(sourceVersions,
+                    () -> cache.upsert(chartId, computed.rows(), chart.version(), computed.sampling()));
+        } catch (StaleChartDefinitionException stale) {
+            throw stale;
         } catch (RuntimeException failure) {
-            recordFailureQuietly(chartId, failure);
+            if (!(failure instanceof ApiException api
+                    && "DATASOURCE_CHANGED_DURING_QUERY".equals(api.code()))) {
+                recordFailureQuietly(chartId, chart.version(), failure);
+            }
             throw failure;
         }
     }
@@ -53,7 +80,8 @@ public class ChartComputeService {
     public CachedChartRows refreshSingleFlight(long chartId, int definitionVersion,
                                                boolean allowStale, SamplingMetadata sampling) {
         return refreshes.refreshSingleFlight(
-                chartId, definitionVersion, allowStale, sampling, () -> recompute(chartId));
+                chartId, definitionVersion, allowStale, sampling,
+                () -> recompute(chartId, definitionVersion));
     }
 
     /**
@@ -87,15 +115,28 @@ public class ChartComputeService {
     /** 저장 검증에서 이미 계산한 결과를 재조회 없이 현재 정의 버전의 캐시로 시드한다. */
     public void seedPreparedQuietly(long chartId, QueryRows rows, int definitionVersion,
                                     SamplingMetadata sampling) {
+        seedPreparedQuietly(chartId, rows, definitionVersion, sampling, Map.of());
+    }
+
+    /** Seeds only if no referenced datasource changed after the prepared query began. */
+    public void seedPreparedQuietly(long chartId, QueryRows rows, int definitionVersion,
+                                    SamplingMetadata sampling, Map<Long, Long> datasourceVersions) {
         try {
-            cache.upsert(chartId, rows, definitionVersion, sampling);
+            runtimeVersions.whileCurrent(datasourceVersions, () ->
+                    cache.upsert(chartId, rows, definitionVersion, sampling));
+        } catch (StaleChartDefinitionException ignored) {
+            // Saving a newer chart definition won the race. The prepared rows belong to the old version.
+        } catch (ApiException changed) {
+            if (!"DATASOURCE_CHANGED_DURING_QUERY".equals(changed.code())) {
+                recordFailureQuietly(chartId, definitionVersion, changed);
+            }
         } catch (RuntimeException failure) {
-            recordFailureQuietly(chartId, failure);
+            recordFailureQuietly(chartId, definitionVersion, failure);
         }
     }
 
-    /** 기존 builder 차트도 현재 생성 규칙(sampling v7 Bernoulli 결과 표본·표본 SUM/COUNT 포함)을 즉시 사용한다. */
-    private Computed execute(long chartId, Chart chart) {
+    /** 기존 builder 차트도 현재 생성 규칙(sampling v9)을 즉시 사용한다. */
+    private Computed execute(Chart chart, Set<Long> datasourceIds) {
         if ("builder".equals(chart.defineMode()) && !chart.builderConfig().isEmpty()) {
             int sampleCacheMaxAge = "live".equals(chart.refreshMode()) ? 0 : chart.cacheTtlSeconds();
             FederatedQueryRunner.BuiltResult built =
@@ -103,7 +144,7 @@ public class ChartComputeService {
                             sampleCacheMaxAge);
             return new Computed(built.rows(), built.sampling());
         }
-        return new Computed(runner.runStored(datasources(chartId), chart.datasourceId(), chart.sqlQuery()), null);
+        return new Computed(runner.runStored(datasourceIds, chart.datasourceId(), chart.sqlQuery()), null);
     }
 
     Chart definition(long chartId) {
@@ -143,9 +184,9 @@ public class ChartComputeService {
                 jdbc.queryForList("SELECT datasource_id FROM mc_chart_datasource WHERE chart_id=?", Long.class, chartId));
     }
 
-    private void recordFailureQuietly(long chartId, RuntimeException failure) {
+    private void recordFailureQuietly(long chartId, int definitionVersion, RuntimeException failure) {
         try {
-            cache.recordFailure(chartId, failure);
+            cache.recordFailure(chartId, definitionVersion, failure);
         } catch (RuntimeException ignored) {
             // 메타 DB 자체 장애가 원인이면 실패 상태 기록도 불가능하다. 원래 계산 예외를 보존한다.
         }

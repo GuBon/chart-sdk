@@ -1,5 +1,6 @@
 package com.chartsdk.cache;
 
+import com.chartsdk.datasource.DatasourceRuntimeVersions;
 import com.chartsdk.query.QueryRows;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,23 +10,39 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class ChartCacheService {
     private final JdbcTemplate jdbc;
     private final CachedChartPayloadCodec codec;
+    private final ChartCacheWriter writer;
+    private final DatasourceRuntimeVersions runtimeVersions;
 
-    public ChartCacheService(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public ChartCacheService(JdbcTemplate jdbc, ObjectMapper mapper, ChartCacheWriter writer,
+                             DatasourceRuntimeVersions runtimeVersions) {
         this.jdbc = jdbc;
         this.codec = new CachedChartPayloadCodec(mapper);
+        this.writer = writer;
+        this.runtimeVersions = runtimeVersions;
     }
 
     public Optional<CachedChartRows> findUsable(long chartId, String refreshMode, int ttlSeconds,
-                                                int currentVersion, SamplingMetadata sampling) {
+                                                 int currentVersion, SamplingMetadata sampling) {
         if ("live".equals(refreshMode)) return Optional.empty();
+        return runtimeVersions.withBlockedCacheDatasources(blocked ->
+                chartReferencesBlockedDatasource(chartId, blocked)
+                        ? Optional.empty()
+                        : findUsableStored(chartId, refreshMode, ttlSeconds, currentVersion, sampling));
+    }
+
+    private Optional<CachedChartRows> findUsableStored(long chartId, String refreshMode, int ttlSeconds,
+                                                        int currentVersion, SamplingMetadata sampling) {
         return jdbc.query("""
                 SELECT result::text, computed_at, definition_version
                   FROM mc_chart_cache
@@ -53,6 +70,14 @@ public class ChartCacheService {
      * 데이터 시각이 오래된 stale은 허용하지만 정의가 오래된 결과는 절대 반환하지 않는다.
      */
     public Optional<CachedChartRows> findCompatible(long chartId, int currentVersion, SamplingMetadata sampling) {
+        return runtimeVersions.withBlockedCacheDatasources(blocked ->
+                chartReferencesBlockedDatasource(chartId, blocked)
+                        ? Optional.empty()
+                        : findCompatibleStored(chartId, currentVersion, sampling));
+    }
+
+    private Optional<CachedChartRows> findCompatibleStored(long chartId, int currentVersion,
+                                                            SamplingMetadata sampling) {
         return jdbc.query("""
                 SELECT result::text, computed_at, definition_version
                   FROM mc_chart_cache
@@ -72,6 +97,15 @@ public class ChartCacheService {
     /** Loads every compatible snapshot for a chart-list page in one database round trip. */
     public Map<Long, CachedChartRows> findCompatible(Map<Long, ChartCacheExpectation> expectations) {
         if (expectations == null || expectations.isEmpty()) return Map.of();
+        return runtimeVersions.withBlockedCacheDatasources(blocked -> {
+            Map<Long, ChartCacheExpectation> accessible = accessibleExpectations(expectations, blocked);
+            return findCompatibleStored(accessible);
+        });
+    }
+
+    private Map<Long, CachedChartRows> findCompatibleStored(
+            Map<Long, ChartCacheExpectation> expectations) {
+        if (expectations.isEmpty()) return Map.of();
         String placeholders = String.join(", ", java.util.Collections.nCopies(expectations.size(), "?"));
         String sql = "SELECT chart_id, result::text, computed_at, definition_version"
                 + " FROM mc_chart_cache WHERE chart_id IN (" + placeholders + ")";
@@ -98,25 +132,14 @@ public class ChartCacheService {
     }
 
     public CachedChartRows upsert(long chartId, QueryRows rows, int definitionVersion, SamplingMetadata sampling) {
-        Instant computedAt = Instant.now();
-        jdbc.update("""
-                INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version, last_error, last_error_at)
-                VALUES (?, ?::jsonb, ?, ?, ?, ?, NULL, NULL)
-                ON CONFLICT (chart_id) DO UPDATE
-                    SET result=EXCLUDED.result,
-                        computed_at=EXCLUDED.computed_at,
-                        elapsed_ms=EXCLUDED.elapsed_ms,
-                        row_count=EXCLUDED.row_count,
-                        definition_version=EXCLUDED.definition_version,
-                        last_error=NULL,
-                        last_error_at=NULL
-                """, chartId, codec.write(rows, sampling), Timestamp.from(computedAt), rows.elapsedMs(), rows.rowCount(), definitionVersion);
-        return new CachedChartRows(rows, computedAt, sampling);
-    }
-
-    /** 기존 호출부 호환 — 표본이 아닌 raw SQL 차트 등은 sampling=null. */
-    public CachedChartRows upsert(long chartId, QueryRows rows, int definitionVersion) {
-        return upsert(chartId, rows, definitionVersion, null);
+        return runtimeVersions.withBlockedCacheDatasources(blocked -> {
+            Instant computedAt = Instant.now();
+            if (!chartReferencesBlockedDatasource(chartId, blocked)) {
+                String payload = codec.write(rows, sampling);
+                computedAt = writer.upsert(chartId, payload, rows, definitionVersion);
+            }
+            return new CachedChartRows(rows, computedAt, sampling);
+        });
     }
 
     /**
@@ -125,16 +148,69 @@ public class ChartCacheService {
      * 단일 비행 트랜잭션이 롤백돼도 진단 정보는 보존돼야 하므로 독립 트랜잭션으로 기록한다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void recordFailure(long chartId, Throwable failure) {
+    public void recordFailure(long chartId, int definitionVersion, Throwable failure) {
+        runtimeVersions.withBlockedCacheDatasources(blocked -> {
+            if (!chartReferencesBlockedDatasource(chartId, blocked)) {
+                recordFailureStored(chartId, definitionVersion, failure);
+            }
+            return null;
+        });
+    }
+
+    private void recordFailureStored(long chartId, int definitionVersion, Throwable failure) {
+        if (!isCurrentDefinition(chartId, definitionVersion)) return;
         Instant failedAt = Instant.now();
         jdbc.update("""
                 INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count,
                                            definition_version, last_error, last_error_at)
-                VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?)
+                SELECT ?, NULL, NULL, NULL, NULL, ?, ?, ?
+                 WHERE EXISTS (SELECT 1 FROM mc_chart WHERE id=? AND version=?)
                 ON CONFLICT (chart_id) DO UPDATE
                     SET last_error=EXCLUDED.last_error,
                         last_error_at=EXCLUDED.last_error_at
-                """, chartId, failureMessage(failure), Timestamp.from(failedAt));
+                 WHERE EXISTS (SELECT 1 FROM mc_chart WHERE id=EXCLUDED.chart_id
+                                AND version=EXCLUDED.definition_version)
+                """, chartId, definitionVersion, failureMessage(failure), Timestamp.from(failedAt),
+                chartId, definitionVersion);
+    }
+
+    private boolean chartReferencesBlockedDatasource(long chartId, Set<Long> blockedDatasourceIds) {
+        if (blockedDatasourceIds.isEmpty()) return false;
+        String placeholders = String.join(", ", Collections.nCopies(blockedDatasourceIds.size(), "?"));
+        ArrayList<Object> arguments = new ArrayList<>();
+        arguments.add(chartId);
+        arguments.addAll(blockedDatasourceIds);
+        Boolean blocked = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM mc_chart_datasource"
+                        + " WHERE chart_id=? AND datasource_id IN (" + placeholders + "))",
+                Boolean.class, arguments.toArray());
+        return Boolean.TRUE.equals(blocked);
+    }
+
+    private Map<Long, ChartCacheExpectation> accessibleExpectations(
+            Map<Long, ChartCacheExpectation> expectations, Set<Long> blockedDatasourceIds) {
+        if (blockedDatasourceIds.isEmpty()) return expectations;
+        String chartPlaceholders = String.join(", ", Collections.nCopies(expectations.size(), "?"));
+        String datasourcePlaceholders = String.join(", ", Collections.nCopies(blockedDatasourceIds.size(), "?"));
+        ArrayList<Object> arguments = new ArrayList<>(expectations.keySet());
+        arguments.addAll(blockedDatasourceIds);
+        Set<Long> blockedCharts = Set.copyOf(jdbc.queryForList(
+                "SELECT DISTINCT chart_id FROM mc_chart_datasource"
+                        + " WHERE chart_id IN (" + chartPlaceholders + ")"
+                        + " AND datasource_id IN (" + datasourcePlaceholders + ")",
+                Long.class, arguments.toArray()));
+        if (blockedCharts.isEmpty()) return expectations;
+        Map<Long, ChartCacheExpectation> accessible = new LinkedHashMap<>();
+        expectations.forEach((chartId, expectation) -> {
+            if (!blockedCharts.contains(chartId)) accessible.put(chartId, expectation);
+        });
+        return accessible;
+    }
+
+    private boolean isCurrentDefinition(long chartId, int expectedVersion) {
+        Integer currentVersion = jdbc.query("SELECT version FROM mc_chart WHERE id=? FOR SHARE", rs ->
+                rs.next() ? rs.getInt("version") : null, chartId);
+        return currentVersion != null && currentVersion == expectedVersion;
     }
 
     private Optional<CachedChartRows> decodeCompatible(String json, Timestamp computedAt,
@@ -150,7 +226,9 @@ public class ChartCacheService {
         if (sampling != null && (payload.sampling() == null || !payload.sampling().matchesDefinition(sampling))) {
             return Optional.empty();
         }
-        return Optional.of(new CachedChartRows(payload.rows(), computedAt.toInstant(), payload.sampling()));
+        SamplingMetadata compatibleSampling = payload.sampling() == null
+                ? null : payload.sampling().toCurrentContract();
+        return Optional.of(new CachedChartRows(payload.rows(), computedAt.toInstant(), compatibleSampling));
     }
 
     private static String failureMessage(Throwable failure) {

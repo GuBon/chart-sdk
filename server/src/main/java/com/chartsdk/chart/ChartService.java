@@ -9,12 +9,15 @@ import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.converter.FieldDisplayNameResolver;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.datasource.DatasourceRuntimeVersions;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.SqlLiterals;
 import com.chartsdk.web.ApiException;
 import com.chartsdk.web.dto.ChartSaveRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,16 +33,32 @@ public class ChartService {
     private final ChartComputeService compute;
     private final ChartOptionConverter converter;
     private final FederatedQueryRunner runner;
+    private final ChartDefinitionWriter writer;
+    private final ChartVersionPolicy versionPolicy;
+    private final DatasourceRuntimeVersions runtimeVersions;
 
     public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
                         ChartComputeService compute, ChartOptionConverter converter,
-                        FederatedQueryRunner runner) {
+                        FederatedQueryRunner runner, ChartDefinitionWriter writer,
+                        ChartVersionPolicy versionPolicy) {
+        this(charts, currentUser, queries, compute, converter, runner, writer, versionPolicy,
+                new DatasourceRuntimeVersions());
+    }
+
+    @Autowired
+    public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
+                        ChartComputeService compute, ChartOptionConverter converter,
+                        FederatedQueryRunner runner, ChartDefinitionWriter writer,
+                        ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions) {
         this.charts = charts;
         this.currentUser = currentUser;
         this.queries = queries;
         this.compute = compute;
         this.converter = converter;
         this.runner = runner;
+        this.writer = writer;
+        this.versionPolicy = versionPolicy;
+        this.runtimeVersions = runtimeVersions;
     }
 
     public Map<String, Object> list(ChartListQuery query) {
@@ -90,24 +109,20 @@ public class ChartService {
 
     public Map<String, Object> create(ChartSaveRequest input) {
         Prepared prepared = prepareForSave(input);
-        Long id = charts.create(ownerId(), prepared.request());
-        charts.setChartDatasources(id, prepared.datasources());
-        compute.seedPreparedQuietly(id, prepared.rows(), 0, prepared.sampling());
-        return charts.get(ownerId(), id);
+        Long ownerId = ownerId();
+        ChartDefinitionWriter.SavedChart saved = writer.create(ownerId, prepared.request(), prepared.datasources());
+        compute.seedPreparedQuietly(saved.id(), prepared.rows(), saved.version(), prepared.sampling(),
+                prepared.datasourceVersions());
+        return charts.get(ownerId, saved.id());
     }
 
     public Map<String, Object> update(long id, ChartSaveRequest input) {
+        if (versionPolicy != null) versionPolicy.validate(input.version());
         Prepared prepared = prepareForSave(input);
         Long ownerId = ownerId();
-        Integer updatedVersion = charts.update(ownerId, id, prepared.request());
-        if (updatedVersion == null) {
-            if (charts.exists(ownerId, id)) {
-                throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "Chart was modified elsewhere; reload and retry.");
-            }
-            throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
-        }
-        charts.setChartDatasources(id, prepared.datasources());
-        compute.seedPreparedQuietly(id, prepared.rows(), updatedVersion, prepared.sampling());
+        ChartDefinitionWriter.SavedChart saved = writer.update(ownerId, id, prepared.request(), prepared.datasources());
+        compute.seedPreparedQuietly(id, prepared.rows(), saved.version(), prepared.sampling(),
+                prepared.datasourceVersions());
         return charts.get(ownerId, id);
     }
 
@@ -131,8 +146,7 @@ public class ChartService {
 
     public Map<String, Object> duplicate(long id) {
         Long ownerId = ownerId();
-        Long newId = charts.duplicate(ownerId, id);
-        charts.copyCache(newId, id);
+        Long newId = writer.duplicate(ownerId, id);
         return charts.get(ownerId, newId);
     }
 
@@ -176,7 +190,8 @@ public class ChartService {
      * 원본 데이터소스를 두 번째로 조회하지 않도록 한다.
      */
     private record Prepared(ChartSaveRequest request, Set<Long> datasources,
-                            com.chartsdk.query.QueryRows rows, SamplingMetadata sampling) {
+                            com.chartsdk.query.QueryRows rows, SamplingMetadata sampling,
+                            Map<Long, Long> datasourceVersions) {
     }
 
     private Prepared prepareForSave(ChartSaveRequest input) {
@@ -191,6 +206,10 @@ public class ChartService {
             int sampleCacheMaxAge = "live".equals(input.refreshMode())
                     ? 0
                     : input.cacheTtlSeconds() == null ? 3600 : input.cacheTtlSeconds();
+            Set<Long> configured = BuilderSqlBuilder.referencedDatasources(input.builderConfig());
+            Set<Long> expectedDatasources = configured.isEmpty()
+                    ? Set.of(input.datasourceId()) : configured;
+            Map<Long, Long> sourceVersions = runtimeVersions.snapshot(expectedDatasources);
             FederatedQueryRunner.BuiltResult built = runner.runBuilder(
                     input.datasourceId(), input.builderConfig(), chartType, false, sampleCacheMaxAge);
             String storedSql = SqlLiterals.inline(built.sql().text(), built.sql().params());
@@ -202,19 +221,23 @@ public class ChartService {
                     copy(input, defineMode, storedSql, chartType, refreshMode),
                     datasources,
                     built.rows(),
-                    built.sampling()
+                    built.sampling(),
+                    sourceVersions
             );
         }
         String sql = input.sqlQuery() == null ? "" : input.sqlQuery().trim();
         assertSelectOnly(sql);
         // 캐시에는 전체 차트 결과가 필요하므로 제한 실행 후 재조회하지 않고 처음부터 한 번만 전체 실행한다.
+        Set<Long> rawDatasource = Set.of(input.datasourceId());
+        Map<Long, Long> sourceVersions = runtimeVersions.snapshot(rawDatasource);
         var rows = queries.executeChart(input.datasourceId(), sql, List.of());
         // raw SQL 은 항상 단일 소스(primary) — 구조상 페더레이션 대상 아님.
         return new Prepared(
                 copy(input, defineMode, sql, chartType, input.refreshMode()),
-                Set.of(input.datasourceId()),
+                rawDatasource,
                 rows,
-                null
+                null,
+                sourceVersions
         );
     }
 

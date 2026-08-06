@@ -1,6 +1,8 @@
 package com.chartsdk.cache;
 
 import com.chartsdk.web.ApiException;
+import com.chartsdk.datasource.DatasourceRuntimeVersions;
+import com.chartsdk.metrics.CapacityMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,8 +22,10 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /** Disk-backed, bounded L1 cache for post-JOIN Bernoulli rows. */
@@ -31,6 +35,7 @@ public class SampleRowCacheService {
     private static final long QUOTA_ADVISORY_KEY = 0x4348415254534c31L; // "CHARTSL1"
 
     private final JdbcTemplate jdbc;
+    private final SampleCacheBuildLeaseRepository buildLeases;
     private final SampleCachePayloadCodec codec;
     private final TransactionTemplate transactions;
     private final int defaultMaxAgeSeconds;
@@ -41,9 +46,14 @@ public class SampleRowCacheService {
     private final Semaphore globalBuilds;
     private final ConcurrentHashMap<Long, Semaphore> datasourceBuilds = new ConcurrentHashMap<>();
     private final ObjectMapper mapper;
+    private final int buildWaitSeconds;
+    private final long buildPollMillis;
+    private final DatasourceRuntimeVersions runtimeVersions;
+    private final CapacityMetrics capacityMetrics;
 
     public SampleRowCacheService(
             JdbcTemplate jdbc,
+            SampleCacheBuildLeaseRepository buildLeases,
             ObjectMapper mapper,
             PlatformTransactionManager transactionManager,
             @Value("${chartsdk.sampling-cache.default-max-age-seconds:900}") int defaultMaxAgeSeconds,
@@ -51,9 +61,14 @@ public class SampleRowCacheService {
             @Value("${chartsdk.sampling-cache.max-entry-bytes:67108864}") long maxEntryBytes,
             @Value("${chartsdk.sampling-cache.max-datasource-bytes:134217728}") long maxDatasourceBytes,
             @Value("${chartsdk.sampling-cache.max-total-bytes:536870912}") long maxTotalBytes,
-            @Value("${chartsdk.sampling-cache.max-concurrent-builds:2}") int maxConcurrentBuilds
+            @Value("${chartsdk.sampling-cache.max-concurrent-builds:2}") int maxConcurrentBuilds,
+            @Value("${chartsdk.sampling-cache.build-wait-seconds:35}") int buildWaitSeconds,
+            @Value("${chartsdk.sampling-cache.build-poll-millis:100}") long buildPollMillis,
+            DatasourceRuntimeVersions runtimeVersions,
+            CapacityMetrics capacityMetrics
     ) {
         this.jdbc = jdbc;
+        this.buildLeases = buildLeases;
         this.mapper = mapper;
         this.codec = new SampleCachePayloadCodec(mapper);
         this.transactions = new TransactionTemplate(transactionManager);
@@ -63,6 +78,10 @@ public class SampleRowCacheService {
         this.maxDatasourceBytes = Math.max(this.maxEntryBytes, maxDatasourceBytes);
         this.maxTotalBytes = Math.max(this.maxDatasourceBytes, maxTotalBytes);
         this.globalBuilds = new Semaphore(Math.max(1, maxConcurrentBuilds), true);
+        this.buildWaitSeconds = Math.max(1, buildWaitSeconds);
+        this.buildPollMillis = Math.max(25, buildPollMillis);
+        this.runtimeVersions = runtimeVersions;
+        this.capacityMetrics = capacityMetrics;
     }
 
     public int defaultMaxAgeSeconds() {
@@ -91,28 +110,89 @@ public class SampleRowCacheService {
         return found;
     }
 
+    /** Reads an entry only while all referenced datasource generations remain current. */
+    public Optional<CachedResultSample> findCurrent(String fingerprint, int maxAgeSeconds,
+                                                    long primaryDatasourceId,
+                                                    Collection<Long> datasourceIds) {
+        List<Long> ids = normalizedDatasourceIds(primaryDatasourceId, datasourceIds);
+        Map<Long, Long> snapshot = runtimeVersions.snapshot(ids);
+        return runtimeVersions.readCache(snapshot, ids, () -> find(fingerprint, maxAgeSeconds));
+    }
+
     public CachedResultSample getOrLoad(String fingerprint, long primaryDatasourceId,
                                         Collection<Long> datasourceIds, int maxAgeSeconds,
                                         Supplier<CachedResultSample> loader) {
         if (maxAgeSeconds <= 0) return loader.get();
-        Optional<CachedResultSample> cached = find(fingerprint, maxAgeSeconds);
-        if (cached.isPresent()) return cached.get();
-
         List<Long> ids = normalizedDatasourceIds(primaryDatasourceId, datasourceIds);
+        Map<Long, Long> initialVersions = runtimeVersions.snapshot(ids);
+        Optional<CachedResultSample> cached = runtimeVersions.readCache(
+                initialVersions, ids, () -> find(fingerprint, maxAgeSeconds));
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+        if (runtimeVersions.isCacheBlocked(ids)) return loadUncached(initialVersions, loader);
+
         acquireBuildPermits(ids);
         try {
-            CachedResultSample result = transactions.execute(status -> {
-                jdbc.query("SELECT pg_advisory_xact_lock(?)", rs -> null, advisoryKey(fingerprint));
-                Optional<CachedResultSample> raced = find(fingerprint, maxAgeSeconds);
-                if (raced.isPresent()) return raced.get();
+            Map<Long, Long> buildVersions = runtimeVersions.snapshot(ids);
+            Optional<CachedResultSample> raced = runtimeVersions.readCache(
+                    buildVersions, ids, () -> find(fingerprint, maxAgeSeconds));
+            if (raced.isPresent()) {
+                return raced.get();
+            }
+            if (runtimeVersions.isCacheBlocked(ids)) return loadUncached(buildVersions, loader);
+
+            Optional<String> token = buildLeases.tryAcquire(fingerprint);
+            if (token.isEmpty()) {
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(buildWaitSeconds);
+                while (System.nanoTime() < deadline) {
+                    Optional<CachedResultSample> completed = runtimeVersions.readCache(
+                            buildVersions, ids, () -> find(fingerprint, maxAgeSeconds));
+                    if (completed.isPresent()) return completed.get();
+                    if (runtimeVersions.isCacheBlocked(ids)) {
+                        return loadUncached(buildVersions, loader);
+                    }
+                    token = buildLeases.tryAcquire(fingerprint);
+                    if (token.isPresent()) break;
+                    pauseForBuild();
+                }
+            }
+            if (token.isEmpty()) {
+                capacityMetrics.rejected("sample_cache", "build_lease_timeout");
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "SAMPLE_CACHE_BUSY",
+                        "The sample is still being prepared. Retry shortly.");
+            }
+            try {
                 CachedResultSample loaded = loader.get();
-                writeIfWithinQuota(fingerprint, primaryDatasourceId, ids, loaded);
+                runtimeVersions.writeCache(buildVersions, ids,
+                        () -> writeIfWithinQuota(fingerprint, primaryDatasourceId, ids, loaded));
                 return loaded;
-            });
-            if (result == null) throw new IllegalStateException("L1 sample transaction returned no value.");
-            return result;
+            } finally {
+                releaseBuildLeaseQuietly(fingerprint, token.get());
+            }
         } finally {
             releaseBuildPermits(ids);
+        }
+    }
+
+    private CachedResultSample loadUncached(Map<Long, Long> versions,
+                                            Supplier<CachedResultSample> loader) {
+        CachedResultSample loaded = loader.get();
+        runtimeVersions.requireCurrent(versions);
+        return loaded;
+    }
+
+    /** Removes every L1 entry whose primary or federated datasource set contains the ID. */
+    public void invalidateDatasource(long datasourceId) {
+        try {
+            String containedId = mapper.writeValueAsString(List.of(datasourceId));
+            jdbc.update("""
+                    DELETE FROM mc_sample_row_cache
+                     WHERE primary_datasource_id=?
+                        OR datasource_ids @> ?::jsonb
+                    """, datasourceId, containedId);
+        } catch (Exception failure) {
+            throw new IllegalStateException("Cannot invalidate datasource sample cache.", failure);
         }
     }
 
@@ -125,6 +205,13 @@ public class SampleRowCacheService {
                     fingerprint, bytes, maxEntryBytes);
             return;
         }
+        transactions.executeWithoutResult(status -> writeWithinQuotaTransaction(
+                fingerprint, primaryDatasourceId, datasourceIds, sample, payload, bytes));
+    }
+
+    private void writeWithinQuotaTransaction(String fingerprint, long primaryDatasourceId,
+                                             List<Long> datasourceIds, CachedResultSample sample,
+                                             String payload, long bytes) {
         try {
             // Different fingerprints can finish concurrently. Serialize the short write/eviction
             // section so the configured global and per-datasource byte ceilings remain hard bounds.
@@ -149,6 +236,25 @@ public class SampleRowCacheService {
             enforceQuotas();
         } catch (Exception e) {
             throw new IllegalStateException("Cannot persist L1 sample cache entry.", e);
+        }
+    }
+
+    private void releaseBuildLeaseQuietly(String fingerprint, String token) {
+        try {
+            buildLeases.release(fingerprint, token);
+        } catch (RuntimeException ignored) {
+            // The lease expires automatically.
+        }
+    }
+
+    private void pauseForBuild() {
+        try {
+            Thread.sleep(buildPollMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            capacityMetrics.rejected("sample_cache", "interrupted");
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "SAMPLE_CACHE_BUSY", "Interrupted while waiting for an L1 sample.");
         }
     }
 
@@ -198,6 +304,7 @@ public class SampleRowCacheService {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            capacityMetrics.rejected("sample_cache", "interrupted");
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
                     "SAMPLE_CACHE_BUSY", "Interrupted while waiting to build an L1 sample.");
         }
@@ -219,8 +326,4 @@ public class SampleRowCacheService {
         return unique.stream().sorted(Comparator.naturalOrder()).toList();
     }
 
-    private static long advisoryKey(String fingerprint) {
-        String prefix = fingerprint == null ? "0" : fingerprint.substring(0, Math.min(16, fingerprint.length()));
-        return Long.parseUnsignedLong(prefix, 16);
-    }
 }

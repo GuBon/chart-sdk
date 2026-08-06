@@ -4,6 +4,7 @@ import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.web.ApiException;
+import com.chartsdk.datasource.DatasourceRuntimeVersions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -50,6 +52,21 @@ class ChartComputeServiceTest {
 
     private static CachedChartRows truncatedSnapshot() {
         return new CachedChartRows(new QueryRows(List.of(), List.of(), 1_000, true, 1), Instant.now());
+    }
+
+    @Test
+    void preparedRowsCannotRepopulateCacheAfterDatasourceGenerationChanges() {
+        DatasourceRuntimeVersions versions = new DatasourceRuntimeVersions();
+        ChartCacheService fencedCache = mock(ChartCacheService.class);
+        ChartComputeService fenced = new ChartComputeService(
+                jdbc, runner, fencedCache, refreshes, new ObjectMapper(), versions);
+        Map<Long, Long> before = versions.snapshot(Set.of(7L));
+        versions.beginCacheInvalidation(7L);
+        versions.completeCacheInvalidation(7L);
+
+        fenced.seedPreparedQuietly(1L, snapshot().rows(), 3, null, before);
+
+        verify(fencedCache, never()).upsert(anyLong(), any(), anyInt(), nullable(SamplingMetadata.class));
     }
 
     @Test
@@ -170,7 +187,7 @@ class ChartComputeServiceTest {
 
         assertThatThrownBy(() -> compute.recompute(1L)).isSameAs(failure);
 
-        verify(cache).recordFailure(1L, failure);
+        verify(cache).recordFailure(1L, 4, failure);
         verify(cache, never()).upsert(eq(1L), any(), eq(4), nullable(SamplingMetadata.class));
     }
 

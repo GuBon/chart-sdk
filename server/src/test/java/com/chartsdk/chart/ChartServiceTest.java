@@ -27,7 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -41,7 +43,9 @@ class ChartServiceTest {
     private final ChartComputeService compute = mock(ChartComputeService.class);
     private final ChartOptionConverter converter = mock(ChartOptionConverter.class);
     private final FederatedQueryRunner runner = mock(FederatedQueryRunner.class);
-    private final ChartService service = new ChartService(charts, currentUser, queries, compute, converter, runner);
+    private final ChartService service = new ChartService(
+            charts, currentUser, queries, compute, converter, runner,
+            new ChartDefinitionWriter(charts), null);
 
     private final QueryRows queryRows = new QueryRows(
             List.of(Map.of("name", "category", "type", "text"), Map.of("name", "total", "type", "numeric")),
@@ -157,7 +161,7 @@ class ChartServiceTest {
         assertThat(service.create(request)).containsEntry("id", 21L);
 
         verify(runner, times(1)).runBuilder(1L, builder, "bar", false, 3600);
-        verify(compute).seedPreparedQuietly(21L, queryRows, 0, sampling);
+        verify(compute).seedPreparedQuietly(eq(21L), eq(queryRows), eq(0), eq(sampling), anyMap());
         verify(compute, never()).recompute(anyLong());
     }
 
@@ -195,7 +199,7 @@ class ChartServiceTest {
         service.create(request);
 
         verify(queries, times(1)).executeChart(1L, sql, List.of());
-        verify(compute).seedPreparedQuietly(22L, queryRows, 0, null);
+        verify(compute).seedPreparedQuietly(eq(22L), eq(queryRows), eq(0), isNull(), anyMap());
         verify(compute, never()).recompute(anyLong());
     }
 
@@ -229,6 +233,6 @@ class ChartServiceTest {
 
         service.update(12L, request);
 
-        verify(compute).seedPreparedQuietly(12L, queryRows, 4, null);
+        verify(compute).seedPreparedQuietly(eq(12L), eq(queryRows), eq(4), isNull(), anyMap());
     }
 }
