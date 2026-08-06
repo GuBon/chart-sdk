@@ -231,6 +231,16 @@ public class ChartRepository {
                 jdbc.queryForList("SELECT datasource_id FROM mc_chart_datasource WHERE chart_id=?", Long.class, chartId));
     }
 
+    public void copyChartDatasources(long newId, long originalId) {
+        jdbc.update("""
+                INSERT INTO mc_chart_datasource(chart_id, datasource_id)
+                SELECT ?, datasource_id
+                  FROM mc_chart_datasource
+                 WHERE chart_id=?
+                ON CONFLICT DO NOTHING
+                """, newId, originalId);
+    }
+
     public void copyCache(long newId, long originalId) {
         jdbc.update("""
                 INSERT INTO mc_chart_cache(chart_id, result, computed_at, elapsed_ms, row_count, definition_version)
