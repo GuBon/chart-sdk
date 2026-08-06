@@ -33,7 +33,17 @@ async function openOptionSection(page: Page, name: string) {
 
 async function selectTheme(page: Page, label: string) {
   await page.getByRole('combobox', { name: '테마', exact: true }).click();
-  await page.getByRole('option', { name: label, exact: true }).click();
+  const themeTree = page.getByRole('tree', { name: '테마 목록' }).first();
+  const themeItem = themeTree.getByRole('treeitem', { name: label, exact: true });
+  if (await themeItem.count() === 0) {
+    const familyHeaders = themeTree.locator('button[data-testid^="theme-group-"]');
+    for (let index = 0; index < await familyHeaders.count(); index += 1) {
+      const header = familyHeaders.nth(index);
+      if (await header.getAttribute('aria-expanded') !== 'true') await header.click();
+      if (await themeItem.count() > 0) break;
+    }
+  }
+  await themeItem.click();
 }
 
 async function chooseAxisColumn(page: Page, axisLabel: string, columnRef: string) {
@@ -572,7 +582,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 테마 색상 팔레트는 현재 선택한 시리즈에 해당 색을 지정한다.
     await page.getByTestId('palette-swatch-1').click();
-    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(204, 102, 119)');
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 127, 14)');
 
     const chipBox = await seriesChip.boundingBox();
     const swatchBox = await seriesSwatch.boundingBox();
@@ -597,13 +607,13 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     await expect(colorPicker).toHaveValue('#ff0000');
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
-    await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(204, 102, 119)');
+    await expect(page.getByTestId('palette-swatch-1')).toHaveCSS('background-color', 'rgb(255, 127, 14)');
 
-    await selectTheme(page, 'Bold');
-    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(127, 60, 141)');
+    await selectTheme(page, 'Tableau10');
+    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(78, 121, 167)');
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
     await page.getByRole('button', { name: '지정 해제', exact: true }).click();
-    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(127, 60, 141)');
+    await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(78, 121, 167)');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
@@ -634,7 +644,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
       for (let y = 0; y < target.height; y += 2) {
         for (let x = 0; x < target.width; x += 2) {
           const offset = (y * target.width + x) * 4;
-          if (pixels[offset] === 136 && pixels[offset + 1] === 204 && pixels[offset + 2] === 238 && pixels[offset + 3] > 0) {
+          if (pixels[offset] === 31 && pixels[offset + 1] === 119 && pixels[offset + 2] === 180 && pixels[offset + 3] > 0) {
             return { x: x / target.width, y: y / target.height };
           }
         }
@@ -660,10 +670,10 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
       expect.objectContaining({
         kind: 'cartesian',
         occurrence: 0,
-        color: '#DDCC77',
+        color: '#2CA02C',
       }),
     ]);
-    await expect(selectedItem.locator('span').last()).toHaveCSS('background-color', 'rgb(221, 204, 119)');
+    await expect(selectedItem.locator('span').last()).toHaveCSS('background-color', 'rgb(44, 160, 44)');
 
     // 지정 해제는 현재 항목 칩을 유지한 채 현재 테마색으로만 되돌린다.
     const clearRequest = page.waitForRequest((request) => {
@@ -1474,16 +1484,27 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     });
   }
 
-  test('모든 차트가 같은 25개 테마를 공유하고 지도는 순차형 테마를 먼저 제공한다', async ({ page }) => {
+  test('모든 차트가 같은 35개 D3 테마를 공유하고 차트 유형별 권장 family를 먼저 제공한다', async ({ page }) => {
     await runBar(page);
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
     const theme = page.locator('#option-palettePreset');
-    await expect(theme.locator('option')).toHaveCount(25);
-    await expect(theme.locator('option').first()).toHaveText('Safe');
+    await expect(theme.locator('option')).toHaveCount(35);
+    await expect(theme.locator('option').first()).toHaveText('Category10');
     await page.getByRole('combobox', { name: '테마', exact: true }).click();
-    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option')).toHaveCount(25);
-    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option').first()).toHaveText('Safe');
+    const barThemeTree = page.getByRole('tree', { name: '테마 목록' }).first();
+    const barFamilyHeaders = barThemeTree.locator('button[data-testid^="theme-group-"]');
+    await expect(barFamilyHeaders).toHaveCount(4);
+    await expect(barFamilyHeaders.first()).toHaveAttribute('data-testid', 'theme-group-categorical');
+    await expect(barThemeTree.getByTestId('theme-group-categorical')).toHaveAttribute('aria-expanded', 'true');
+    await expect(barThemeTree.getByTestId('theme-group-sequential')).toHaveAttribute('aria-expanded', 'false');
+    await expect(barThemeTree.getByRole('group', { name: 'Categorical 테마' }).getByRole('treeitem')).toHaveCount(9);
+    await expect(barThemeTree.getByRole('treeitem', { name: 'Category10', exact: true })).toBeVisible();
+    await expect(barThemeTree.getByRole('treeitem', { name: 'Blues', exact: true })).toHaveCount(0);
+    await barThemeTree.getByTestId('theme-group-sequential').click();
+    await expect(barThemeTree.getByTestId('theme-group-categorical')).toHaveAttribute('aria-expanded', 'true');
+    await expect(barThemeTree.getByTestId('theme-group-sequential')).toHaveAttribute('aria-expanded', 'true');
+    await expect(barThemeTree.getByRole('treeitem', { name: 'Blues', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await page.getByPlaceholder('차트 이름').fill('색상 테마 초기화 테스트');
     await page.locator('header').getByRole('button', { name: '저장', exact: true }).click();
@@ -1495,27 +1516,34 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
 
-    await expect(theme).toHaveValue('teal');
-    await expect(theme.locator('option')).toHaveCount(25);
-    await expect(theme.locator('option').first()).toHaveText('Burg');
+    await expect(theme).toHaveValue('blues');
+    await expect(theme.locator('option')).toHaveCount(35);
+    await expect(theme.locator('option').first()).toHaveText('Blues');
     await page.getByRole('combobox', { name: '테마', exact: true }).click();
-    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option')).toHaveCount(25);
-    await expect(page.getByRole('listbox', { name: '테마 목록' }).getByRole('option').first()).toHaveText('Burg');
+    const mapThemeTree = page.getByRole('tree', { name: '테마 목록' }).first();
+    const mapFamilyHeaders = mapThemeTree.locator('button[data-testid^="theme-group-"]');
+    await expect(mapFamilyHeaders).toHaveCount(4);
+    await expect(mapFamilyHeaders.first()).toHaveAttribute('data-testid', 'theme-group-sequential');
+    await expect(mapThemeTree.getByTestId('theme-group-sequential')).toHaveAttribute('aria-expanded', 'true');
+    await expect(mapThemeTree.getByTestId('theme-group-categorical')).toHaveAttribute('aria-expanded', 'false');
+    await expect(mapThemeTree.getByRole('group', { name: 'Sequential 테마' }).getByRole('treeitem')).toHaveCount(15);
+    await expect(mapThemeTree.getByRole('treeitem', { name: 'Blues', exact: true })).toBeVisible();
+    await expect(mapThemeTree.getByRole('treeitem', { name: 'Category10', exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('palette-gradient')).toBeVisible();
-    await selectTheme(page, 'Burg');
-    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(255, 198, 196)');
+    await expect(page.locator('[data-testid^="palette-swatch-"]')).toHaveCount(0);
+    await selectTheme(page, 'Viridis');
+    await expect(theme).toHaveValue('viridis');
 
     await page.getByRole('switch', { name: '색상 방향 반전' }).click();
     await expect(page.getByTestId('palette-gradient')).toHaveAttribute('aria-label', /반전됨/);
-    await expect(page.getByTestId('palette-swatch-0')).toHaveCSS('background-color', 'rgb(103, 32, 68)');
 
     await page.locator('header').getByRole('button', { name: '초기화', exact: true }).click();
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
-    await expect(theme).toHaveValue('safe');
-    await expect(theme.locator('option')).toHaveCount(25);
-    await expect(theme.locator('option').first()).toHaveText('Safe');
+    await expect(theme).toHaveValue('category10');
+    await expect(theme.locator('option')).toHaveCount(35);
+    await expect(theme.locator('option').first()).toHaveText('Category10');
   });
 
   test('표본 추출 실행 결과에 방식·집계 주의문구가 표시된다', async ({ page }) => {
@@ -1727,11 +1755,11 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
       if (response.request().method() !== 'POST'
         || new URL(response.url()).pathname !== '/api/v1/charts/preview'
         || !response.ok()) return false;
-      return response.request().postDataJSON().options?.palette?.[0] === '#7F3C8D';
+      return response.request().postDataJSON().options?.palette?.[0] === '#4E79A7';
     });
-    await selectTheme(page, 'Bold');
+    await selectTheme(page, 'Tableau10');
     const payload = await (await themeColorPreview).json();
-    expect(payload.option.series[0].itemStyle.color).toBe('#7F3C8D');
+    expect(payload.option.series[0].itemStyle.color).toBe('#4E79A7');
     expect(payload.option.geo.emphasis).toEqual({ disabled: true });
   });
 

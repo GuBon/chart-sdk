@@ -47,10 +47,6 @@ public class ChartOptionConverter {
     private static final String GEO_POINT_VALUE = "__chartsdk_point_value";
     private static final String GEO_POINT_SIZE = "__chartsdk_size";
     private static final String GEO_SERIES = "__chartsdk_series";
-    private static final List<String> LEGACY_DEFAULT_PALETTE = List.of(
-            "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
-            "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888"
-    );
     private static final int AXIS_NAME_GAP = 56;
     private static final int AXIS_ENDPOINT_NAME_GAP = 8;
     private static final int MAX_ANALYSIS_ANNOTATIONS_PER_KIND = 12;
@@ -124,16 +120,18 @@ public class ChartOptionConverter {
         // 마이그레이션은 빈 옵션에도 내부 메타데이터/빈 map 객체를 추가할 수 있다.
         // 레거시 여부는 변환 후 객체가 아니라 실제 저장 입력의 존재 여부로 판정해야 새 지도·히트맵 기본 테마가 보존된다.
         boolean legacyColorTheme = !storedOptions.isEmpty()
-                && number(map(normalizedOptions.get("colorTheme")).get("version"), 0) != 2;
-        if (legacyColorTheme) {
-            // colorTheme 도입 전 저장된 지도/히트맵은 종전 Safe + 2색 visualMap 결과를 유지한다.
-            opt.remove("colorTheme");
+                && number(map(normalizedOptions.get("colorTheme")).get("version"), 0) != 3;
+        if (legacyColorTheme && !defaults.forType(chartType).isEmpty()) {
+            // CARTO 기반 구 저장 데이터는 현재 차트군의 첫 D3 테마로 전환한다.
+            // 명시적 colorMap/itemColorOverrides는 opt에 그대로 두고 자동 색상만 초기화한다.
+            Map<String, Object> chartDefaults = defaults.forType(chartType);
+            opt.put("colorTheme", deepMerge(Map.of(), map(chartDefaults.get("colorTheme"))));
+            opt.put("palettePreset", chartDefaults.get("palettePreset"));
+            Object defaultPalette = chartDefaults.get("palette");
+            opt.put("palette", defaultPalette instanceof List<?> list ? new ArrayList<>(list) : List.of());
             opt.put("paletteReversed", false);
-            if (("map".equals(chartType) || "heatmap".equals(chartType))
-                    && !normalizedOptions.containsKey("palette")) {
-                opt.put("palette", LEGACY_DEFAULT_PALETTE);
-                if (!normalizedOptions.containsKey("palettePreset")) opt.put("palettePreset", "safe");
-            }
+            opt.put("paletteActiveIndex", 0);
+            opt.put("autoColorMap", new LinkedHashMap<>());
         }
         String variant = string(opt.get("variant"), "basic");
 
@@ -942,7 +940,7 @@ public class ChartOptionConverter {
                                           List<Map<String, Object>> seriesTargets) {
         List<Object> palette = ColorResolver.orderedPalette(opt);
         Object top = palette.isEmpty() ? null : palette.get(0);
-        boolean continuousPalette = number(map(opt.get("colorTheme")).get("version"), 0) == 2;
+        boolean continuousPalette = number(map(opt.get("colorTheme")).get("version"), 0) == 3;
         Typography typography = typography(opt);
         LayoutMetrics metrics = layoutMetrics(typography, opt);
         Map<String, Object> vm = new LinkedHashMap<>();

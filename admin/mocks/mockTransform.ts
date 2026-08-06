@@ -23,7 +23,7 @@ import {
 import { EMBEDDED_MAPS_KEY, MAP_VIEWPORT_KEY } from '@chartsdk/chart-options/geo';
 import {
   DEFAULT_PALETTE,
-  isPalettePresetForFamily,
+  isContinuousPalettePreset,
   resolveSeriesColorMap,
 } from '@chartsdk/chart-options/palettes';
 import {
@@ -1168,7 +1168,7 @@ export function assembleOption(
     colorNames,
     palette,
     o.autoColorMap ?? {},
-    isPalettePresetForFamily(o.palettePreset, 'sequential'),
+    isContinuousPalettePreset(o.palettePreset),
   );
   const typography = resolveChartTypography(o);
   const metrics = resolveChartLayoutMetrics(o);
@@ -1356,7 +1356,7 @@ export function assembleOption(
       titleAtBottom(o) ? metrics.titleHeight : 0,
       typography.legend,
       fonts.legend,
-      o.colorTheme?.version === 2,
+      o.colorTheme?.version === 3,
     );
     const series: Record<string, any> = {
       type: 'heatmap',
@@ -1448,7 +1448,7 @@ export function assembleOption(
     if (mapSeries.length <= 1) delete opt.legend;
     opt.visualMap = visualMapConfig(
       min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
-      typography.legend, fonts.legend, o.colorTheme?.version === 2,
+      typography.legend, fonts.legend, o.colorTheme?.version === 3,
       mapSeries.map((series) => ({ seriesId: String(series.id), dimension: 0 })),
     );
     opt.series = mapSeries;
@@ -1581,7 +1581,7 @@ export function assembleOption(
       if (min === max) max = min + 1;
       opt.visualMap = visualMapConfig(
         min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
-        typography.legend, fonts.legend, o.colorTheme?.version === 2,
+        typography.legend, fonts.legend, o.colorTheme?.version === 3,
         pointSeries.map((series) => ({ seriesId: String(series.id), dimension: 2 })),
       );
     } else {

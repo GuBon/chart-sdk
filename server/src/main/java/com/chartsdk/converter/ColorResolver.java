@@ -6,10 +6,11 @@ import java.util.List;
 import java.util.Map;
 
 final class ColorResolver {
-    private static final java.util.Set<String> SEQUENTIAL_PRESETS = java.util.Set.of(
-            "burg", "burgyl", "redor", "oryel", "peach", "pinkyl", "mint", "blugrn",
-            "darkmint", "emrld", "bluyl", "teal", "tealgrn", "purp", "purpor", "sunset",
-            "magenta", "sunsetdark", "brwnyl"
+    private static final java.util.Set<String> CONTINUOUS_PRESETS = java.util.Set.of(
+            "blues", "greens", "greys", "oranges", "purples", "reds", "turbo", "viridis",
+            "inferno", "magma", "plasma", "cividis", "warm", "cool", "cubehelix-default",
+            "brbg", "prgn", "piyg", "puor", "rdbu", "rdgy", "rdylbu", "rdylgn", "spectral",
+            "rainbow", "sinebow"
     );
 
     private ColorResolver() {
@@ -40,7 +41,7 @@ final class ColorResolver {
     static Map<String, Object> resolveSeriesColors(Map<String, Object> opt, List<String> names) {
         Map<String, Object> resolved = new LinkedHashMap<>(map(opt.get("autoColorMap")));
         List<Object> palette = orderedPalette(opt);
-        if (SEQUENTIAL_PRESETS.contains(String.valueOf(opt.get("palettePreset")))) {
+        if (CONTINUOUS_PRESETS.contains(String.valueOf(opt.get("palettePreset")))) {
             List<String> gradient = sampleGradient(palette, names.size());
             if (!gradient.isEmpty()) {
                 for (int index = 0; index < names.size(); index++) {

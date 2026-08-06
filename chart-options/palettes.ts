@@ -1,217 +1,337 @@
 /**
- * CARTOColors palettes (CC BY 4.0).
- * Source: https://github.com/CartoDB/CartoColor
+ * D3 color themes backed by d3-scale-chromatic.
  *
- * CARTO의 분류(qualitative/sequential)를 그대로 보존하고, 어떤 분류를 노출할지만
- * ChartSDK의 차트 대분류 정책으로 결정한다. 데이터 값의 의미는 추론하지 않는다.
+ * 색상값을 ChartSDK에 복사해 두지 않고 D3가 제공하는 범주형 scheme과 연속형
+ * interpolator를 직접 사용한다. 모든 차트가 같은 테마를 제공하되, 현재 차트에
+ * 적합한 family가 드롭다운 앞에 오도록 순서만 바꾼다.
  */
-export const CARTO_QUALITATIVE = {
-  safe: ['#88CCEE', '#CC6677', '#DDCC77', '#117733', '#332288', '#AA4499', '#44AA99', '#999933', '#882255', '#661100', '#6699CC', '#888888'],
-  antique: ['#855C75', '#D9AF6B', '#AF6458', '#736F4C', '#526A83', '#625377', '#68855C', '#9C9C5E', '#A06177', '#8C785D', '#467378', '#7C7C7C'],
-  bold: ['#7F3C8D', '#11A579', '#3969AC', '#F2B701', '#E73F74', '#80BA5A', '#E68310', '#008695', '#CF1C90', '#F97B72', '#4B4B8F', '#A5AA99'],
-  pastel: ['#66C5CC', '#F6CF71', '#F89C74', '#DCB0F2', '#87C55F', '#9EB9F3', '#FE88B1', '#C9DB74', '#8BE0A4', '#B497E7', '#D3B484', '#B3B3B3'],
-  prism: ['#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05', '#CC503E', '#94346E', '#6F4070', '#994E95', '#666666'],
-  vivid: ['#E58606', '#5D69B1', '#52BCA3', '#99C945', '#CC61B0', '#24796C', '#DAA51B', '#2F8AC4', '#764E9F', '#ED645A', '#CC3A8E', '#A5AA99'],
-} as const;
-
-/** 공식 CARTOColors sequential 팔레트의 7단계(낮은 값 → 높은 값) 색상. */
-export const CARTO_SEQUENTIAL = {
-  burg: ['#FFC6C4', '#F4A3A8', '#E38191', '#CC607D', '#AD466C', '#8B3058', '#672044'],
-  burgyl: ['#FBE6C5', '#F5BA98', '#EE8A82', '#DC7176', '#C8586C', '#9C3F5D', '#70284A'],
-  redor: ['#F6D2A9', '#F5B78E', '#F19C7C', '#EA8171', '#DD686C', '#CA5268', '#B13F64'],
-  oryel: ['#ECDA9A', '#EFC47E', '#F3AD6A', '#F7945D', '#F97B57', '#F66356', '#EE4D5A'],
-  peach: ['#FDE0C5', '#FACBA6', '#F8B58B', '#F59E72', '#F2855D', '#EF6A4C', '#EB4A40'],
-  pinkyl: ['#FEF6B5', '#FFDD9A', '#FFC285', '#FFA679', '#FA8A76', '#F16D7A', '#E15383'],
-  mint: ['#E4F1E1', '#B4D9CC', '#89C0B6', '#63A6A0', '#448C8A', '#287274', '#0D585F'],
-  blugrn: ['#C4E6C3', '#96D2A4', '#6DBC90', '#4DA284', '#36877A', '#266B6E', '#1D4F60'],
-  darkmint: ['#D2FBD4', '#A5DBC2', '#7BBCB0', '#559C9E', '#3A7C89', '#235D72', '#123F5A'],
-  emrld: ['#D3F2A3', '#97E196', '#6CC08B', '#4C9B82', '#217A79', '#105965', '#074050'],
-  bluyl: ['#F7FEAE', '#B7E6A5', '#7CCBA2', '#46AEA0', '#089099', '#00718B', '#045275'],
-  teal: ['#D1EEEA', '#A8DBD9', '#85C4C9', '#68ABB8', '#4F90A6', '#3B738F', '#2A5674'],
-  tealgrn: ['#B0F2BC', '#89E8AC', '#67DBA5', '#4CC8A3', '#38B2A3', '#2C98A0', '#257D98'],
-  purp: ['#F3E0F7', '#E4C7F1', '#D1AFE8', '#B998DD', '#9F82CE', '#826DBA', '#63589F'],
-  purpor: ['#F9DDDA', '#F2B9C4', '#E597B9', '#CE78B3', '#AD5FAD', '#834BA0', '#573B88'],
-  sunset: ['#F3E79B', '#FAC484', '#F8A07E', '#EB7F86', '#CE6693', '#A059A0', '#5C53A5'],
-  magenta: ['#F3CBD3', '#EAA9BD', '#DD88AC', '#CA699D', '#B14D8E', '#91357D', '#6C2167'],
-  sunsetdark: ['#FCDE9C', '#FAA476', '#F0746E', '#E34F6F', '#DC3977', '#B9257A', '#7C1D6F'],
-  brwnyl: ['#EDE5CF', '#E0C2A2', '#D39C83', '#C1766F', '#A65461', '#813753', '#541F3F'],
-} as const;
+import { color as parseD3Color } from 'd3-color';
+import {
+  interpolateBlues,
+  interpolateBrBG,
+  interpolateCividis,
+  interpolateCool,
+  interpolateCubehelixDefault,
+  interpolateGreens,
+  interpolateGreys,
+  interpolateInferno,
+  interpolateMagma,
+  interpolateOranges,
+  interpolatePiYG,
+  interpolatePlasma,
+  interpolatePRGn,
+  interpolatePuOr,
+  interpolatePurples,
+  interpolateRainbow,
+  interpolateRdBu,
+  interpolateRdGy,
+  interpolateRdYlBu,
+  interpolateRdYlGn,
+  interpolateReds,
+  interpolateSinebow,
+  interpolateSpectral,
+  interpolateTurbo,
+  interpolateViridis,
+  interpolateWarm,
+  schemeAccent,
+  schemeCategory10,
+  schemeDark2,
+  schemeObservable10,
+  schemePaired,
+  schemePastel1,
+  schemeSet2,
+  schemeSet3,
+  schemeTableau10,
+} from 'd3-scale-chromatic';
 
 export type PaletteChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
-export type PaletteFamily = 'qualitative' | 'sequential';
-export type QualitativePalettePreset = keyof typeof CARTO_QUALITATIVE;
-export type SequentialPalettePreset = keyof typeof CARTO_SEQUENTIAL;
-export type CartoPalettePreset = QualitativePalettePreset | SequentialPalettePreset;
+export type PaletteFamily = 'categorical' | 'sequential' | 'diverging' | 'cyclical';
 
-export const DEFAULT_QUALITATIVE_PRESET: QualitativePalettePreset = 'safe';
-export const DEFAULT_SEQUENTIAL_PRESET: SequentialPalettePreset = 'teal';
-/** 기존 import 호환. 범주형 기본값을 뜻한다. */
-export const DEFAULT_PALETTE_PRESET = DEFAULT_QUALITATIVE_PRESET;
-export const DEFAULT_PALETTE = [...CARTO_QUALITATIVE[DEFAULT_QUALITATIVE_PRESET]];
+export const D3_CATEGORICAL = {
+  category10: schemeCategory10,
+  accent: schemeAccent,
+  dark2: schemeDark2,
+  observable10: schemeObservable10,
+  paired: schemePaired,
+  pastel1: schemePastel1,
+  set2: schemeSet2,
+  set3: schemeSet3,
+  tableau10: schemeTableau10,
+} as const;
 
-export const CARTO_QUALITATIVE_CHOICES: { value: QualitativePalettePreset; label: string }[] = [
-  { value: 'safe', label: 'Safe' },
-  { value: 'bold', label: 'Bold' },
-  { value: 'vivid', label: 'Vivid' },
-  { value: 'prism', label: 'Prism' },
-  { value: 'antique', label: 'Antique' },
-  { value: 'pastel', label: 'Pastel' },
+export const D3_SEQUENTIAL = {
+  blues: interpolateBlues,
+  greens: interpolateGreens,
+  greys: interpolateGreys,
+  oranges: interpolateOranges,
+  purples: interpolatePurples,
+  reds: interpolateReds,
+  turbo: interpolateTurbo,
+  viridis: interpolateViridis,
+  inferno: interpolateInferno,
+  magma: interpolateMagma,
+  plasma: interpolatePlasma,
+  cividis: interpolateCividis,
+  warm: interpolateWarm,
+  cool: interpolateCool,
+  'cubehelix-default': interpolateCubehelixDefault,
+} as const;
+
+export const D3_DIVERGING = {
+  brbg: interpolateBrBG,
+  prgn: interpolatePRGn,
+  piyg: interpolatePiYG,
+  puor: interpolatePuOr,
+  rdbu: interpolateRdBu,
+  rdgy: interpolateRdGy,
+  rdylbu: interpolateRdYlBu,
+  rdylgn: interpolateRdYlGn,
+  spectral: interpolateSpectral,
+} as const;
+
+export const D3_CYCLICAL = {
+  rainbow: interpolateRainbow,
+  sinebow: interpolateSinebow,
+} as const;
+
+export type CategoricalPalettePreset = keyof typeof D3_CATEGORICAL;
+export type SequentialPalettePreset = keyof typeof D3_SEQUENTIAL;
+export type DivergingPalettePreset = keyof typeof D3_DIVERGING;
+export type CyclicalPalettePreset = keyof typeof D3_CYCLICAL;
+export type D3PalettePreset =
+  | CategoricalPalettePreset
+  | SequentialPalettePreset
+  | DivergingPalettePreset
+  | CyclicalPalettePreset;
+
+export interface D3PaletteChoice {
+  value: D3PalettePreset;
+  label: string;
+  family: PaletteFamily;
+}
+
+export const D3_CATEGORICAL_CHOICES: D3PaletteChoice[] = [
+  { value: 'category10', label: 'Category10', family: 'categorical' },
+  { value: 'accent', label: 'Accent', family: 'categorical' },
+  { value: 'dark2', label: 'Dark2', family: 'categorical' },
+  { value: 'observable10', label: 'Observable10', family: 'categorical' },
+  { value: 'paired', label: 'Paired', family: 'categorical' },
+  { value: 'pastel1', label: 'Pastel1', family: 'categorical' },
+  { value: 'set2', label: 'Set2', family: 'categorical' },
+  { value: 'set3', label: 'Set3', family: 'categorical' },
+  { value: 'tableau10', label: 'Tableau10', family: 'categorical' },
 ];
 
-export const CARTO_SEQUENTIAL_CHOICES: { value: SequentialPalettePreset; label: string }[] = [
-  { value: 'burg', label: 'Burg' },
-  { value: 'burgyl', label: 'BurgYL' },
-  { value: 'redor', label: 'RedOr' },
-  { value: 'oryel', label: 'OrYel' },
-  { value: 'peach', label: 'Peach' },
-  { value: 'pinkyl', label: 'PinkYl' },
-  { value: 'mint', label: 'Mint' },
-  { value: 'blugrn', label: 'BluGrn' },
-  { value: 'darkmint', label: 'DarkMint' },
-  { value: 'emrld', label: 'Emrld' },
-  { value: 'bluyl', label: 'BluYl' },
-  { value: 'teal', label: 'Teal' },
-  { value: 'tealgrn', label: 'TealGrn' },
-  { value: 'purp', label: 'Purp' },
-  { value: 'purpor', label: 'PurpOr' },
-  { value: 'sunset', label: 'Sunset' },
-  { value: 'magenta', label: 'Magenta' },
-  { value: 'sunsetdark', label: 'SunsetDark' },
-  { value: 'brwnyl', label: 'BrownYl' },
+export const D3_SEQUENTIAL_CHOICES: D3PaletteChoice[] = [
+  { value: 'blues', label: 'Blues', family: 'sequential' },
+  { value: 'greens', label: 'Greens', family: 'sequential' },
+  { value: 'greys', label: 'Greys', family: 'sequential' },
+  { value: 'oranges', label: 'Oranges', family: 'sequential' },
+  { value: 'purples', label: 'Purples', family: 'sequential' },
+  { value: 'reds', label: 'Reds', family: 'sequential' },
+  { value: 'turbo', label: 'Turbo', family: 'sequential' },
+  { value: 'viridis', label: 'Viridis', family: 'sequential' },
+  { value: 'inferno', label: 'Inferno', family: 'sequential' },
+  { value: 'magma', label: 'Magma', family: 'sequential' },
+  { value: 'plasma', label: 'Plasma', family: 'sequential' },
+  { value: 'cividis', label: 'Cividis', family: 'sequential' },
+  { value: 'warm', label: 'Warm', family: 'sequential' },
+  { value: 'cool', label: 'Cool', family: 'sequential' },
+  { value: 'cubehelix-default', label: 'Cubehelix Default', family: 'sequential' },
 ];
+
+export const D3_DIVERGING_CHOICES: D3PaletteChoice[] = [
+  { value: 'brbg', label: 'BrBG', family: 'diverging' },
+  { value: 'prgn', label: 'PRGn', family: 'diverging' },
+  { value: 'piyg', label: 'PiYG', family: 'diverging' },
+  { value: 'puor', label: 'PuOr', family: 'diverging' },
+  { value: 'rdbu', label: 'RdBu', family: 'diverging' },
+  { value: 'rdgy', label: 'RdGy', family: 'diverging' },
+  { value: 'rdylbu', label: 'RdYlBu', family: 'diverging' },
+  { value: 'rdylgn', label: 'RdYlGn', family: 'diverging' },
+  { value: 'spectral', label: 'Spectral', family: 'diverging' },
+];
+
+export const D3_CYCLICAL_CHOICES: D3PaletteChoice[] = [
+  { value: 'rainbow', label: 'Rainbow', family: 'cyclical' },
+  { value: 'sinebow', label: 'Sinebow', family: 'cyclical' },
+];
+
+export const D3_THEME_CHOICES: D3PaletteChoice[] = [
+  ...D3_CATEGORICAL_CHOICES,
+  ...D3_SEQUENTIAL_CHOICES,
+  ...D3_DIVERGING_CHOICES,
+  ...D3_CYCLICAL_CHOICES,
+];
+
+export const DEFAULT_CATEGORICAL_PRESET: CategoricalPalettePreset = 'category10';
+export const DEFAULT_SEQUENTIAL_PRESET: SequentialPalettePreset = 'blues';
+export const DEFAULT_DIVERGING_PRESET: DivergingPalettePreset = 'brbg';
+export const DEFAULT_CYCLICAL_PRESET: CyclicalPalettePreset = 'rainbow';
+export const DEFAULT_PALETTE_PRESET = DEFAULT_CATEGORICAL_PRESET;
+export const DEFAULT_PALETTE = [...D3_CATEGORICAL[DEFAULT_CATEGORICAL_PRESET]].map(normalizeD3Color);
+
+const CONTINUOUS_SAMPLE_COUNT = 32;
+const FAMILY_CHOICES: Record<PaletteFamily, D3PaletteChoice[]> = {
+  categorical: D3_CATEGORICAL_CHOICES,
+  sequential: D3_SEQUENTIAL_CHOICES,
+  diverging: D3_DIVERGING_CHOICES,
+  cyclical: D3_CYCLICAL_CHOICES,
+};
 
 export interface ColorThemeState {
-  version: 2;
-  qualitativePreset: QualitativePalettePreset;
-  sequentialPreset: SequentialPalettePreset;
-  sequentialReversed: boolean;
+  version: 3;
+  seriesPreset: D3PalettePreset;
+  valuePreset: D3PalettePreset;
+  seriesReversed: boolean;
+  valueReversed: boolean;
 }
 
 export const DEFAULT_COLOR_THEME: ColorThemeState = {
-  version: 2,
-  qualitativePreset: DEFAULT_QUALITATIVE_PRESET,
-  sequentialPreset: DEFAULT_SEQUENTIAL_PRESET,
-  sequentialReversed: false,
+  version: 3,
+  seriesPreset: DEFAULT_CATEGORICAL_PRESET,
+  valuePreset: DEFAULT_SEQUENTIAL_PRESET,
+  seriesReversed: false,
+  valueReversed: false,
 };
 
-export function paletteFamilyForChartType(chartType: unknown): PaletteFamily {
-  return chartType === 'heatmap' || chartType === 'map' ? 'sequential' : 'qualitative';
+/** 현재 차트가 드롭다운에서 가장 먼저 보여 줄 권장 family. */
+export function paletteFamilyForChartType(chartType: unknown): 'categorical' | 'sequential' {
+  return chartType === 'heatmap' || chartType === 'map' ? 'sequential' : 'categorical';
 }
 
-export function paletteChoicesForChartType(chartType: unknown): { value: CartoPalettePreset; label: string }[] {
-  const qualitative = [...CARTO_QUALITATIVE_CHOICES];
-  const sequential = [...CARTO_SEQUENTIAL_CHOICES];
+export function paletteFamilyOrderForChartType(chartType: unknown): PaletteFamily[] {
   return paletteFamilyForChartType(chartType) === 'sequential'
-    ? [...sequential, ...qualitative]
-    : [...qualitative, ...sequential];
+    ? ['sequential', 'diverging', 'categorical', 'cyclical']
+    : ['categorical', 'sequential', 'diverging', 'cyclical'];
 }
 
-export function isPalettePresetForFamily(preset: unknown, family: PaletteFamily): preset is CartoPalettePreset {
-  if (typeof preset !== 'string') return false;
-  return family === 'sequential' ? preset in CARTO_SEQUENTIAL : preset in CARTO_QUALITATIVE;
+export function paletteChoicesForChartType(chartType: unknown): D3PaletteChoice[] {
+  return paletteFamilyOrderForChartType(chartType).flatMap((family) => FAMILY_CHOICES[family]);
 }
 
-export function defaultPalettePresetForChartType(chartType: unknown): CartoPalettePreset {
+export function paletteFamilyOfPreset(preset: unknown): PaletteFamily | null {
+  if (typeof preset !== 'string') return null;
+  if (preset in D3_CATEGORICAL) return 'categorical';
+  if (preset in D3_SEQUENTIAL) return 'sequential';
+  if (preset in D3_DIVERGING) return 'diverging';
+  if (preset in D3_CYCLICAL) return 'cyclical';
+  return null;
+}
+
+export function isPalettePresetForFamily(preset: unknown, family: PaletteFamily): preset is D3PalettePreset {
+  return paletteFamilyOfPreset(preset) === family;
+}
+
+export function isD3PalettePreset(preset: unknown): preset is D3PalettePreset {
+  return paletteFamilyOfPreset(preset) != null;
+}
+
+export function isContinuousPalettePreset(preset: unknown): boolean {
+  const family = paletteFamilyOfPreset(preset);
+  return family === 'sequential' || family === 'diverging' || family === 'cyclical';
+}
+
+export function defaultPalettePresetForChartType(chartType: unknown): D3PalettePreset {
   return paletteFamilyForChartType(chartType) === 'sequential'
     ? DEFAULT_SEQUENTIAL_PRESET
-    : DEFAULT_QUALITATIVE_PRESET;
+    : DEFAULT_CATEGORICAL_PRESET;
 }
 
-export function cartoPalette(preset: unknown): string[] {
-  if (typeof preset === 'string' && preset in CARTO_QUALITATIVE) {
-    return [...CARTO_QUALITATIVE[preset as QualitativePalettePreset]];
+export function d3ThemeColorAt(preset: unknown, position: number): string {
+  const normalizedPosition = Math.min(1, Math.max(0, Number.isFinite(position) ? position : 0));
+  if (typeof preset === 'string' && preset in D3_SEQUENTIAL) {
+    return normalizeD3Color(D3_SEQUENTIAL[preset as SequentialPalettePreset](normalizedPosition));
   }
-  if (typeof preset === 'string' && preset in CARTO_SEQUENTIAL) {
-    return [...CARTO_SEQUENTIAL[preset as SequentialPalettePreset]];
+  if (typeof preset === 'string' && preset in D3_DIVERGING) {
+    return normalizeD3Color(D3_DIVERGING[preset as DivergingPalettePreset](normalizedPosition));
   }
-  return [...CARTO_QUALITATIVE[DEFAULT_QUALITATIVE_PRESET]];
+  if (typeof preset === 'string' && preset in D3_CYCLICAL) {
+    return normalizeD3Color(D3_CYCLICAL[preset as CyclicalPalettePreset](normalizedPosition));
+  }
+  const colors = d3Palette(preset);
+  const index = Math.min(colors.length - 1, Math.floor(normalizedPosition * colors.length));
+  return colors[Math.max(0, index)] ?? DEFAULT_PALETTE[0];
 }
 
-export function cartoPaletteForChartType(chartType: unknown, preset: unknown): string[] {
-  return cartoPalette(
-    isPalettePresetForFamily(preset, 'qualitative') || isPalettePresetForFamily(preset, 'sequential')
-    ? preset
-    : defaultPalettePresetForChartType(chartType),
-  );
+/**
+ * ECharts/JSON 경계에서 사용할 색상 배열을 D3 원본으로부터 구체화한다.
+ * 범주형은 D3 scheme 원본 길이를 유지하고 연속형은 요청한 정밀도로 동적 샘플링한다.
+ */
+export function d3Palette(preset: unknown, sampleCount = CONTINUOUS_SAMPLE_COUNT): string[] {
+  if (typeof preset === 'string' && preset in D3_CATEGORICAL) {
+    return [...D3_CATEGORICAL[preset as CategoricalPalettePreset]].map(normalizeD3Color);
+  }
+  const family = paletteFamilyOfPreset(preset);
+  if (family === 'sequential' || family === 'diverging' || family === 'cyclical') {
+    const count = Math.max(2, Math.round(sampleCount));
+    return Array.from({ length: count }, (_unused, index) => (
+      d3ThemeColorAt(preset, index / (count - 1))
+    ));
+  }
+  return [...DEFAULT_PALETTE];
+}
+
+export function d3PaletteForChartType(chartType: unknown, preset: unknown): string[] {
+  return d3Palette(isD3PalettePreset(preset) ? preset : defaultPalettePresetForChartType(chartType));
 }
 
 export function normalizeColorTheme(value: unknown, activePreset?: unknown, activeChartType?: unknown): ColorThemeState {
   const source = value != null && typeof value === 'object'
     ? value as Partial<ColorThemeState>
     : {};
-  const family = paletteFamilyForChartType(activeChartType);
-  const qualitativePreset = isPalettePresetForFamily(source.qualitativePreset, 'qualitative')
-    ? source.qualitativePreset as QualitativePalettePreset
-    : family === 'qualitative' && isPalettePresetForFamily(activePreset, 'qualitative')
-      ? activePreset as QualitativePalettePreset
-      : DEFAULT_QUALITATIVE_PRESET;
-  const sequentialPreset = isPalettePresetForFamily(source.sequentialPreset, 'sequential')
-    ? source.sequentialPreset as SequentialPalettePreset
-    : family === 'sequential' && isPalettePresetForFamily(activePreset, 'sequential')
-      ? activePreset as SequentialPalettePreset
-      : DEFAULT_SEQUENTIAL_PRESET;
-  return {
-    version: 2,
-    qualitativePreset,
-    sequentialPreset,
-    sequentialReversed: source.sequentialReversed === true,
+  const current = source.version === 3 ? source : {};
+  const theme: ColorThemeState = {
+    version: 3,
+    seriesPreset: isD3PalettePreset(current.seriesPreset) ? current.seriesPreset : DEFAULT_CATEGORICAL_PRESET,
+    valuePreset: isD3PalettePreset(current.valuePreset) ? current.valuePreset : DEFAULT_SEQUENTIAL_PRESET,
+    seriesReversed: current.seriesReversed === true,
+    valueReversed: current.valueReversed === true,
   };
+  if (isD3PalettePreset(activePreset)) {
+    if (paletteFamilyForChartType(activeChartType) === 'sequential') theme.valuePreset = activePreset;
+    else theme.seriesPreset = activePreset;
+  }
+  return theme;
 }
 
-/**
- * 테마 선택은 기본 팔레트만 바꾼다. colorMap/itemColorOverrides 같은 명시적
- * 지정은 유지되어, '지정 해제' 시 새 기본 팔레트로 돌아간다.
- */
+/** 테마는 자동 색상만 바꾸며 colorMap/itemColorOverrides 같은 명시적 지정은 유지한다. */
 export function applyPalettePreset(
   options: Record<string, any>,
   chartType: PaletteChartType,
   preset: unknown,
 ): Record<string, any> {
   const next = structuredClone(options);
-  const chartFamily = paletteFamilyForChartType(chartType);
-  const selectedFamily: PaletteFamily = isPalettePresetForFamily(preset, 'qualitative')
-    ? 'qualitative'
-    : isPalettePresetForFamily(preset, 'sequential')
-      ? 'sequential'
-      : chartFamily;
-  const selected = isPalettePresetForFamily(preset, selectedFamily)
-    ? preset
-    : defaultPalettePresetForChartType(chartType);
+  const selected = isD3PalettePreset(preset) ? preset : defaultPalettePresetForChartType(chartType);
   const theme = normalizeColorTheme(next.colorTheme, next.palettePreset, chartType);
-  if (selectedFamily === 'qualitative') theme.qualitativePreset = selected as QualitativePalettePreset;
-  else theme.sequentialPreset = selected as SequentialPalettePreset;
+  if (paletteFamilyForChartType(chartType) === 'sequential') theme.valuePreset = selected;
+  else theme.seriesPreset = selected;
   next.colorTheme = theme;
   next.palettePreset = selected;
-  next.palette = cartoPalette(selected);
+  next.palette = d3Palette(selected);
   next.paletteActiveIndex = 0;
-  next.paletteReversed = chartFamily === 'sequential' && selectedFamily === 'sequential'
-    ? theme.sequentialReversed
+  next.paletteReversed = isContinuousPalettePreset(selected)
+    ? (paletteFamilyForChartType(chartType) === 'sequential' ? theme.valueReversed : theme.seriesReversed)
     : false;
   next.autoColorMap = {};
   return next;
 }
 
-export function applySequentialPaletteDirection(
+export function applyPaletteDirection(
   options: Record<string, any>,
   chartType: PaletteChartType,
   reversed: boolean,
 ): Record<string, any> {
-  let next = structuredClone(options);
+  const next = structuredClone(options);
   const theme = normalizeColorTheme(next.colorTheme, next.palettePreset, chartType);
-  if (
-    paletteFamilyForChartType(chartType) === 'sequential'
-    && !isPalettePresetForFamily(next.palettePreset, 'sequential')
-  ) {
-    // 구형 범주형 지도 테마에서 방향을 처음 조정하면 기본 순차형 테마로 명시적으로 전환한다.
-    next = applyPalettePreset(next, chartType, theme.sequentialPreset);
-  }
-  theme.sequentialReversed = reversed;
+  if (paletteFamilyForChartType(chartType) === 'sequential') theme.valueReversed = reversed;
+  else theme.seriesReversed = reversed;
   next.colorTheme = theme;
-  next.paletteReversed = paletteFamilyForChartType(chartType) === 'sequential' && reversed;
+  next.paletteReversed = isContinuousPalettePreset(next.palettePreset) && reversed;
   return next;
 }
 
-/** 대분류 전환 시 분류별 마지막 선택을 기억하고 대상 분류의 팔레트를 복원한다. */
+/** 대분류 전환 시 차트군별 마지막 테마를 기억하고 대상 차트군의 테마를 복원한다. */
 export function switchPaletteForChartType(
   options: Record<string, any>,
   from: PaletteChartType,
@@ -220,24 +340,30 @@ export function switchPaletteForChartType(
   const next = structuredClone(options);
   const fromFamily = paletteFamilyForChartType(from);
   const toFamily = paletteFamilyForChartType(to);
-  const hasCurrentContract = next.colorTheme?.version === 2;
-  if (fromFamily === toFamily && !hasCurrentContract) return next;
   const theme = normalizeColorTheme(next.colorTheme, next.palettePreset, from);
-  if (isPalettePresetForFamily(next.palettePreset, fromFamily)) {
-    if (fromFamily === 'qualitative') theme.qualitativePreset = next.palettePreset as QualitativePalettePreset;
-    else theme.sequentialPreset = next.palettePreset as SequentialPalettePreset;
+  if (isD3PalettePreset(next.palettePreset)) {
+    if (fromFamily === 'sequential') theme.valuePreset = next.palettePreset;
+    else theme.seriesPreset = next.palettePreset;
   }
-  if (fromFamily === 'sequential') theme.sequentialReversed = next.paletteReversed === true;
+  if (fromFamily === 'sequential') theme.valueReversed = next.paletteReversed === true;
+  else theme.seriesReversed = next.paletteReversed === true;
 
   next.colorTheme = theme;
   if (fromFamily !== toFamily) {
-    const targetPreset = toFamily === 'sequential' ? theme.sequentialPreset : theme.qualitativePreset;
+    const targetPreset = toFamily === 'sequential' ? theme.valuePreset : theme.seriesPreset;
     next.palettePreset = targetPreset;
-    next.palette = cartoPalette(targetPreset);
+    next.palette = d3Palette(targetPreset);
     next.paletteActiveIndex = 0;
     next.autoColorMap = {};
+    next.paletteReversed = isContinuousPalettePreset(targetPreset)
+      && (toFamily === 'sequential' ? theme.valueReversed : theme.seriesReversed);
+  } else if (!isD3PalettePreset(next.palettePreset)) {
+    const targetPreset = defaultPalettePresetForChartType(to);
+    next.palettePreset = targetPreset;
+    next.palette = d3Palette(targetPreset);
+    next.paletteReversed = false;
+    next.autoColorMap = {};
   }
-  next.paletteReversed = toFamily === 'sequential' ? theme.sequentialReversed : false;
   return next;
 }
 
@@ -260,7 +386,6 @@ export function resolveSeriesColorMap(
   }
 
   const used = new Set(Object.values(resolved).map((color) => color.toUpperCase()));
-
   names.forEach((name, index) => {
     if (resolved[name]) return;
     if (index < base.length && !used.has(base[index])) {
@@ -282,6 +407,10 @@ export function resolveSeriesColorMap(
     used.add(color);
   });
   return resolved;
+}
+
+function normalizeD3Color(value: string): string {
+  return parseD3Color(value)?.formatHex().toUpperCase() ?? schemeCategory10[0].toUpperCase();
 }
 
 function sampleGradient(stops: readonly string[], count: number): string[] {

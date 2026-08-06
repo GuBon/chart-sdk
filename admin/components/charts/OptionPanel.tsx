@@ -20,9 +20,9 @@ import {
 } from '@chartsdk/chart-options';
 import { resolveChartDesignSize, resolveChartTypography } from '@chartsdk/chart-options/display';
 import {
+  applyPaletteDirection,
   applyPalettePreset,
-  applySequentialPaletteDirection,
-  cartoPaletteForChartType,
+  d3PaletteForChartType,
 } from '@chartsdk/chart-options/palettes';
 import {
   findItemColorOverride,
@@ -156,7 +156,7 @@ export function OptionPanel({
     ?? null;
   const paletteColors = Array.isArray(options.palette) && options.palette.length > 0
     ? options.palette.map(String)
-    : cartoPaletteForChartType(chartType, options.palettePreset);
+    : d3PaletteForChartType(chartType, options.palettePreset);
 
   const valueOf = (definition: OptionDef) => {
     if (definition.key === 'chartType') return chartType;
@@ -169,7 +169,7 @@ export function OptionPanel({
       next = applyPalettePreset(next, chartType, value);
       onColorPickingChange(false);
     } else if (definition.key === 'paletteReversed') {
-      next = applySequentialPaletteDirection(next, chartType, value === true);
+      next = applyPaletteDirection(next, chartType, value === true);
     } else if (definition.key === 'palette') {
       setPath(next, definition.key, value);
       setPath(next, 'autoColorMap', {});
@@ -440,7 +440,6 @@ export function OptionPanel({
                           autoValue={autoTypographySizeOf(definition.key, typography)}
                           paletteColors={paletteColors}
                           paletteReversed={options.paletteReversed === true}
-                          continuousPalette={options.colorTheme?.version === 2}
                           colorMap={(options.colorMap ?? {}) as Record<string, string>}
                           autoColorMap={(options.autoColorMap ?? {}) as Record<string, string>}
                           itemColorOverrides={options.itemColorOverrides}

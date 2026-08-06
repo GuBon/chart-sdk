@@ -14,7 +14,7 @@ import {
 } from '../mocks/mockTransform';
 import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 import { MAJOR_TYPES, optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
-import { cartoPalette } from '@chartsdk/chart-options/palettes';
+import { d3Palette } from '@chartsdk/chart-options/palettes';
 
 type LayoutContractCase = {
   name: string;
@@ -728,7 +728,7 @@ describe('계열 피벗·색상 계약', () => {
     expect(buildGeneratedSql(config, 'bar')).toContain('GROUP BY "region", "year"');
   });
 
-  it('CARTO Safe를 기본으로 쓰고 12개 초과 색을 반복하지 않는다', () => {
+  it('D3 Category10을 기본으로 쓰고 10개 초과 색을 반복하지 않는다', () => {
     const many: QueryResult = {
       columns: [{ name: 'region', type: 'text' }, ...Array.from({ length: 14 }, (_, i) => ({ name: `s${i}`, type: 'number' }))],
       rows: [['서울', ...Array.from({ length: 14 }, (_, i) => i)]], rowCount: 1, truncated: false, elapsedMs: 0,
@@ -737,7 +737,7 @@ describe('계열 피벗·색상 계약', () => {
     const colors = Object.values(option.__chartsdkAutoColorMap as Record<string, string>);
     expect(colors).toHaveLength(14);
     expect(new Set(colors).size).toBe(14);
-    expect(colors[0]).toBe('#88CCEE');
+    expect(colors[0]).toBe('#1F77B4');
     expect(colors[12]).not.toBe(colors[0]);
   });
 });
@@ -774,54 +774,54 @@ describe('표시 메타데이터 계약', () => {
   });
 });
 
-describe('순차형 visualMap 색상 계약', () => {
+describe('D3 연속형 visualMap 색상 계약', () => {
   it('일반 차트에서 선택한 순차형 테마를 전체 시리즈 구간에 펼친다', () => {
-    const burg = cartoPalette('burg');
+    const viridis = d3Palette('viridis');
     const option = assembleOption(result, 'bar', {
-      palettePreset: 'burg',
-      palette: burg,
-      colorTheme: { version: 2, qualitativePreset: 'safe', sequentialPreset: 'burg', sequentialReversed: false },
+      palettePreset: 'viridis',
+      palette: viridis,
+      colorTheme: { version: 3, seriesPreset: 'viridis', valuePreset: 'blues', seriesReversed: false, valueReversed: false },
       autoColorMap: { s1: '#010203', s2: '#040506' },
     });
     const series = option.series as Array<Record<string, any>>;
 
-    expect(series.map((item) => item.color)).toEqual([burg[0], burg[6]]);
-    expect(option.__chartsdkAutoColorMap).toMatchObject({ s1: burg[0], s2: burg[6] });
+    expect(series.map((item) => item.color)).toEqual([viridis[0], viridis.at(-1)]);
+    expect(option.__chartsdkAutoColorMap).toMatchObject({ s1: viridis[0], s2: viridis.at(-1) });
   });
 
   it.each(['map', 'heatmap'] as const)('%s 빈 옵션도 신규 기본 순차 팔레트로 해석한다', (chartType) => {
     const option = assembleOption(result, chartType, {});
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(cartoPalette('teal'));
+    expect(colors).toEqual(d3Palette('blues'));
   });
 
-  it.each(['map', 'heatmap'] as const)('%s는 새 테마의 7단계 전체를 낮은 값부터 사용한다', (chartType) => {
+  it.each(['map', 'heatmap'] as const)('%s는 D3 연속형 테마 전체를 낮은 값부터 사용한다', (chartType) => {
     const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(cartoPalette('teal'));
+    expect(colors).toEqual(d3Palette('blues'));
   });
 
   it.each(['map', 'heatmap'] as const)('%s 색상 방향을 반전한다', (chartType) => {
     const options = optionsWithDefaults(chartType);
     options.paletteReversed = true;
-    options.colorTheme.sequentialReversed = true;
+    options.colorTheme.valueReversed = true;
     const option = assembleOption(result, chartType, options);
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual([...cartoPalette('teal')].reverse());
+    expect(colors).toEqual([...d3Palette('blues')].reverse());
   });
 
-  it('구 저장 지도는 기존 2색 visualMap 출력을 유지한다', () => {
+  it('CARTO 기반 구 저장 지도는 첫 D3 순차형 테마로 전환한다', () => {
     const legacy = optionsWithDefaults('map', {
       palettePreset: 'safe',
-      palette: cartoPalette('safe'),
+      palette: ['#88CCEE', '#CC6677'],
     });
     const option = assembleOption(result, 'map', legacy);
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(['#f7f7f7', '#88CCEE']);
+    expect(colors).toEqual(d3Palette('blues'));
   });
 });
 
@@ -907,7 +907,7 @@ describe('개별 데이터 색상 계약', () => {
       { value: [1, 10, 3], symbolSize: 6 },
       { value: [2, 20, 9], symbolSize: 28 },
     ]);
-    expect(option.__chartsdkAutoColorMap).toEqual({ y: '#88CCEE' });
+    expect(option.__chartsdkAutoColorMap).toEqual({ y: '#1F77B4' });
   });
 
   it('지도 지역 하나만 visualMap 위에 areaColor를 지정한다', () => {
@@ -943,7 +943,9 @@ describe('개별 데이터 색상 계약', () => {
       elapsedMs: 0,
     };
     const option = assembleOption(pointResult, 'geoscatter', {
+      palettePreset: 'category10',
       palette: ['#123456', '#654321'],
+      colorTheme: { version: 3, seriesPreset: 'category10', valuePreset: 'blues', seriesReversed: false, valueReversed: false },
       itemColorOverrides: [{
         kind: 'geoscatter',
         seriesName: '__geoscatter__',

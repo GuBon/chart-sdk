@@ -18,13 +18,13 @@
  */
 
 import {
-  CARTO_QUALITATIVE_CHOICES,
-  CARTO_SEQUENTIAL_CHOICES,
+  D3_THEME_CHOICES,
   DEFAULT_COLOR_THEME,
   DEFAULT_PALETTE,
   DEFAULT_PALETTE_PRESET,
   DEFAULT_SEQUENTIAL_PRESET,
-  cartoPalette,
+  d3Palette,
+  defaultPalettePresetForChartType,
   normalizeColorTheme,
   switchPaletteForChartType,
 } from '@chartsdk/chart-options/palettes';
@@ -286,32 +286,32 @@ export const OPTION_REGISTRY: OptionDef[] = [
   },
 
   // ── 색상 ──
-  // boxplot: 팔레트/개별색 = 상자 색. heatmap·map은 순차형 팔레트 전체를 visualMap에 쓰되 선택한 항목의 itemStyle이 우선한다.
+  // boxplot: 팔레트/개별색 = 상자 색. heatmap·map은 연속형 팔레트 전체를 visualMap에 쓰되 선택한 항목의 itemStyle이 우선한다.
   {
     key: 'palettePreset', zone: 'common', section: '색상', label: '테마',
     control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     default: DEFAULT_PALETTE_PRESET,
     defaultByType: { heatmap: DEFAULT_SEQUENTIAL_PRESET, map: DEFAULT_SEQUENTIAL_PRESET },
     echarts: '@palettePreset',
-    choices: [...CARTO_QUALITATIVE_CHOICES, ...CARTO_SEQUENTIAL_CHOICES],
-    help: '모든 차트에서 같은 색상 테마를 제공하며, 현재 차트에 어울리는 테마를 먼저 표시합니다.',
+    choices: D3_THEME_CHOICES,
+    help: '모든 차트에서 같은 D3 색상 테마를 제공하며, 현재 차트에 어울리는 유형을 먼저 표시합니다.',
   },
   {
     key: 'palette', zone: 'common', section: '색상', label: '테마 색상',
     control: 'palette', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     default: DEFAULT_PALETTE,
     defaultByType: {
-      heatmap: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
-      map: cartoPalette(DEFAULT_SEQUENTIAL_PRESET),
+      heatmap: d3Palette(DEFAULT_SEQUENTIAL_PRESET),
+      map: d3Palette(DEFAULT_SEQUENTIAL_PRESET),
     },
     echarts: 'color',
     help: '시리즈 또는 차트에서 선택한 요소에 팔레트 색상을 적용합니다. 직접 지정한 색은 테마를 바꿔도 유지되고, 지정 해제하면 현재 테마색으로 돌아갑니다.',
   },
   {
     key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
-    control: 'toggle', appliesTo: ['heatmap', 'map', 'geoscatter'], default: false,
+    control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: false,
     echarts: '@visualMap.inRange.color.reverse',
-    help: '낮은 값과 높은 값에 적용되는 순차형 팔레트의 방향을 서로 바꿉니다.',
+    help: 'Sequential·Diverging·Cyclical 테마의 진행 방향을 서로 바꿉니다.',
   },
   {
     key: 'colorMap', zone: 'common', section: '색상', label: '시리즈 색상',
@@ -1563,20 +1563,18 @@ export function optionsWithDefaults(chartType: MajorType, options: Options = {})
   const normalized = migrateLegacyInteractionOptions(options, chartType);
   const next = mergeOptions(defaultsFor(chartType), normalized);
   const hasStoredOptions = Object.keys(options ?? {}).length > 0;
-  const usesLegacyColorTheme = hasStoredOptions && normalized.colorTheme?.version !== 2;
+  const usesLegacyColorTheme = hasStoredOptions && normalized.colorTheme?.version !== 3;
   if (!usesLegacyColorTheme) return next;
 
-  // 구 저장 데이터는 당시의 범주형 기본 팔레트 + 2색 visualMap 표현을 유지한다.
-  delete next.colorTheme;
+  // CARTO 기반 구 저장 데이터는 현재 차트군의 첫 D3 테마로 전환한다.
+  // 사용자가 직접 지정한 colorMap/itemColorOverrides는 병합 결과에 그대로 남긴다.
+  const defaultPreset = defaultPalettePresetForChartType(chartType);
+  next.colorTheme = normalizeColorTheme(DEFAULT_COLOR_THEME, defaultPreset, chartType);
+  next.palettePreset = defaultPreset;
+  next.palette = d3Palette(defaultPreset);
   next.paletteReversed = false;
-  if ((chartType === 'map' || chartType === 'heatmap') && !Object.prototype.hasOwnProperty.call(normalized, 'palette')) {
-    next.palette = cartoPalette(
-      typeof normalized.palettePreset === 'string' ? normalized.palettePreset : DEFAULT_PALETTE_PRESET,
-    );
-  }
-  if ((chartType === 'map' || chartType === 'heatmap') && !Object.prototype.hasOwnProperty.call(normalized, 'palettePreset')) {
-    next.palettePreset = DEFAULT_PALETTE_PRESET;
-  }
+  next.paletteActiveIndex = 0;
+  next.autoColorMap = {};
   return next;
 }
 

@@ -95,21 +95,13 @@ class ChartOptionConverterTest {
 
     @Test
     void generatedMapAndHeatmapDefaultsUseTheFullSequentialPalette() throws Exception {
-        try (InputStream in = getClass().getResourceAsStream("/chart-defaults.json")) {
-            assertThat(in).as("generated chart defaults").isNotNull();
-            Map<String, Map<String, Object>> byType = new ObjectMapper().readValue(in, new TypeReference<>() {});
-            ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
-            List<String> teal = List.of(
-                    "#D1EEEA", "#A8DBD9", "#85C4C9", "#68ABB8",
-                    "#4F90A6", "#3B738F", "#2A5674"
-            );
-
-            for (String chartType : List.of("map", "heatmap")) {
-                Map<String, Object> option = defaultedConverter.convert(rows2(), chartType, Map.of());
-                assertThat(valueAt(option, "visualMap.inRange.color"))
-                        .as("%s generated defaults", chartType)
-                        .isEqualTo(teal);
-            }
+        Map<String, Map<String, Object>> byType = generatedDefaults();
+        ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
+        for (String chartType : List.of("map", "heatmap")) {
+            Map<String, Object> option = defaultedConverter.convert(rows2(), chartType, Map.of());
+            assertThat(valueAt(option, "visualMap.inRange.color"))
+                    .as("%s generated defaults", chartType)
+                    .isEqualTo(byType.get(chartType).get("palette"));
         }
     }
 
@@ -560,23 +552,23 @@ class ChartOptionConverterTest {
 
     @Test
     void mapAndHeatmapUseFullSequentialPaletteAndCanReverseIt() {
-        List<String> teal = List.of(
+        List<String> colors = List.of(
                 "#D1EEEA", "#A8DBD9", "#85C4C9", "#68ABB8",
                 "#4F90A6", "#3B738F", "#2A5674"
         );
         for (String chartType : List.of("map", "heatmap")) {
             Map<String, Object> forward = converter.convert(rows2(), chartType, Map.of(
-                    "palette", teal,
-                    "colorTheme", Map.of("version", 2),
+                    "palette", colors,
+                    "colorTheme", Map.of("version", 3),
                     "paletteReversed", false
             ));
             assertThat(valueAt(forward, "visualMap.inRange.color"))
                     .as("%s forward", chartType)
-                    .isEqualTo(teal);
+                    .isEqualTo(colors);
 
             Map<String, Object> reversed = converter.convert(rows2(), chartType, Map.of(
-                    "palette", teal,
-                    "colorTheme", Map.of("version", 2),
+                    "palette", colors,
+                    "colorTheme", Map.of("version", 3),
                     "paletteReversed", true
             ));
             assertThat(valueAt(reversed, "visualMap.inRange.color"))
@@ -589,14 +581,17 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void legacyMapKeepsTwoColorVisualMapContract() {
-        Map<String, Object> option = converter.convert(rows(), "map", Map.of(
+    void legacyMapUsesFirstD3SequentialTheme() throws Exception {
+        Map<String, Map<String, Object>> byType = generatedDefaults();
+        ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
+        Map<String, Object> option = defaultedConverter.convert(rows(), "map", Map.of(
                 "palettePreset", "safe",
                 "palette", List.of("#88CCEE", "#CC6677")
         ));
 
         assertThat(valueAt(option, "visualMap.inRange.color"))
-                .isEqualTo(List.of("#f7f7f7", "#88CCEE"));
+                .isEqualTo(byType.get("map").get("palette"));
+        assertThat(option.get("color")).isEqualTo(byType.get("map").get("palette"));
     }
 
     @Test
@@ -1178,7 +1173,7 @@ class ChartOptionConverterTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void cartoColorsDoNotCycleAndPersistBySeriesName() {
+    void d3CategoryColorsDoNotCycleAndPersistBySeriesName() throws Exception {
         List<Map<String, Object>> columns = new java.util.ArrayList<>();
         columns.add(Map.of("name", "region", "type", "text"));
         List<Object> row = new java.util.ArrayList<>();
@@ -1189,15 +1184,13 @@ class ChartOptionConverterTest {
         }
         QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
 
-        Map<String, Object> first = converter.convert(many, "bar", Map.of("palette", List.of(
-                "#88CCEE", "#CC6677", "#DDCC77", "#117733", "#332288", "#AA4499",
-                "#44AA99", "#999933", "#882255", "#661100", "#6699CC", "#888888"
-        )));
+        List<?> category10 = (List<?>) generatedDefaults().get("bar").get("palette");
+        Map<String, Object> first = converter.convert(many, "bar", Map.of("palette", category10));
         Map<String, Object> auto = (Map<String, Object>) first.get("__chartsdkAutoColorMap");
         assertThat(auto.values()).hasSize(14).doesNotHaveDuplicates();
-        assertThat(auto.get("s0")).isEqualTo("#88CCEE");
-        assertThat(auto.get("s11")).isEqualTo("#888888");
-        assertThat(auto.get("s12")).isNotEqualTo(auto.get("s0"));
+        assertThat(auto.get("s0")).isEqualTo(category10.get(0));
+        assertThat(auto.get("s9")).isEqualTo(category10.get(9));
+        assertThat(auto.get("s10")).isNotEqualTo(auto.get("s0"));
 
         Map<String, Object> second = converter.convert(many, "line", Map.of(
                 "autoColorMap", auto,
@@ -1222,7 +1215,7 @@ class ChartOptionConverterTest {
         QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
 
         Map<String, Object> option = converter.convert(many, "bar", Map.of(
-                "palettePreset", "burg",
+                "palettePreset", "viridis",
                 "palette", List.of("#000000", "#FFFFFF"),
                 "autoColorMap", Map.of("s0", "#FF0000")
         ));
@@ -1390,5 +1383,12 @@ class ChartOptionConverterTest {
         assertThat(displayNames).containsEntry("amount", "매출액 합계");
         assertThat(fields).extracting(field -> field.get("label"))
                 .contains("상품 분류", "매출액 합계");
+    }
+
+    private Map<String, Map<String, Object>> generatedDefaults() throws Exception {
+        try (InputStream in = getClass().getResourceAsStream("/chart-defaults.json")) {
+            assertThat(in).as("generated chart defaults").isNotNull();
+            return new ObjectMapper().readValue(in, new TypeReference<>() {});
+        }
     }
 }

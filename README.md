@@ -56,7 +56,7 @@ cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 
 ## 서드파티 고지
 
-차트 테마의 정성형·순차형 색상 팔레트는 CARTO의 **CARTOColors**를 사용한다. 상세 출처와 라이선스는
+차트 테마는 **D3 Scale Chromatic**의 Categorical·Sequential·Diverging·Cyclical 팔레트 35개를 사용한다. 상세 출처와 라이선스는
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)를 참조한다.
 
 ## Docker PostgreSQL

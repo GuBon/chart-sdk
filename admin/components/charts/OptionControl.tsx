@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
 import { getVariants, type MajorType, type OptionDef } from '@chartsdk/chart-options';
 import type { ChartTypography } from '@chartsdk/chart-options/display';
 import { Input } from '@/components/ui/Input';
@@ -15,9 +14,12 @@ import {
 } from '@/lib/chartColorSelection';
 import {
   DEFAULT_PALETTE,
-  cartoPalette,
+  d3ThemeColorAt,
+  isContinuousPalettePreset,
   paletteChoicesForChartType,
   paletteFamilyForChartType,
+  paletteFamilyOfPreset,
+  type PaletteFamily,
 } from '@chartsdk/chart-options/palettes';
 import {
   findItemColorOverride,
@@ -36,6 +38,7 @@ import {
   BoxplotOutliersControl,
   MovingAverageControl,
 } from './StatisticalOverlaysControl';
+import { ThemeSelect } from './ThemeSelect';
 
 
 /** 요소별 글자 크기 슬라이더가 자동일 때 실제 적용 중인 px 를 보여 주기 위한 대응표. */
@@ -75,7 +78,6 @@ export function OptionControl({
   disabled: disabledProp,
   paletteColors,
   paletteReversed,
-  continuousPalette,
   colorMap,
   autoColorMap,
   itemColorOverrides,
@@ -106,7 +108,6 @@ export function OptionControl({
   disabled: boolean;
   paletteColors: string[];
   paletteReversed: boolean;
-  continuousPalette: boolean;
   colorMap: Record<string, string>;
   autoColorMap: Record<string, string>;
   itemColorOverrides: unknown;
@@ -309,7 +310,7 @@ export function OptionControl({
       const baseChoices = def.key === 'palettePreset' ? paletteChoicesForChartType(chartType) : (def.choices ?? []);
       const currentValue = String(value ?? '');
       const choices = def.key === 'palettePreset' && currentValue && !baseChoices.some((choice) => String(choice.value) === currentValue)
-        ? [{ value: currentValue, label: '기존 테마' }, ...baseChoices]
+        ? [{ value: currentValue, label: '기존 테마', family: undefined }, ...baseChoices]
         : baseChoices;
       control = def.key === 'palettePreset'
         ? (
@@ -320,7 +321,11 @@ export function OptionControl({
               label={def.label}
               disabled={disabled}
               value={currentValue}
-              choices={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))}
+              choices={choices.map((choice) => ({
+                value: String(choice.value),
+                label: choice.label,
+                family: 'family' in choice ? choice.family as PaletteFamily | undefined : undefined,
+              }))}
               onChange={(next) => onChange(coerce(def, next))}
             />
           </div>
@@ -405,10 +410,14 @@ export function OptionControl({
       );
       break;
     }
-    case 'palette':
+    case 'palette': {
+      const activePaletteFamily = paletteFamilyOfPreset(chartOptions.palettePreset)
+        ?? paletteFamilyForChartType(chartType);
       control = (
         <PaletteControl
           value={value}
+          preset={chartOptions.palettePreset}
+          family={activePaletteFamily}
           selectedColor={colorSelection
             ? resolvedSelectionColor(colorSelection, colorTargets, colorMap, autoColorMap, itemColorOverrides, paletteColors)
             : null}
@@ -416,15 +425,15 @@ export function OptionControl({
           selectedHasOverride={selectionHasColorOverride(colorSelection, colorMap, itemColorOverrides)}
           disabled={disabled}
           label={def.label}
-          sequential={paletteFamilyForChartType(chartType) === 'sequential'}
+          continuous={isContinuousPalettePreset(chartOptions.palettePreset)}
           reversed={paletteReversed}
-          continuous={continuousPalette}
           onApply={onApplySelectedColor}
           onClear={onClearSelectedColor}
           onReversedChange={onPaletteReversedChange}
         />
       );
       break;
+    }
     case 'columnRef': {
       if (!hasResult) {
         control = <span className="text-xs text-text-tertiary">실행 후 지정 가능</span>;
@@ -499,236 +508,15 @@ function coerce(def: OptionDef, raw: string): unknown {
   return def.choices?.some((choice) => typeof choice.value === 'number') ? Number(raw) : raw;
 }
 
-function ThemeSelect({
-  id,
-  name,
-  label,
-  value,
-  choices,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  name: string;
-  label: string;
-  value: string;
-  choices: { value: string; label: string }[];
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [open, setOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState({
-    top: 0,
-    left: 0,
-    width: 288,
-    maxHeight: 320,
-  });
-  const selectedIndex = Math.max(0, choices.findIndex((choice) => choice.value === value));
-  const selectedChoice = choices[selectedIndex] ?? { value, label: '기존 테마' };
-
-  useEffect(() => {
-    if (!open) return;
-    const positionMenu = () => {
-      setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
-    };
-    positionMenu();
-    optionRefs.current[selectedIndex]?.focus();
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    window.addEventListener('resize', positionMenu);
-    window.addEventListener('scroll', positionMenu, true);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      window.removeEventListener('resize', positionMenu);
-      window.removeEventListener('scroll', positionMenu, true);
-    };
-  }, [choices.length, open, selectedIndex]);
-
-  useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
-
-  const selectChoice = (next: string) => {
-    onChange(next);
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  const focusOption = (index: number) => {
-    const normalizedIndex = (index + choices.length) % choices.length;
-    optionRefs.current[normalizedIndex]?.focus();
-  };
-
-  const handleOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusOption(index + 1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusOption(index - 1);
-    } else if (event.key === 'Home') {
-      event.preventDefault();
-      focusOption(0);
-    } else if (event.key === 'End') {
-      event.preventDefault();
-      focusOption(choices.length - 1);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-    } else if (event.key === 'Tab') {
-      setOpen(false);
-    }
-  };
-
-  return (
-    <div ref={rootRef} className="relative w-full">
-      <select
-        id={id}
-        name={name}
-        aria-hidden="true"
-        tabIndex={-1}
-        disabled={disabled}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="hidden"
-      >
-        {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-      </select>
-      <button
-        ref={triggerRef}
-        id={`${id}-trigger`}
-        type="button"
-        role="combobox"
-        aria-label={label}
-        aria-haspopup="listbox"
-        aria-controls={`${id}-menu`}
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => {
-          if (open) {
-            setOpen(false);
-            return;
-          }
-          setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
-          setOpen(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            setMenuPosition(calculateThemeMenuPosition(triggerRef.current, choices.length));
-            setOpen(true);
-          } else if (event.key === 'Escape') {
-            setOpen(false);
-          }
-        }}
-        className={cn(
-          'flex h-8 w-full items-center gap-2 rounded-md border border-border bg-bg-panel px-2 text-[13px] text-text-primary outline-none',
-          'focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50',
-        )}
-      >
-        <PaletteStrip colors={cartoPalette(selectedChoice.value)} testId="theme-selected-preview" />
-        <span className="shrink-0">{selectedChoice.label}</span>
-        <ChevronDown className={cn('size-3.5 shrink-0 text-text-secondary transition-transform', open && 'rotate-180')} />
-      </button>
-      {open && (
-        <div
-          id={`${id}-menu`}
-          role="listbox"
-          aria-label={`${label} 목록`}
-          style={menuPosition}
-          className="fixed z-[100] overflow-y-auto rounded-md border border-border bg-bg-panel p-1 shadow-lg"
-        >
-          {choices.map((choice, index) => {
-            const selected = choice.value === value;
-            return (
-              <button
-                key={choice.value}
-                ref={(element) => { optionRefs.current[index] = element; }}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => selectChoice(choice.value)}
-                onKeyDown={(event) => handleOptionKeyDown(event, index)}
-                className={cn(
-                  'flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-text-primary outline-none',
-                  'hover:bg-muted focus-visible:bg-muted',
-                  selected && 'bg-muted',
-                )}
-              >
-                <PaletteStrip colors={cartoPalette(choice.value)} testId={`theme-option-preview-${choice.value}`} />
-                <span className="shrink-0">{choice.label}</span>
-                <Check className={cn('ml-auto size-3.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')} />
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function calculateThemeMenuPosition(trigger: HTMLButtonElement | null, choiceCount: number) {
-  const viewportPadding = 8;
-  const menuGap = 4;
-  const menuWidth = Math.min(288, window.innerWidth - viewportPadding * 2);
-  const desiredHeight = Math.min(choiceCount * 32 + 8, 320);
-  if (!trigger) {
-    return {
-      top: viewportPadding,
-      left: viewportPadding,
-      width: menuWidth,
-      maxHeight: desiredHeight,
-    };
-  }
-
-  const bounds = trigger.getBoundingClientRect();
-  const spaceAbove = bounds.top - viewportPadding - menuGap;
-  const spaceBelow = window.innerHeight - bounds.bottom - viewportPadding - menuGap;
-  const openAbove = spaceAbove >= desiredHeight || spaceAbove > spaceBelow;
-  const availableHeight = Math.max(72, openAbove ? spaceAbove : spaceBelow);
-  const maxHeight = Math.min(desiredHeight, availableHeight);
-  const top = openAbove
-    ? Math.max(viewportPadding, bounds.top - menuGap - maxHeight)
-    : bounds.bottom + menuGap;
-  const left = Math.min(
-    Math.max(viewportPadding, bounds.right - menuWidth),
-    window.innerWidth - viewportPadding - menuWidth,
-  );
-  return { top, left, width: menuWidth, maxHeight };
-}
-
-function PaletteStrip({ colors, testId }: { colors: readonly string[]; testId: string }) {
-  return (
-    <span
-      data-testid={testId}
-      aria-hidden="true"
-      className="flex h-4 min-w-0 flex-1 overflow-hidden rounded-[3px] border border-black/10"
-    >
-      {colors.map((color, index) => (
-        <span
-          key={`${color}-${index}`}
-          className="h-full min-w-0 flex-1"
-          style={{ backgroundColor: color }}
-        />
-      ))}
-    </span>
-  );
-}
-
 function PaletteControl({
   value,
+  preset,
+  family,
   selectedColor,
   selectedTarget,
   selectedHasOverride,
   disabled,
   label,
-  sequential,
   reversed,
   continuous,
   onApply,
@@ -736,12 +524,13 @@ function PaletteControl({
   onReversedChange,
 }: {
   value: unknown;
+  preset: unknown;
+  family: PaletteFamily;
   selectedColor: string | null;
   selectedTarget: ColorSelection | null;
   selectedHasOverride: boolean;
   disabled: boolean;
   label: string;
-  sequential: boolean;
   reversed: boolean;
   continuous: boolean;
   onApply: (color: string) => void;
@@ -749,12 +538,25 @@ function PaletteControl({
   onReversedChange: (reversed: boolean) => void;
 }) {
   const palette = normalizePalette(value);
-  const displayPalette = sequential && reversed ? [...palette].reverse() : palette;
-  const gradientPalette = sequential && !continuous
-    ? ['#F7F7F7', displayPalette[0] ?? DEFAULT_PALETTE[0]]
-    : displayPalette;
+  const displayPalette = continuous && reversed ? [...palette].reverse() : palette;
   const normalizedSelected = selectedColor ? normalizeHex(selectedColor) : null;
   const unavailable = disabled || !selectedTarget;
+  const gradientPosition = useMemo(
+    () => continuous && normalizedSelected && selectedTarget
+      ? nearestGradientPosition(normalizedSelected, preset, reversed)
+      : null,
+    [continuous, normalizedSelected, preset, reversed, selectedTarget],
+  );
+  const gradientLabels = family === 'diverging'
+    ? ['낮은 쪽', '높은 쪽']
+    : family === 'cyclical'
+      ? ['시작', '순환 ↻']
+      : ['낮은 값', '높은 값'];
+  const applyGradientPosition = (displayPosition: number) => {
+    if (unavailable) return;
+    const position = Math.min(1, Math.max(0, displayPosition));
+    onApply(d3ThemeColorAt(preset, reversed ? 1 - position : position));
+  };
   const openEditor = () => {
     const picker = document.getElementById('option-series-color-picker') as HTMLInputElement | null;
     if (!picker) return;
@@ -768,39 +570,62 @@ function PaletteControl({
 
   return (
     <div className="flex flex-col gap-2">
-      {sequential && (
+      {continuous && (
         <div className="flex items-center gap-2 text-[10px] text-text-tertiary">
-          <span className="shrink-0">낮은 값</span>
-          <div
+          <span className="shrink-0">{gradientLabels[0]}</span>
+          <button
+            type="button"
             data-testid="palette-gradient"
-            role="img"
-            aria-label={`낮은 값에서 높은 값 색상${reversed ? ' · 반전됨' : ''}`}
-            className="h-3 flex-1 rounded-sm border border-black/10"
-            style={{ background: `linear-gradient(to right, ${gradientPalette.join(', ')})` }}
-          />
-          <span className="shrink-0">높은 값</span>
+            aria-label={`${gradientLabels[0]}에서 ${gradientLabels[1]} 색상 선택${reversed ? ' · 반전됨' : ''}`}
+            title={selectedTarget ? `${selectedTarget.label}에 적용할 색상 선택` : '먼저 시리즈 또는 차트 요소를 선택하세요'}
+            disabled={unavailable}
+            onClick={(event) => {
+              const bounds = event.currentTarget.getBoundingClientRect();
+              applyGradientPosition((event.clientX - bounds.left) / Math.max(1, bounds.width));
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+              event.preventDefault();
+              const current = gradientPosition ?? 0.5;
+              const step = event.shiftKey ? 0.05 : 0.01;
+              applyGradientPosition(current + (event.key === 'ArrowRight' ? step : -step));
+            }}
+            className="relative h-5 flex-1 rounded-sm border border-black/10 outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
+            style={{ background: `linear-gradient(to right, ${displayPalette.join(', ')})` }}
+          >
+            {gradientPosition != null && (
+              <span
+                data-testid="palette-gradient-handle"
+                className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
+                style={{ left: `${gradientPosition * 100}%`, backgroundColor: normalizedSelected ?? undefined }}
+              />
+            )}
+          </button>
+          <span className="shrink-0">{gradientLabels[1]}</span>
         </div>
       )}
-      <div className={cn('flex flex-wrap gap-1.5', unavailable && 'opacity-50')}>
-        {displayPalette.map((color, index) => {
-          const swatch = normalizeHex(color);
-          const active = normalizedSelected === swatch;
-          return (
-            <button
-              key={`${swatch}-${index}`}
-              type="button"
-              aria-label={`${label} ${index + 1}번 색상을 ${selectedTarget?.label ?? '선택 대상'}에 적용`}
-              data-testid={`palette-swatch-${index}`}
-              title={selectedTarget ? `${selectedTarget.label}에 적용` : '먼저 시리즈 또는 차트 요소를 선택하세요'}
-              disabled={unavailable}
-              onClick={() => onApply(swatch)}
-              className={cn('size-6 rounded border transition-transform disabled:cursor-not-allowed', active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105')}
-              style={{ backgroundColor: swatch }}
-            />
-          );
-        })}
-      </div>
-      {sequential && (
+      {!continuous && (
+        <div className={cn('flex flex-wrap gap-1.5', unavailable && 'opacity-50')}>
+          {displayPalette.map((color, index) => {
+            const swatch = normalizeHex(color);
+            const active = normalizedSelected === swatch;
+            return (
+              <button
+                key={`${swatch}-${index}`}
+                type="button"
+                aria-label={`${label} ${index + 1}번 색상을 ${selectedTarget?.label ?? '선택 대상'}에 적용`}
+                data-testid={`palette-swatch-${index}`}
+                title={selectedTarget ? `${selectedTarget.label}에 적용` : '먼저 시리즈 또는 차트 요소를 선택하세요'}
+                disabled={unavailable}
+                onClick={() => onApply(swatch)}
+                className={cn('size-6 rounded border transition-transform disabled:cursor-not-allowed', active ? 'scale-105 border-text-primary ring-2 ring-primary/30' : 'border-border hover:scale-105')}
+                style={{ backgroundColor: swatch }}
+              />
+            );
+          })}
+        </div>
+      )}
+      {continuous && (
         <div className={cn('flex min-h-7 items-center justify-between gap-2', disabled && 'opacity-50')}>
           <span className="text-[13px] text-text-secondary">색상 방향 반전</span>
           <div className={disabled ? 'pointer-events-none' : undefined}>
@@ -1074,7 +899,30 @@ function colorSelectionId(selection: ColorSelection): string {
 
 function normalizePalette(value: unknown): string[] {
   const source = Array.isArray(value) && value.length > 0 ? value : DEFAULT_PALETTE;
-  return source.map((color) => normalizeHex(String(color))).slice(0, 12);
+  return source.map((color) => normalizeHex(String(color))).slice(0, 64);
+}
+
+function nearestGradientPosition(color: string, preset: unknown, reversed: boolean): number {
+  let bestPosition = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index <= 100; index += 1) {
+    const displayPosition = index / 100;
+    const candidate = d3ThemeColorAt(preset, reversed ? 1 - displayPosition : displayPosition);
+    const distance = hexColorDistance(color, candidate);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestPosition = displayPosition;
+    }
+  }
+  return bestPosition;
+}
+
+function hexColorDistance(left: string, right: string): number {
+  return [1, 3, 5].reduce((distance, offset) => {
+    const leftChannel = Number.parseInt(left.slice(offset, offset + 2), 16);
+    const rightChannel = Number.parseInt(right.slice(offset, offset + 2), 16);
+    return distance + (leftChannel - rightChannel) ** 2;
+  }, 0);
 }
 
 function normalizeHex(value: string): string {

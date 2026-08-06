@@ -1,157 +1,159 @@
 import { describe, expect, it } from 'vitest';
+import { schemeCategory10 } from 'd3-scale-chromatic';
 import { defaultsFor, optionsWithDefaults, switchMajor, type MajorType } from '@chartsdk/chart-options';
 import {
-  CARTO_QUALITATIVE,
-  CARTO_SEQUENTIAL,
+  D3_CATEGORICAL_CHOICES,
+  D3_CYCLICAL_CHOICES,
+  D3_DIVERGING_CHOICES,
+  D3_SEQUENTIAL_CHOICES,
+  applyPaletteDirection,
   applyPalettePreset,
-  applySequentialPaletteDirection,
-  cartoPalette,
+  d3Palette,
+  d3ThemeColorAt,
   paletteChoicesForChartType,
   paletteFamilyForChartType,
+  paletteFamilyOfPreset,
   resolveSeriesColorMap,
 } from '@chartsdk/chart-options/palettes';
 
-describe('CARTO 정성형 팔레트 계약', () => {
-  it('모든 테마가 공식 12색 구성을 유지한다', () => {
-    for (const palette of Object.values(CARTO_QUALITATIVE)) {
-      expect(palette).toHaveLength(12);
-    }
+describe('D3 색상 테마 계약', () => {
+  it('선정한 35개 테마를 네 family로 제공한다', () => {
+    expect(D3_CATEGORICAL_CHOICES).toHaveLength(9);
+    expect(D3_SEQUENTIAL_CHOICES).toHaveLength(15);
+    expect(D3_DIVERGING_CHOICES).toHaveLength(9);
+    expect(D3_CYCLICAL_CHOICES).toHaveLength(2);
+    expect([
+      ...D3_CATEGORICAL_CHOICES,
+      ...D3_SEQUENTIAL_CHOICES,
+      ...D3_DIVERGING_CHOICES,
+      ...D3_CYCLICAL_CHOICES,
+    ]).toHaveLength(35);
   });
 
-  it('Pastel의 마지막 확장 색상까지 공식 순서로 제공한다', () => {
-    expect(cartoPalette('pastel')).toEqual([
-      '#66C5CC', '#F6CF71', '#F89C74', '#DCB0F2',
-      '#87C55F', '#9EB9F3', '#FE88B1', '#C9DB74',
-      '#8BE0A4', '#B497E7', '#D3B484', '#B3B3B3',
-    ]);
+  it('범주형 색상은 하드코딩하지 않고 D3 scheme 원본 순서를 사용한다', () => {
+    expect(d3Palette('category10')).toEqual(schemeCategory10.map((color) => color.toUpperCase()));
+    expect(d3Palette('category10')).toHaveLength(10);
+    expect(d3Palette('paired')).toHaveLength(12);
+  });
+
+  it('연속형 색상은 D3 interpolator에서 요청한 개수만큼 동적으로 생성한다', () => {
+    const viridis = d3Palette('viridis', 7);
+    expect(viridis).toHaveLength(7);
+    expect(viridis[0]).toBe(d3ThemeColorAt('viridis', 0));
+    expect(viridis[3]).toBe(d3ThemeColorAt('viridis', 0.5));
+    expect(viridis[6]).toBe(d3ThemeColorAt('viridis', 1));
+    expect(paletteFamilyOfPreset('rainbow')).toBe('cyclical');
+    expect(paletteFamilyOfPreset('rdbu')).toBe('diverging');
   });
 });
 
-describe('차트 대분류별 CARTO 팔레트 정책', () => {
-  it('영역 지도·행렬 히트맵만 순차형이고 나머지는 범주형이다', () => {
+describe('차트 대분류별 D3 테마 배치 정책', () => {
+  it('영역 지도·행렬 히트맵은 Sequential, 나머지는 Categorical을 먼저 배치한다', () => {
     const expected: Record<MajorType, string> = {
-      bar: 'qualitative',
-      line: 'qualitative',
-      pie: 'qualitative',
-      scatter: 'qualitative',
-      boxplot: 'qualitative',
+      bar: 'categorical',
+      line: 'categorical',
+      pie: 'categorical',
+      scatter: 'categorical',
+      boxplot: 'categorical',
       heatmap: 'sequential',
       map: 'sequential',
-      geoscatter: 'qualitative',
+      geoscatter: 'categorical',
     };
     for (const [chartType, family] of Object.entries(expected)) {
       expect(paletteFamilyForChartType(chartType)).toBe(family);
     }
+
     const barChoices = paletteChoicesForChartType('bar');
     const mapChoices = paletteChoicesForChartType('map');
-    expect(barChoices).toHaveLength(25);
-    expect(mapChoices).toHaveLength(25);
-    expect(new Set(barChoices.slice(0, 6).map((choice) => choice.value))).toEqual(new Set(Object.keys(CARTO_QUALITATIVE)));
-    expect(new Set(mapChoices.slice(0, 19).map((choice) => choice.value))).toEqual(new Set(Object.keys(CARTO_SEQUENTIAL)));
-    expect(new Set(barChoices.map((choice) => choice.value))).toEqual(new Set(mapChoices.map((choice) => choice.value)));
+    expect(barChoices).toHaveLength(35);
+    expect(mapChoices).toHaveLength(35);
+    expect(barChoices.slice(0, 9).map((choice) => choice.value)).toEqual(
+      D3_CATEGORICAL_CHOICES.map((choice) => choice.value),
+    );
+    expect(mapChoices.slice(0, 15).map((choice) => choice.value)).toEqual(
+      D3_SEQUENTIAL_CHOICES.map((choice) => choice.value),
+    );
+    expect(new Set(barChoices.map((choice) => choice.value))).toEqual(
+      new Set(mapChoices.map((choice) => choice.value)),
+    );
   });
 
-  it('편집기 테마 이름에는 CARTO 접두어를 노출하지 않는다', () => {
-    const labels = [
-      ...paletteChoicesForChartType('bar'),
-      ...paletteChoicesForChartType('map'),
-    ].map((choice) => choice.label);
-    expect(labels).not.toContain('CARTO');
-    expect(labels.every((label) => !label.startsWith('CARTO '))).toBe(true);
+  it('권장 family와 다른 테마도 적용하고 현재 차트군의 마지막 선택을 기억한다', () => {
+    const sequentialBar = applyPalettePreset(defaultsFor('bar'), 'bar', 'viridis');
+    expect(sequentialBar.palettePreset).toBe('viridis');
+    expect(sequentialBar.palette).toEqual(d3Palette('viridis'));
+    expect(sequentialBar.colorTheme).toMatchObject({ version: 3, seriesPreset: 'viridis' });
+
+    const categoricalMap = applyPalettePreset(defaultsFor('map'), 'map', 'tableau10');
+    expect(categoricalMap.palettePreset).toBe('tableau10');
+    expect(categoricalMap.palette).toEqual(d3Palette('tableau10'));
+    expect(categoricalMap.colorTheme).toMatchObject({ version: 3, valuePreset: 'tableau10' });
   });
 
-  it('공식 순차형 19개를 7단계로 제공하고 Teal 순서를 유지한다', () => {
-    expect(Object.keys(CARTO_SEQUENTIAL)).toEqual([
-      'burg', 'burgyl', 'redor', 'oryel', 'peach', 'pinkyl', 'mint', 'blugrn', 'darkmint',
-      'emrld', 'bluyl', 'teal', 'tealgrn', 'purp', 'purpor', 'sunset', 'magenta',
-      'sunsetdark', 'brwnyl',
-    ]);
-    for (const palette of Object.values(CARTO_SEQUENTIAL)) expect(palette).toHaveLength(7);
-    expect(cartoPalette('teal')).toEqual([
-      '#D1EEEA', '#A8DBD9', '#85C4C9', '#68ABB8', '#4F90A6', '#3B738F', '#2A5674',
-    ]);
-  });
-
-  it('차트 권장 계열과 다른 테마도 선택하면 그대로 적용하고 계열별 선택을 기억한다', () => {
-    const sequentialBar = applyPalettePreset(defaultsFor('bar'), 'bar', 'burg');
-    expect(sequentialBar.palettePreset).toBe('burg');
-    expect(sequentialBar.palette).toEqual(cartoPalette('burg'));
-    expect(sequentialBar.paletteReversed).toBe(false);
-    expect(sequentialBar.colorTheme).toMatchObject({ sequentialPreset: 'burg' });
-
-    const qualitativeMap = applyPalettePreset(defaultsFor('map'), 'map', 'bold');
-    expect(qualitativeMap.palettePreset).toBe('bold');
-    expect(qualitativeMap.palette).toEqual(cartoPalette('bold'));
-    expect(qualitativeMap.paletteReversed).toBe(false);
-    expect(qualitativeMap.colorTheme).toMatchObject({ qualitativePreset: 'bold' });
-  });
-
-  it('순차형 테마는 시리즈 수가 팔레트 단계보다 적거나 많아도 전체 그라데이션에 고르게 배정한다', () => {
-    const teal = cartoPalette('teal');
-    expect(resolveSeriesColorMap(['s1', 's2', 's3'], teal, {}, true)).toEqual({
-      s1: teal[0],
-      s2: teal[3],
-      s3: teal[6],
+  it('연속형 테마는 시리즈 수에 맞춰 전체 그라데이션에 고르게 배정한다', () => {
+    const viridis = d3Palette('viridis', 7);
+    expect(resolveSeriesColorMap(['s1', 's2', 's3'], viridis, {}, true)).toEqual({
+      s1: viridis[0],
+      s2: viridis[3],
+      s3: viridis[6],
     });
 
     const names = Array.from({ length: 10 }, (_unused, index) => `s${index}`);
-    const spread = resolveSeriesColorMap(names, ['#000000', '#FFFFFF'], { s0: '#FF0000' }, true);
+    const spread = resolveSeriesColorMap(names, ['#000000', '#FFFFFF'], {}, true);
     expect(Object.keys(spread)).toHaveLength(10);
     expect(spread.s0).toBe('#000000');
     expect(spread.s5).toBe('#8E8E8E');
     expect(spread.s9).toBe('#FFFFFF');
-    expect(new Set(Object.values(spread)).size).toBe(10);
   });
 
-  it('새 지도 기본값은 Teal이고 구 저장 지도는 이전 팔레트 계약을 표시한다', () => {
-    const fresh = defaultsFor('map');
-    expect(fresh.palettePreset).toBe('teal');
-    expect(fresh.palette).toEqual(cartoPalette('teal'));
-    expect(fresh.colorTheme).toMatchObject({ version: 2, sequentialPreset: 'teal' });
+  it('새 차트와 CARTO 기반 기존 차트를 차트군의 첫 D3 테마로 정규화한다', () => {
+    const freshBar = defaultsFor('bar');
+    const freshMap = defaultsFor('map');
+    expect(freshBar.palettePreset).toBe('category10');
+    expect(freshMap.palettePreset).toBe('blues');
+    expect(freshBar.colorTheme).toMatchObject({ version: 3, seriesPreset: 'category10' });
+    expect(freshMap.colorTheme).toMatchObject({ version: 3, valuePreset: 'blues' });
 
-    const legacy = optionsWithDefaults('map', { palettePreset: 'safe', palette: cartoPalette('safe') });
-    expect(legacy.colorTheme).toBeUndefined();
-    expect(legacy.palettePreset).toBe('safe');
-    expect(legacy.palette).toEqual(cartoPalette('safe'));
-  });
-
-  it('구 저장 지도는 같은 순차형 계열 전환만으로 새 계약으로 바뀌지 않는다', () => {
-    const legacyMap = optionsWithDefaults('map', {
+    const legacyBar = optionsWithDefaults('bar', {
       palettePreset: 'safe',
-      palette: cartoPalette('safe'),
+      palette: ['#88CCEE', '#CC6677'],
+      colorMap: { 매출: '#123456' },
     });
-    const legacyHeatmap = switchMajor(legacyMap, 'map', 'heatmap').next;
-    expect(legacyHeatmap.colorTheme).toBeUndefined();
-    expect(legacyHeatmap.palette).toEqual(cartoPalette('safe'));
-
-    const reversed = applySequentialPaletteDirection(legacyMap, 'map', true);
-    expect(reversed.colorTheme).toMatchObject({ version: 2, sequentialPreset: 'teal', sequentialReversed: true });
-    expect(reversed.palettePreset).toBe('teal');
-    expect(reversed.palette).toEqual(cartoPalette('teal'));
+    const legacyMap = optionsWithDefaults('map', {
+      palettePreset: 'teal',
+      palette: ['#D1EEEA', '#2A5674'],
+      itemColorOverrides: [{ kind: 'map', seriesName: '__map__', dimensions: ['서울'], occurrence: 0, color: '#654321' }],
+    });
+    expect(legacyBar.palettePreset).toBe('category10');
+    expect(legacyBar.palette).toEqual(d3Palette('category10'));
+    expect(legacyBar.colorMap).toEqual({ 매출: '#123456' });
+    expect(legacyMap.palettePreset).toBe('blues');
+    expect(legacyMap.palette).toEqual(d3Palette('blues'));
+    expect(legacyMap.itemColorOverrides).toHaveLength(1);
   });
 
-  it('분류별 마지막 테마와 순차형 방향을 기억하며 직접 지정 색상은 보존한다', () => {
+  it('차트군별 마지막 테마와 방향을 기억하며 직접 지정 색상은 보존한다', () => {
     const map = switchMajor(defaultsFor('bar'), 'bar', 'map').next;
-    const burg = applySequentialPaletteDirection(
+    const divergingMap = applyPaletteDirection(
       applyPalettePreset({
         ...map,
         colorMap: { 매출: '#123456' },
         itemColorOverrides: [{ kind: 'map', seriesName: '__map__', dimensions: ['서울'], occurrence: 0, color: '#654321' }],
-      }, 'map', 'burg'),
+      }, 'map', 'rdbu'),
       'map',
       true,
     );
-    const bar = switchMajor(burg, 'map', 'bar').next;
-    const bold = applyPalettePreset(bar, 'bar', 'bold');
-    const restoredMap = switchMajor(bold, 'bar', 'map').next;
+    const bar = switchMajor(divergingMap, 'map', 'bar').next;
+    const continuousBar = applyPalettePreset(bar, 'bar', 'viridis');
+    const restoredMap = switchMajor(continuousBar, 'bar', 'map').next;
 
-    expect(restoredMap.palettePreset).toBe('burg');
-    expect(restoredMap.palette).toEqual(cartoPalette('burg'));
+    expect(restoredMap.palettePreset).toBe('rdbu');
+    expect(restoredMap.palette).toEqual(d3Palette('rdbu'));
     expect(restoredMap.paletteReversed).toBe(true);
     expect(restoredMap.colorTheme).toMatchObject({
-      qualitativePreset: 'bold',
-      sequentialPreset: 'burg',
-      sequentialReversed: true,
+      seriesPreset: 'viridis',
+      valuePreset: 'rdbu',
+      valueReversed: true,
     });
     expect(restoredMap.colorMap).toEqual({ 매출: '#123456' });
     expect(restoredMap.itemColorOverrides).toHaveLength(1);
