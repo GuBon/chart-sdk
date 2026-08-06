@@ -1,7 +1,6 @@
 package com.chartsdk.web;
 
 import com.chartsdk.datasource.DatasourceInput;
-import com.chartsdk.datasource.DatasourcePoolRegistry;
 import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.datasource.DatasourceTestInput;
 import com.chartsdk.datasource.DatasourceView;
@@ -21,11 +20,9 @@ import java.util.Map;
 @RequestMapping("/api/v1/datasources")
 public class DatasourceController {
     private final DatasourceService datasources;
-    private final DatasourcePoolRegistry pools;
 
-    public DatasourceController(DatasourceService datasources, DatasourcePoolRegistry pools) {
+    public DatasourceController(DatasourceService datasources) {
         this.datasources = datasources;
-        this.pools = pools;
     }
 
     @GetMapping
@@ -40,15 +37,12 @@ public class DatasourceController {
 
     @PutMapping("/{id}")
     public DatasourceView update(@PathVariable long id, @RequestBody DatasourceInput input) {
-        DatasourceView updated = datasources.update(id, input);
-        pools.evict(id);
-        return updated;
+        return datasources.update(id, input);
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable long id) {
         datasources.delete(id);
-        pools.evict(id);
     }
 
     @PostMapping("/test")
