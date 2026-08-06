@@ -48,9 +48,19 @@ const gradleArgs = [
   '--no-daemon',
 ];
 if (process.platform === 'win32') {
+  const javaHome = process.env.JAVA_HOME;
+  const java = javaHome ? join(javaHome, 'bin', 'java.exe') : 'java.exe';
   run(
-    process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
-    ['/d', '/s', '/c', `call gradlew.bat ${gradleArgs.join(' ')}`],
+    java,
+    [
+      '-Xmx64m',
+      '-Xms64m',
+      '-Dorg.gradle.appname=gradlew',
+      '-classpath',
+      join(root, 'server', 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+      'org.gradle.wrapper.GradleWrapperMain',
+      ...gradleArgs,
+    ],
     join(root, 'server'),
   );
 } else {
