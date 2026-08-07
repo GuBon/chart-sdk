@@ -21,6 +21,7 @@ import java.util.Set;
  */
 @Service
 public class ChartComputeService {
+    private static final int MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS = 3_600;
     private final JdbcTemplate jdbc;
     private final FederatedQueryRunner runner;
     private final ChartCacheService cache;
@@ -78,25 +79,25 @@ public class ChartComputeService {
      * 실제 트랜잭션·advisory lock 소유는 별도 프록시 빈 ChartRefreshCoordinator가 담당한다.
      */
     public CachedChartRows refreshSingleFlight(long chartId, int definitionVersion,
-                                               boolean allowStale, SamplingMetadata sampling) {
+                                               boolean reuseCompatibleSnapshot, SamplingMetadata sampling) {
         return refreshes.refreshSingleFlight(
-                chartId, definitionVersion, allowStale, sampling,
+                chartId, definitionVersion, reuseCompatibleSnapshot, sampling,
                 () -> recompute(chartId, definitionVersion));
     }
 
     /**
      * 서빙 경로의 단일 진입점. 다중 소스 차트는 캐시 스냅샷만 반환하고,
-     * 단일 소스는 캐시 미스/만료 시 단일 비행으로 재계산한다.
+     * 단일 소스는 수동 스냅샷을 반환하고, live는 매 요청 단일 비행으로 재계산한다.
      */
-    public CachedChartRows serve(long chartId, String refreshMode, int cacheTtlSeconds,
-                                 int definitionVersion, SamplingMetadata sampling) {
+    public CachedChartRows serve(long chartId, String refreshMode, int definitionVersion,
+                                 SamplingMetadata sampling) {
         if (isMultiSource(chartId)) {
             return cache.findCompatible(chartId, definitionVersion, sampling)
                     .orElseThrow(() -> new ApiException(
                             HttpStatus.SERVICE_UNAVAILABLE, "SNAPSHOT_NOT_READY",
                             "Multi-source chart snapshot is not ready; refresh the chart to compute it."));
         }
-        return cache.findUsable(chartId, refreshMode, cacheTtlSeconds, definitionVersion, sampling)
+        return cache.findUsable(chartId, refreshMode, definitionVersion, sampling)
                 .orElseGet(() -> refreshSingleFlight(
                         chartId, definitionVersion, !"live".equals(refreshMode), sampling));
     }
@@ -138,7 +139,8 @@ public class ChartComputeService {
     /** 기존 builder 차트도 현재 생성 규칙(sampling v9)을 즉시 사용한다. */
     private Computed execute(Chart chart, Set<Long> datasourceIds) {
         if ("builder".equals(chart.defineMode()) && !chart.builderConfig().isEmpty()) {
-            int sampleCacheMaxAge = "live".equals(chart.refreshMode()) ? 0 : chart.cacheTtlSeconds();
+            int sampleCacheMaxAge = "live".equals(chart.refreshMode())
+                    ? 0 : MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS;
             FederatedQueryRunner.BuiltResult built =
                     runner.runBuilder(chart.datasourceId(), chart.builderConfig(), chart.chartType(), false,
                             sampleCacheMaxAge);
@@ -150,7 +152,7 @@ public class ChartComputeService {
     Chart definition(long chartId) {
         return jdbc.query("""
                 SELECT datasource_id, define_mode, sql_query, builder_config::text, chart_type, version,
-                       refresh_mode, cache_ttl_seconds
+                       refresh_mode
                   FROM mc_chart
                  WHERE id=?
                 """, rs -> {
@@ -164,8 +166,7 @@ public class ChartComputeService {
                     rs.getString("chart_type"),
                     rs.getInt("version"),
                     SamplingMetadata.fromBuilderConfig(builderConfig),
-                    rs.getString("refresh_mode"),
-                    rs.getInt("cache_ttl_seconds")
+                    rs.getString("refresh_mode")
             );
         }, chartId);
     }
@@ -194,10 +195,10 @@ public class ChartComputeService {
 
     record Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,
                  String chartType, int version, SamplingMetadata sampling,
-                 String refreshMode, int cacheTtlSeconds) {
+                 String refreshMode) {
         Chart(long datasourceId, String defineMode, String sqlQuery, Map<String, Object> builderConfig,
               String chartType, int version, SamplingMetadata sampling) {
-            this(datasourceId, defineMode, sqlQuery, builderConfig, chartType, version, sampling, "ttl", 3600);
+            this(datasourceId, defineMode, sqlQuery, builderConfig, chartType, version, sampling, "manual");
         }
     }
 

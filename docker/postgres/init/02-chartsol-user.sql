@@ -182,8 +182,7 @@ INSERT INTO mc_chart(
     builder_config,
     chart_type,
     options,
-    refresh_mode,
-    cache_ttl_seconds
+    refresh_mode
 )
 SELECT
     'Local Sales',
@@ -194,8 +193,7 @@ SELECT
     '{"table":"sales","joins":[],"xAxis":"category","xAxisBucket":null,"yAxis":[{"column":"amount","agg":"sum"}],"where":[],"orderBy":null,"sample":null}'::jsonb,
     'bar',
     '{"legend":{"show":true}}'::jsonb,
-    'ttl',
-    3600
+    'manual'
 FROM mc_datasource d
 WHERE d.name = 'docker-user-db'
   AND NOT EXISTS (SELECT 1 FROM mc_chart WHERE name = 'Local Sales');

@@ -50,16 +50,16 @@ class ChartRefreshCoordinatorTest {
     }
 
     @Test
-    void leaseLoserMayReturnOnlyVersionCompatibleStaleData() {
+    void leaseLoserMayReuseOnlyAVersionCompatibleSnapshot() {
         when(leases.tryAcquire(9L, 3, 5)).thenReturn(Optional.empty());
-        CachedChartRows stale = snapshot(Instant.parse("2026-07-20T00:00:00Z"));
-        when(cache.findCompatible(9L, 3, null)).thenReturn(Optional.of(stale));
+        CachedChartRows compatible = snapshot(Instant.parse("2026-07-20T00:00:00Z"));
+        when(cache.findCompatible(9L, 3, null)).thenReturn(Optional.of(compatible));
 
         CachedChartRows result = coordinator.refreshSingleFlight(9L, 3, true, null, () -> {
-            throw new AssertionError("stale loser must not recompute");
+            throw new AssertionError("compatible snapshot loser must not recompute");
         });
 
-        assertThat(result).isSameAs(stale);
+        assertThat(result).isSameAs(compatible);
     }
 
     @Test

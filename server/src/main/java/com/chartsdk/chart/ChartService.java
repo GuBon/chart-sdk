@@ -153,8 +153,8 @@ public class ChartService {
     private Map<String, Object> previewPayload(long id, boolean includeRows) {
         ChartDefinition chart = charts.previewDefinition(ownerId(), id);
         // 서빙 경로 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
-        CachedChartRows rows = compute.serve(chart.id(), chart.refreshMode(), chart.cacheTtlSeconds(),
-                chart.version(), chart.sampling());
+        CachedChartRows rows = compute.serve(
+                chart.id(), chart.refreshMode(), chart.version(), chart.sampling());
         return previewPayload(chart, rows, includeRows);
     }
 
@@ -203,13 +203,11 @@ public class ChartService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "builderConfig is required.");
             }
             // 라우터로 검증·계산(단일→PG / 다중→DuckDB 페더레이션). 실행 실패 시 저장도 실패(§7.7).
-            int sampleCacheMaxAge = "live".equals(input.refreshMode())
-                    ? 0
-                    : input.cacheTtlSeconds() == null ? 3600 : input.cacheTtlSeconds();
             Set<Long> configured = BuilderSqlBuilder.referencedDatasources(input.builderConfig());
             Set<Long> expectedDatasources = configured.isEmpty()
                     ? Set.of(input.datasourceId()) : configured;
             Map<Long, Long> sourceVersions = runtimeVersions.snapshot(expectedDatasources);
+            int sampleCacheMaxAge = "live".equals(input.refreshMode()) ? 0 : 3_600;
             FederatedQueryRunner.BuiltResult built = runner.runBuilder(
                     input.datasourceId(), input.builderConfig(), chartType, false, sampleCacheMaxAge);
             String storedSql = SqlLiterals.inline(built.sql().text(), built.sql().params());
@@ -267,7 +265,6 @@ public class ChartService {
                 chartType,
                 input.options(),
                 refreshMode,
-                input.cacheTtlSeconds(),
                 input.version()
         );
     }

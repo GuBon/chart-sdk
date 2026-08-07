@@ -60,13 +60,13 @@ class ChartServiceTest {
         when(currentUser.currentUserId()).thenReturn(OptionalLong.empty());
         ChartDefinition definition = new ChartDefinition(
                 12L, 1L, "SELECT category, SUM(amount) AS total FROM sales GROUP BY category", "bar",
-                Map.of(), Map.of(), "manual", 3600, 3, null
+                Map.of(), Map.of(), "manual", 3, null
         );
         CachedChartRows cached = new CachedChartRows(
                 queryRows, Instant.parse("2026-07-20T00:00:00Z"));
         when(charts.previewDefinition(null, 12L)).thenReturn(definition);
         when(charts.previewDefinitions(null, List.of(12L))).thenReturn(Map.of(12L, definition));
-        when(compute.serve(12L, "manual", 3600, 3, null))
+        when(compute.serve(12L, "manual", 3, null))
                 .thenReturn(cached);
         when(compute.cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null))))
                 .thenReturn(Map.of(12L, cached));
@@ -96,7 +96,7 @@ class ChartServiceTest {
         assertThat(preview).doesNotContainKeys("columns", "rows", "elapsedMs");
         verify(charts).previewDefinitions(null, List.of(12L));
         verify(compute).cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null)));
-        verify(compute, never()).serve(anyLong(), any(), anyInt(), anyInt(), any());
+        verify(compute, never()).serve(anyLong(), any(), anyInt(), any());
         verify(compute, never()).recompute(anyLong());
     }
 
@@ -105,7 +105,7 @@ class ChartServiceTest {
     void batchPreviewReportsMissingSnapshotsWithoutStartingRecomputation() {
         ChartDefinition second = new ChartDefinition(
                 13L, 1L, "SELECT category FROM sales", "bar",
-                Map.of(), Map.of(), "ttl", 60, 2, null);
+                Map.of(), Map.of(), "manual", 2, null);
         ChartDefinition first = charts.previewDefinition(null, 12L);
         Map<Long, ChartDefinition> definitions = Map.of(12L, first, 13L, second);
         Map<Long, ChartCacheExpectation> expectations = Map.of(
@@ -120,7 +120,7 @@ class ChartServiceTest {
         Map<String, Object> errors = (Map<String, Object>) response.get("errors");
 
         assertThat(errors).containsEntry("13", "Preview snapshot is not ready.");
-        verify(compute, never()).serve(anyLong(), any(), anyInt(), anyInt(), any());
+        verify(compute, never()).serve(anyLong(), any(), anyInt(), any());
         verify(compute, never()).recompute(anyLong());
     }
 
@@ -156,7 +156,7 @@ class ChartServiceTest {
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(21L);
         when(charts.get(null, 21L)).thenReturn(Map.of("id", 21L));
         ChartSaveRequest request = new ChartSaveRequest(
-                "매출", null, 1L, "builder", null, builder, "bar", Map.of(), "ttl", 3600, null);
+                "매출", null, 1L, "builder", null, builder, "bar", Map.of(), "manual", null);
 
         assertThat(service.create(request)).containsEntry("id", 21L);
 
@@ -180,7 +180,7 @@ class ChartServiceTest {
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(23L);
         when(charts.get(null, 23L)).thenReturn(Map.of("id", 23L));
         ChartSaveRequest request = new ChartSaveRequest(
-                "live", null, 1L, "builder", null, builder, "bar", Map.of(), "live", 3600, null);
+                "live", null, 1L, "builder", null, builder, "bar", Map.of(), "live", null);
 
         service.create(request);
 
@@ -194,7 +194,7 @@ class ChartServiceTest {
         when(charts.create(eq(null), any(ChartSaveRequest.class))).thenReturn(22L);
         when(charts.get(null, 22L)).thenReturn(Map.of("id", 22L));
         ChartSaveRequest request = new ChartSaveRequest(
-                "원시 SQL", null, 1L, "raw", sql, Map.of("table", "sales"), "bar", Map.of(), "manual", 3600, null);
+                "원시 SQL", null, 1L, "raw", sql, Map.of("table", "sales"), "bar", Map.of(), "manual", null);
 
         service.create(request);
 
@@ -206,7 +206,7 @@ class ChartServiceTest {
     @Test
     void saveRejectsChartWithoutPrimaryTableContext() {
         ChartSaveRequest request = new ChartSaveRequest(
-                "원시 SQL", null, 1L, "raw", "SELECT 1", null, "bar", Map.of(), "manual", 3600, null);
+                "원시 SQL", null, 1L, "raw", "SELECT 1", null, "bar", Map.of(), "manual", null);
 
         assertThatThrownBy(() -> service.create(request))
                 .isInstanceOf(ApiException.class)
@@ -229,7 +229,7 @@ class ChartServiceTest {
         when(charts.update(eq(null), eq(12L), any(ChartSaveRequest.class))).thenReturn(4);
         when(charts.get(null, 12L)).thenReturn(Map.of("id", 12L, "version", 4));
         ChartSaveRequest request = new ChartSaveRequest(
-                "수정", null, 1L, "builder", null, builder, "bar", Map.of(), "ttl", 3600, 3);
+                "수정", null, 1L, "builder", null, builder, "bar", Map.of(), "manual", 3);
 
         service.update(12L, request);
 

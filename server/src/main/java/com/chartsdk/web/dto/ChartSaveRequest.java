@@ -2,6 +2,7 @@ package com.chartsdk.web.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 
 import java.util.Map;
 
@@ -14,8 +15,7 @@ public record ChartSaveRequest(
         Map<String, Object> builderConfig,
         String chartType,
         Map<String, Object> options,
-        String refreshMode,
-        Integer cacheTtlSeconds,
+        @Pattern(regexp = "live|manual") String refreshMode,
         Integer version
 ) {
 }

@@ -57,21 +57,21 @@ public class ChartRefreshCoordinator {
         this.metrics = metrics;
     }
 
-    public CachedChartRows refreshSingleFlight(long chartId, int definitionVersion, boolean allowStale,
+    public CachedChartRows refreshSingleFlight(long chartId, int definitionVersion, boolean reuseCompatibleSnapshot,
                                                SamplingMetadata sampling,
                                                Supplier<CachedChartRows> refresh) {
         RefreshKey key = new RefreshKey(chartId, definitionVersion);
         CompletableFuture<CachedChartRows> mine = new CompletableFuture<>();
         CompletableFuture<CachedChartRows> existing = inFlight.putIfAbsent(key, mine);
         if (existing != null) {
-            Optional<CachedChartRows> stale = cache.findCompatible(chartId, definitionVersion, sampling);
-            if (allowStale && stale.isPresent()) return stale.get();
+            Optional<CachedChartRows> snapshot = cache.findCompatible(chartId, definitionVersion, sampling);
+            if (reuseCompatibleSnapshot && snapshot.isPresent()) return snapshot.get();
             return awaitLocal(existing);
         }
 
         try {
             CachedChartRows rows = refreshWithLease(
-                    chartId, definitionVersion, allowStale, sampling, refresh);
+                    chartId, definitionVersion, reuseCompatibleSnapshot, sampling, refresh);
             mine.complete(rows);
             return rows;
         } catch (RuntimeException failure) {
@@ -82,15 +82,15 @@ public class ChartRefreshCoordinator {
         }
     }
 
-    private CachedChartRows refreshWithLease(long chartId, int definitionVersion, boolean allowStale,
+    private CachedChartRows refreshWithLease(long chartId, int definitionVersion, boolean reuseCompatibleSnapshot,
                                              SamplingMetadata sampling,
                                              Supplier<CachedChartRows> refresh) {
         Optional<String> token = leases.tryAcquire(chartId, definitionVersion, leaseSeconds);
         if (token.isPresent()) return runLeaseOwner(chartId, token.get(), refresh);
 
-        Optional<CachedChartRows> stale = cache.findCompatible(chartId, definitionVersion, sampling);
-        if (allowStale && stale.isPresent()) return stale.get();
-        CachedChartRows previous = stale.orElse(null);
+        Optional<CachedChartRows> snapshot = cache.findCompatible(chartId, definitionVersion, sampling);
+        if (reuseCompatibleSnapshot && snapshot.isPresent()) return snapshot.get();
+        CachedChartRows previous = snapshot.orElse(null);
 
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitSeconds);
         while (System.nanoTime() < deadline) {

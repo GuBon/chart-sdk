@@ -32,42 +32,16 @@ public class ChartCacheService {
         this.runtimeVersions = runtimeVersions;
     }
 
-    public Optional<CachedChartRows> findUsable(long chartId, String refreshMode, int ttlSeconds,
-                                                 int currentVersion, SamplingMetadata sampling) {
+    /** live는 항상 재계산해야 하므로 스냅샷을 보지 않는다. 그 외에는 {@link #findCompatible}과 같다. */
+    public Optional<CachedChartRows> findUsable(long chartId, String refreshMode,
+                                                int currentVersion, SamplingMetadata sampling) {
         if ("live".equals(refreshMode)) return Optional.empty();
-        return runtimeVersions.withBlockedCacheDatasources(blocked ->
-                chartReferencesBlockedDatasource(chartId, blocked)
-                        ? Optional.empty()
-                        : findUsableStored(chartId, refreshMode, ttlSeconds, currentVersion, sampling));
-    }
-
-    private Optional<CachedChartRows> findUsableStored(long chartId, String refreshMode, int ttlSeconds,
-                                                        int currentVersion, SamplingMetadata sampling) {
-        return jdbc.query("""
-                SELECT result::text, computed_at, definition_version
-                  FROM mc_chart_cache
-                 WHERE chart_id=?
-                """, rs -> {
-            if (!rs.next()) return Optional.empty();
-            Optional<CachedChartRows> compatible = decodeCompatible(
-                    rs.getString("result"),
-                    rs.getTimestamp("computed_at"),
-                    rs.getObject("definition_version", Integer.class),
-                    currentVersion,
-                    sampling
-            );
-            if (compatible.isEmpty()) return Optional.empty();
-            Instant computedAt = compatible.get().computedAt();
-            if ("ttl".equals(refreshMode) && computedAt.plusSeconds(ttlSeconds).isBefore(Instant.now())) {
-                return Optional.empty();
-            }
-            return compatible;
-        }, chartId);
+        return findCompatible(chartId, currentVersion, sampling);
     }
 
     /**
-     * TTL만 무시하고 현재 정의·표본 계약과 호환되는 마지막 성공 결과를 반환한다.
-     * 데이터 시각이 오래된 stale은 허용하지만 정의가 오래된 결과는 절대 반환하지 않는다.
+     * 현재 정의·표본 계약과 호환되는 마지막 성공 스냅샷을 반환한다.
+     * 계산 시각과 무관하게 수동 스냅샷은 유지하지만 정의가 오래된 결과는 절대 반환하지 않는다.
      */
     public Optional<CachedChartRows> findCompatible(long chartId, int currentVersion, SamplingMetadata sampling) {
         return runtimeVersions.withBlockedCacheDatasources(blocked ->

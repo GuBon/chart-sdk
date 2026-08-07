@@ -81,8 +81,8 @@ class MultiSourceChartLifecycleIT {
                 "sample", Map.of("mode", "auto", "size", 10_000, "seed", 77));
         Long chartId = meta.queryForObject("""
                 INSERT INTO mc_chart(name, datasource_id, define_mode, sql_query, builder_config, chart_type,
-                                     refresh_mode, cache_ttl_seconds)
-                VALUES (?, ?, 'builder', 'SELECT 1', ?::jsonb, 'scatter', 'manual', 3600)
+                                     refresh_mode)
+                VALUES (?, ?, 'builder', 'SELECT 1', ?::jsonb, 'scatter', 'manual')
                 RETURNING id
                 """, Long.class, "v7-compatible-snapshot", primaryId, mapper.writeValueAsString(builderConfig));
         assertThat(chartId).isNotNull();
@@ -131,7 +131,7 @@ class MultiSourceChartLifecycleIT {
                 "yAxis", List.of(Map.of("column", "exercise_logs.calories_burned", "agg", "sum", "alias", "cal")),
                 "sample", Map.of("mode", "manual", "size", 1_000, "seed", 77));
         ChartSaveRequest req = new ChartSaveRequest(
-                "멀티소스 IT", null, tId, "builder", null, cfg, "bar", Map.of(), null, null, null);
+                "멀티소스 IT", null, tId, "builder", null, cfg, "bar", Map.of(), null, null);
 
         Map<String, Object> created = chartService.create(req);
         long chartId = ((Number) created.get("id")).longValue();
@@ -197,7 +197,7 @@ class MultiSourceChartLifecycleIT {
                 "column", "exercise_logs.calories_burned", "agg", "avg", "alias", "average_cal")));
         chartService.create(new ChartSaveRequest(
                 "same L1, different aggregate", null, tId, "builder", null,
-                averageCfg, "bar", Map.of(), null, null, null));
+                averageCfg, "bar", Map.of(), null, null));
         assertThat(meta.queryForObject(
                 "SELECT count(*) FROM mc_sample_row_cache", Integer.class)).isEqualTo(1);
         // 2) refresh_mode — 다중 소스는 스냅샷 → manual 로 고정(§7).
@@ -311,14 +311,14 @@ class MultiSourceChartLifecycleIT {
                 "it-update-" + System.nanoTime(), "localhost", 5433, "chartsdk_it", "postgres", "0218");
         ChartSaveRequest create = new ChartSaveRequest(
                 "update-test", null, datasourceId, "sql", "SELECT 1 AS value",
-                Map.of("table", "chart_value"), "bar", Map.of(), "manual", 3600, null);
+                Map.of("table", "chart_value"), "bar", Map.of(), "manual", null);
         Map<String, Object> created = chartService.create(create);
         long chartId = ((Number) created.get("id")).longValue();
         assertThat(created.get("version")).isEqualTo(0);
 
         ChartSaveRequest update = new ChartSaveRequest(
                 "update-test", null, datasourceId, "sql", "SELECT 2 AS value",
-                Map.of("table", "chart_value"), "bar", Map.of(), "manual", 3600, 0);
+                Map.of("table", "chart_value"), "bar", Map.of(), "manual", 0);
         Map<String, Object> updated = chartService.update(chartId, update);
 
         assertThat(updated.get("version")).isEqualTo(1);

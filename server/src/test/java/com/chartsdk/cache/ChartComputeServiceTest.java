@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 /**
  * 서빙 경로 불변식(설계 §8) — {@link ChartComputeService#serve} 단일 진입점(임베드·목록/미리보기 공유).
  * 다중 소스 차트는 페더레이션(재계산)을 절대 호출하지 않고 캐시 스냅샷만 반환하고,
- * 단일 소스는 캐시 미스/만료 시 단일 비행 재계산을 유지한다.
+ * 단일 소스는 수동 스냅샷 누락 또는 live 조회 시 단일 비행 재계산을 유지한다.
  */
 class ChartComputeServiceTest {
 
@@ -74,7 +74,7 @@ class ChartComputeServiceTest {
         doReturn(true).when(compute).isMultiSource(1L);
         when(cache.findCompatible(1L, 0, null)).thenReturn(Optional.of(snapshot()));
 
-        assertThat(compute.serve(1L, "manual", 3600, 0, null)).isNotNull();
+        assertThat(compute.serve(1L, "manual", 0, null)).isNotNull();
 
         // 핵심 불변식: 다중 소스 서빙은 재계산(페더레이션)을 절대 호출하지 않는다.
         verify(compute, never()).refreshSingleFlight(
@@ -86,7 +86,7 @@ class ChartComputeServiceTest {
         doReturn(true).when(compute).isMultiSource(1L);
         when(cache.findCompatible(1L, 0, null)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> compute.serve(1L, "manual", 3600, 0, null))
+        assertThatThrownBy(() -> compute.serve(1L, "manual", 0, null))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("snapshot is not ready");
 
@@ -97,10 +97,10 @@ class ChartComputeServiceTest {
     @Test
     void singleSourceRecomputesOnCacheMiss() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "ttl", 3600, 0, null)).thenReturn(Optional.empty());
+        when(cache.findUsable(1L, "manual", 0, null)).thenReturn(Optional.empty());
         doReturn(snapshot()).when(compute).refreshSingleFlight(1L, 0, true, null);
 
-        assertThat(compute.serve(1L, "ttl", 3600, 0, null)).isNotNull();
+        assertThat(compute.serve(1L, "manual", 0, null)).isNotNull();
 
         verify(compute, times(1)).refreshSingleFlight(1L, 0, true, null);
     }
@@ -108,10 +108,10 @@ class ChartComputeServiceTest {
     @Test
     void legacyThousandRowTruncatedCacheIsRecomputed() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "manual", 3600, 0, null)).thenReturn(Optional.empty());
+        when(cache.findUsable(1L, "manual", 0, null)).thenReturn(Optional.empty());
         doReturn(snapshot()).when(compute).refreshSingleFlight(1L, 0, true, null);
 
-        assertThat(compute.serve(1L, "manual", 3600, 0, null).rows().truncated()).isFalse();
+        assertThat(compute.serve(1L, "manual", 0, null).rows().truncated()).isFalse();
 
         verify(compute).refreshSingleFlight(1L, 0, true, null);
     }
@@ -119,13 +119,13 @@ class ChartComputeServiceTest {
     @Test
     void legacySampleCacheWithoutMetadataIsRecomputed() {
         doReturn(false).when(compute).isMultiSource(1L);
-        when(cache.findUsable(1L, "manual", 3600, 0, SamplingMetadata.system(10))).thenReturn(Optional.empty());
+        when(cache.findUsable(1L, "manual", 0, SamplingMetadata.system(10))).thenReturn(Optional.empty());
         SamplingMetadata executed = SamplingMetadata.system(10).withExecution(
                 25, List.of(new SamplingMetadata.GroupSampleCount("A", 25)), List.of(), List.of());
         CachedChartRows refreshed = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
         doReturn(refreshed).when(compute).refreshSingleFlight(1L, 0, true, SamplingMetadata.system(10));
 
-        CachedChartRows rows = compute.serve(1L, "manual", 3600, 0, SamplingMetadata.system(10));
+        CachedChartRows rows = compute.serve(1L, "manual", 0, SamplingMetadata.system(10));
 
         assertThat(rows.sampling()).isEqualTo(executed);
         verify(compute).refreshSingleFlight(1L, 0, true, SamplingMetadata.system(10));
@@ -138,9 +138,9 @@ class ChartComputeServiceTest {
         SamplingMetadata executed = definition.withExecution(
                 42, List.of(new SamplingMetadata.GroupSampleCount("A", 42)), definition.estimates(), List.of());
         CachedChartRows cached = new CachedChartRows(snapshot().rows(), Instant.now(), executed);
-        when(cache.findUsable(1L, "manual", 3600, 0, definition)).thenReturn(Optional.of(cached));
+        when(cache.findUsable(1L, "manual", 0, definition)).thenReturn(Optional.of(cached));
 
-        CachedChartRows served = compute.serve(1L, "manual", 3600, 0, definition);
+        CachedChartRows served = compute.serve(1L, "manual", 0, definition);
 
         assertThat(served).isSameAs(cached);
         assertThat(served.sampling().sampledRowCount()).isEqualTo(42L);

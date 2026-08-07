@@ -41,6 +41,6 @@ class ChartDefinitionWriterTest {
 
     private static ChartSaveRequest request(Integer version) {
         return new ChartSaveRequest("chart", null, 2L, "builder", "SELECT 1",
-                Map.of("table", "sales"), "bar", Map.of(), "ttl", 3600, version);
+                Map.of("table", "sales"), "bar", Map.of(), "manual", version);
     }
 }

@@ -133,8 +133,8 @@ public class ChartRepository {
 
     public Long create(Long ownerId, ChartSaveRequest input) {
         return jdbc.queryForObject("""
-                INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config, chart_type, options, refresh_mode, cache_ttl_seconds)
-                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?, ?)
+                INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config, chart_type, options, refresh_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?)
                 RETURNING id
                 """, Long.class,
                 ownerId,
@@ -146,8 +146,7 @@ public class ChartRepository {
                 json(input.builderConfig()),
                 valueOrDefault(input.chartType(), "bar"),
                 json(valueOrDefault(input.options(), Map.of())),
-                valueOrDefault(input.refreshMode(), "ttl"),
-                valueOrDefault(input.cacheTtlSeconds(), 3600));
+                valueOrDefault(input.refreshMode(), "manual"));
     }
 
     /** 수정 성공 시 증가된 정의 버전, 소유자/낙관적 락 불일치 시 null을 반환한다. */
@@ -156,7 +155,7 @@ public class ChartRepository {
         StringBuilder sql = new StringBuilder("""
                 UPDATE mc_chart
                    SET name=?, description=?, datasource_id=?, define_mode=?, sql_query=?, builder_config=?::jsonb,
-                       chart_type=?, options=?::jsonb, refresh_mode=?, cache_ttl_seconds=?, version=version+1
+                       chart_type=?, options=?::jsonb, refresh_mode=?, version=version+1
                  WHERE id=?
                 """);
         java.util.ArrayList<Object> args = new java.util.ArrayList<>();
@@ -168,8 +167,7 @@ public class ChartRepository {
         args.add(json(input.builderConfig()));
         args.add(valueOrDefault(input.chartType(), "bar"));
         args.add(json(valueOrDefault(input.options(), Map.of())));
-        args.add(valueOrDefault(input.refreshMode(), "ttl"));
-        args.add(valueOrDefault(input.cacheTtlSeconds(), 3600));
+        args.add(valueOrDefault(input.refreshMode(), "manual"));
         args.add(id);
         appendOwnerScope(sql, args, ownerId);
         if (expectedVersion != null) {
@@ -201,9 +199,9 @@ public class ChartRepository {
         try {
             StringBuilder sql = new StringBuilder("""
                     INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config,
-                                         chart_type, options, refresh_mode, cache_ttl_seconds)
-                    SELECT owner_id, name || ' (?щ낯)', description, datasource_id, define_mode, sql_query, builder_config,
-                           chart_type, options, refresh_mode, cache_ttl_seconds
+                                         chart_type, options, refresh_mode)
+                    SELECT owner_id, name || ' (복사)', description, datasource_id, define_mode, sql_query, builder_config,
+                           chart_type, options, refresh_mode
                       FROM mc_chart WHERE id=?
                     """);
             java.util.ArrayList<Object> params = new java.util.ArrayList<>();
@@ -254,7 +252,7 @@ public class ChartRepository {
     public ChartDefinition previewDefinition(Long ownerId, long id) {
         StringBuilder sql = new StringBuilder("""
                 SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
-                       refresh_mode, cache_ttl_seconds, version
+                       refresh_mode, version
                   FROM mc_chart
                  WHERE id=?
                 """);
@@ -273,7 +271,7 @@ public class ChartRepository {
         String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
         StringBuilder sql = new StringBuilder("""
                 SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
-                       refresh_mode, cache_ttl_seconds, version
+                       refresh_mode, version
                   FROM mc_chart
                  WHERE id IN (
                 """);
@@ -300,7 +298,6 @@ public class ChartRepository {
                 readJson(rs.getString("options")),
                 builderConfig,
                 rs.getString("refresh_mode"),
-                rs.getInt("cache_ttl_seconds"),
                 rs.getInt("version"),
                 SamplingMetadata.fromBuilderConfig(builderConfig)
         );
@@ -370,7 +367,6 @@ public class ChartRepository {
         m.put("builderConfig", readJson(rs.getString("builder_config")));
         m.put("options", readJson(rs.getString("options")));
         m.put("refreshMode", rs.getString("refresh_mode"));
-        m.put("cacheTtlSeconds", rs.getInt("cache_ttl_seconds"));
         m.put("version", rs.getInt("version"));
         m.put("createdAt", timestampString(rs.getTimestamp("created_at")));
         return m;
