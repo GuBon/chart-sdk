@@ -46,4 +46,6 @@ com.chartsdk
 - 운영 Flyway 분리: `SPRING_FLYWAY_URL` · `SPRING_FLYWAY_USER` · `SPRING_FLYWAY_PASSWORD`. 미설정 시 runtime datasource 재사용.
 - 레거시 datasource 비밀번호: `DATASOURCE_PASSWORD_MIGRATE_LEGACY_ON_STARTUP=true`로 1회 변환 후
   미암호화 0건을 확인하고 `DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT=false`로 전환한다.
+- 쿼리 timeout 기본값: preview/catalog/explain 10초, chart/sample/federation 30초.
+  운영 조정은 `QUERY_TIMEOUT_{PREVIEW|CATALOG|EXPLAIN|CHART|SAMPLE|FEDERATION}_SECONDS`를 사용한다.
 - 부팅 검증: `GET /health` → `{ "status": "ok", "chartTypes": [...] }`. `chartTypes`는 `defaults.json`의 현재 8개 대분류를 반환하므로 배열 순서에 의존하지 않는다.

@@ -51,6 +51,13 @@ chartsdk:
     max-concurrent-per-datasource: ${QUERY_MAX_CONCURRENT_PER_DATASOURCE:4}
     max-concurrent-federated: ${QUERY_MAX_CONCURRENT_FEDERATED:2}
     admission-wait-millis: ${QUERY_ADMISSION_WAIT_MILLIS:2000}
+    timeout:
+      preview-seconds: ${QUERY_TIMEOUT_PREVIEW_SECONDS:10}
+      catalog-seconds: ${QUERY_TIMEOUT_CATALOG_SECONDS:10}
+      explain-seconds: ${QUERY_TIMEOUT_EXPLAIN_SECONDS:10}
+      chart-seconds: ${QUERY_TIMEOUT_CHART_SECONDS:30}
+      sample-seconds: ${QUERY_TIMEOUT_SAMPLE_SECONDS:30}
+      federation-seconds: ${QUERY_TIMEOUT_FEDERATION_SECONDS:30}
   refresh:
     lease-seconds: ${CHART_REFRESH_LEASE_SECONDS:45}
     wait-seconds: ${CHART_REFRESH_WAIT_SECONDS:35}

@@ -1,6 +1,7 @@
 package com.chartsdk.query;
 
 import com.chartsdk.web.ApiException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -11,6 +12,7 @@ import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLTimeoutException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -26,8 +28,17 @@ import java.util.Map;
 /** Executes final chart aggregation over the bounded rows held by the L1 sample cache. */
 @Component
 public class CachedSampleExecutor {
-    private static final int QUERY_TIMEOUT_SECONDS = 10;
     private static final int INSERT_BATCH_SIZE = 1_000;
+    private final QueryTimeoutPolicy timeouts;
+
+    public CachedSampleExecutor() {
+        this(QueryTimeoutPolicy.defaults());
+    }
+
+    @Autowired
+    public CachedSampleExecutor(QueryTimeoutPolicy timeouts) {
+        this.timeouts = timeouts;
+    }
 
     public QueryRows execute(QueryRows sample, BuilderSqlBuilder.Sql aggregate) {
         if (sample == null || aggregate == null) {
@@ -38,7 +49,7 @@ public class CachedSampleExecutor {
             insertRows(connection, sample, types);
             long start = System.nanoTime();
             try (PreparedStatement statement = connection.prepareStatement(aggregate.text())) {
-                statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.SAMPLE));
                 statement.setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
                 for (int i = 0; i < aggregate.params().size(); i++) {
                     statement.setObject(i + 1, aggregate.params().get(i));
@@ -47,6 +58,8 @@ public class CachedSampleExecutor {
                     return QueryRows.from(resultSet, start, QueryExecutor.UNBOUNDED_CHART_ROWS);
                 }
             }
+        } catch (SQLTimeoutException e) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Sample query timed out.");
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -55,7 +68,7 @@ public class CachedSampleExecutor {
         }
     }
 
-    private static List<String> createSampleTable(Connection connection, QueryRows sample) throws Exception {
+    private List<String> createSampleTable(Connection connection, QueryRows sample) throws Exception {
         List<String> types = new ArrayList<>();
         List<String> definitions = new ArrayList<>();
         for (int i = 0; i < sample.columns().size(); i++) {
@@ -67,18 +80,20 @@ public class CachedSampleExecutor {
             definitions.add(SqlIdentifier.quote(name) + " " + type);
         }
         try (Statement statement = connection.createStatement()) {
+            statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.SAMPLE));
             statement.execute("CREATE TEMP TABLE " + SqlIdentifier.quote(CachedSampleSqlBuilder.SAMPLE_TABLE)
                     + " (" + String.join(", ", definitions) + ")");
         }
         return types;
     }
 
-    private static void insertRows(Connection connection, QueryRows sample, List<String> types) throws Exception {
+    private void insertRows(Connection connection, QueryRows sample, List<String> types) throws Exception {
         if (sample.rows().isEmpty()) return;
         String placeholders = String.join(", ", java.util.Collections.nCopies(types.size(), "?"));
         String sql = "INSERT INTO " + SqlIdentifier.quote(CachedSampleSqlBuilder.SAMPLE_TABLE)
                 + " VALUES (" + placeholders + ")";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.SAMPLE));
             int pending = 0;
             for (List<Object> row : sample.rows()) {
                 if (row.size() != types.size()) {

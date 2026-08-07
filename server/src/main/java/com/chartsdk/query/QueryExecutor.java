@@ -26,7 +26,6 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class QueryExecutor {
-    private static final int QUERY_TIMEOUT_SECONDS = 10;
     private static final ObjectMapper JSON = new ObjectMapper();
     public static final int MAX_ROWS = 1000;
     /** JDBC maxRows value for complete chart datasets. Zero means no product-level row cap. */
@@ -37,6 +36,7 @@ public class QueryExecutor {
 
     private final DatasourcePoolRegistry pools;
     private final AdmissionController coordinator;
+    private final QueryTimeoutPolicy timeouts;
     private final ConcurrentHashMap<Long, CachedCatalog> catalogs = new ConcurrentHashMap<>();
 
     private record CachedCatalog(SchemaCatalog value, long expiresAtNanos) {
@@ -46,13 +46,19 @@ public class QueryExecutor {
     }
 
     public QueryExecutor(DatasourcePoolRegistry pools) {
-        this(pools, null);
+        this(pools, null, QueryTimeoutPolicy.defaults());
+    }
+
+    public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator) {
+        this(pools, coordinator, QueryTimeoutPolicy.defaults());
     }
 
     @Autowired
-    public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator) {
+    public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator,
+                         QueryTimeoutPolicy timeouts) {
         this.pools = pools;
         this.coordinator = coordinator;
+        this.timeouts = timeouts;
     }
 
     public QueryRows execute(long datasourceId, String sql) {
@@ -126,11 +132,12 @@ public class QueryExecutor {
                           Long bernoulliSeed, AdmissionController.Kind kind,
                           ResultCollector<T> collector) {
         if (coordinator == null) {
-            return executeAdmitted(datasourceId, sql, params, maxRows, bernoulliSeed, collector);
+            return executeAdmitted(datasourceId, sql, params, maxRows, bernoulliSeed, kind, collector);
         }
         try {
             return coordinator.execute(datasourceId, kind,
-                    () -> executeAdmitted(datasourceId, sql, params, maxRows, bernoulliSeed, collector));
+                    () -> executeAdmitted(
+                            datasourceId, sql, params, maxRows, bernoulliSeed, kind, collector));
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -139,14 +146,15 @@ public class QueryExecutor {
     }
 
     private <T> T executeAdmitted(long datasourceId, String sql, List<Object> params,
-                                  int maxRows, Long bernoulliSeed, ResultCollector<T> collector) {
+                                  int maxRows, Long bernoulliSeed, AdmissionController.Kind kind,
+                                  ResultCollector<T> collector) {
         long start = System.nanoTime();
         try (Connection conn = pools.connection(datasourceId)) {
             boolean cursorFetch = maxRows == UNBOUNDED_CHART_ROWS && conn.getAutoCommit();
             if (cursorFetch) conn.setAutoCommit(false);
             if (bernoulliSeed != null) setRandomSeed(conn, bernoulliSeed);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                ps.setQueryTimeout(timeouts.seconds(kind));
                 ps.setMaxRows(maxRows);
                 if (cursorFetch) ps.setFetchSize(1_000);
                 for (int i = 0; i < params.size(); i++) {
@@ -213,6 +221,8 @@ public class QueryExecutor {
         try {
             return coordinator.execute(datasourceId, AdmissionController.Kind.CATALOG,
                     () -> loadCatalogAdmitted(datasourceId));
+        } catch (SQLTimeoutException e) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Catalog query timed out.");
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -227,8 +237,8 @@ public class QueryExecutor {
         Map<SchemaCatalog.Key, Boolean> populated = new LinkedHashMap<>();
         Map<SchemaCatalog.Key, String> relationDisplayNames = new LinkedHashMap<>();
         Map<SchemaCatalog.Key, Map<String, String>> columnDisplayNames = new LinkedHashMap<>();
-        try (Connection conn = pools.connection(datasourceId);
-             PreparedStatement ps = conn.prepareStatement("""
+        try (Connection conn = pools.connection(datasourceId)) {
+            try (PreparedStatement ps = conn.prepareStatement("""
                      SELECT n.nspname AS table_schema,
                             c.relname AS table_name,
                             c.relkind::text AS relkind,
@@ -252,24 +262,32 @@ public class QueryExecutor {
                         AND (has_table_privilege(c.oid, 'SELECT')
                              OR has_column_privilege(c.oid, a.attname, 'SELECT'))
                       ORDER BY n.nspname, c.relname, a.attnum
-                     """);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                SchemaCatalog.Key key = new SchemaCatalog.Key(rs.getString("table_schema"), rs.getString("table_name"));
-                tables.computeIfAbsent(key, k -> new LinkedHashMap<>())
-                        .put(rs.getString("column_name"), rs.getString("data_type"));
-                relationTypes.putIfAbsent(key, RelationType.fromRelkind(rs.getString("relkind")));
-                Object estimatedRows = rs.getObject("estimated_rows");
-                if (estimatedRows instanceof Number n) estimates.putIfAbsent(key, n.longValue());
-                populated.putIfAbsent(key, rs.getBoolean("relispopulated"));
-                String relationDisplayName = rs.getString("relation_display_name");
-                if (relationDisplayName != null) relationDisplayNames.putIfAbsent(key, relationDisplayName);
-                String columnDisplayName = rs.getString("column_display_name");
-                if (columnDisplayName != null) {
-                    columnDisplayNames.computeIfAbsent(key, ignored -> new LinkedHashMap<>())
-                            .put(rs.getString("column_name"), columnDisplayName);
+                     """)) {
+                ps.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.CATALOG));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        SchemaCatalog.Key key = new SchemaCatalog.Key(
+                                rs.getString("table_schema"), rs.getString("table_name"));
+                        tables.computeIfAbsent(key, k -> new LinkedHashMap<>())
+                                .put(rs.getString("column_name"), rs.getString("data_type"));
+                        relationTypes.putIfAbsent(key, RelationType.fromRelkind(rs.getString("relkind")));
+                        Object estimatedRows = rs.getObject("estimated_rows");
+                        if (estimatedRows instanceof Number n) estimates.putIfAbsent(key, n.longValue());
+                        populated.putIfAbsent(key, rs.getBoolean("relispopulated"));
+                        String relationDisplayName = rs.getString("relation_display_name");
+                        if (relationDisplayName != null) {
+                            relationDisplayNames.putIfAbsent(key, relationDisplayName);
+                        }
+                        String columnDisplayName = rs.getString("column_display_name");
+                        if (columnDisplayName != null) {
+                            columnDisplayNames.computeIfAbsent(key, ignored -> new LinkedHashMap<>())
+                                    .put(rs.getString("column_name"), columnDisplayName);
+                        }
+                    }
                 }
             }
+        } catch (SQLTimeoutException e) {
+            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Catalog query timed out.");
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {

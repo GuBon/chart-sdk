@@ -7,6 +7,7 @@ import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.AdmissionController;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.query.QueryTimeoutPolicy;
 import com.chartsdk.query.PointCollectionResult;
 import com.chartsdk.query.ReservoirPointCollector;
 import com.chartsdk.query.RefRenderer;
@@ -49,13 +50,13 @@ public class DuckDbFederation {
     private static final Logger log = LoggerFactory.getLogger(DuckDbFederation.class);
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    static final int QUERY_TIMEOUT_SECONDS = 30; // 저빈도 계산 — 단일 소스(10s)보다 여유
     static final String MEMORY_LIMIT = "1GB";
     static final int THREADS = 4;
 
     private final DatasourceService datasources;
     private final QueryExecutor queryExecutor;
     private final AdmissionController coordinator;
+    private final QueryTimeoutPolicy timeouts;
 
     /** SQL produced after the population estimate and executed on that same attached connection. */
     public record PlannedBernoulli(QueryRows rows, BuilderSqlBuilder.Sql sql, long populationEstimate) {
@@ -66,15 +67,21 @@ public class DuckDbFederation {
     }
 
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor) {
-        this(datasources, queryExecutor, null);
+        this(datasources, queryExecutor, null, QueryTimeoutPolicy.defaults());
+    }
+
+    public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor,
+                            AdmissionController coordinator) {
+        this(datasources, queryExecutor, coordinator, QueryTimeoutPolicy.defaults());
     }
 
     @Autowired
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor,
-                            AdmissionController coordinator) {
+                            AdmissionController coordinator, QueryTimeoutPolicy timeouts) {
         this.datasources = datasources;
         this.queryExecutor = queryExecutor;
         this.coordinator = coordinator;
+        this.timeouts = timeouts;
     }
 
     /** 참조 소스들의 카탈로그를 union 해 식별자 화이트리스트를 만든다(각 소스 mc_·시스템 스키마 제외 유지). */
@@ -118,7 +125,7 @@ public class DuckDbFederation {
             configure(connection, datasourceIds, true);
             long start = System.nanoTime();
             try (PreparedStatement statement = connection.prepareStatement(federatedSql)) {
-                statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.FEDERATION));
                 statement.setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
                 for (int index = 0; index < params.size(); index++) {
                     statement.setObject(index + 1, params.get(index));
@@ -304,7 +311,7 @@ public class DuckDbFederation {
 
     private long explainEstimatedRows(Connection connection, String sql, List<Object> params) throws Exception {
         try (PreparedStatement ps = connection.prepareStatement("EXPLAIN (FORMAT JSON) " + sql)) {
-            ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            ps.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.FEDERATION));
             for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return 0;
@@ -319,7 +326,7 @@ public class DuckDbFederation {
             throws SQLException {
         long start = System.nanoTime();
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+            ps.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.FEDERATION));
             ps.setMaxRows(maxRows);
             for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
             try (ResultSet rs = ps.executeQuery()) {
@@ -331,6 +338,7 @@ public class DuckDbFederation {
     private void configure(Connection connection, Collection<Long> datasourceIds,
                            boolean deterministicBernoulli) throws SQLException {
         try (Statement statement = connection.createStatement()) {
+            statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.FEDERATION));
             statement.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
             statement.execute("LOAD postgres");
             for (Long id : datasourceIds) {

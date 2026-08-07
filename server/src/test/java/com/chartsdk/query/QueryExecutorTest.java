@@ -33,6 +33,7 @@ class QueryExecutorTest {
         assertThat(executor.catalog(7L)).isSameAs(executor.catalog(7L));
 
         verify(pools, times(1)).connection(7L);
+        verify(statement).setQueryTimeout(10);
     }
 
     @Test
@@ -54,6 +55,7 @@ class QueryExecutorTest {
 
         verify(connection).setAutoCommit(false);
         verify(statement).setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
+        verify(statement).setQueryTimeout(30);
         verify(statement).setFetchSize(1_000);
         verify(connection).rollback();
         assertThat(rows.rowCount()).isZero();
@@ -85,5 +87,6 @@ class QueryExecutorTest {
         order.verify(connection).prepareStatement("SELECT * FROM sampled WHERE random() < ?");
         verify(queryStatement).setObject(1, 0.02);
         verify(queryStatement).setMaxRows(QueryExecutor.UNBOUNDED_CHART_ROWS);
+        verify(queryStatement).setQueryTimeout(30);
     }
 }
