@@ -1420,10 +1420,11 @@ export function assembleOption(
       const seriesName = geoRowSeriesName(row, seriesIndex, legacyValueName || '값');
       const dimensions: ItemColorDimension[] = [name];
       const occurrence = nextMockOccurrence(occurrences, 'map', seriesName, dimensions);
+      const itemColor = itemColorFor(itemColors, 'map', seriesName, dimensions, occurrence);
       const item = withMockItemColor(
         { name, value },
-        itemColorFor(itemColors, 'map', seriesName, dimensions, occurrence),
-        'areaColor',
+        itemColor ?? o.colorMap?.[seriesName],
+        'color',
       );
       const current = bySeries.get(seriesName) ?? [];
       current.push(item);
@@ -1530,7 +1531,11 @@ export function assembleOption(
         ...(chartType === 'geoscatter' && sizeIndex >= 0 ? { symbolSize: sizeOf(row[sizeIndex]) } : {}),
       };
       const current = bySeries.get(seriesName) ?? [];
-      current.push(withMockItemColor(point, itemColor, 'color'));
+      current.push(withMockItemColor(
+        point,
+        itemColor ?? (chartType === 'map' ? o.colorMap?.[seriesName] : undefined),
+        'color',
+      ));
       bySeries.set(seriesName, current);
     });
     if (bySeries.size === 0) bySeries.set(chartType === 'map' ? '밀도' : '포인트', []);

@@ -951,7 +951,33 @@ describe('개별 데이터 색상 계약', () => {
     const data = (option.series as Array<Record<string, any>>)[0].data;
 
     expect(data[0].itemStyle).toBeUndefined();
-    expect(data[1].itemStyle.areaColor).toBe('#FFB000');
+    expect(data[1].itemStyle.color).toBe('#FFB000');
+    expect(option.visualMap).toBeDefined();
+  });
+
+  it('지도 시리즈 색상을 모든 지역에 적용하고 개별 지역 색상을 우선한다', () => {
+    const mapResult: QueryResult = {
+      columns: [{ name: 'region', type: 'text' }, { name: 'value', type: 'number' }],
+      rows: [['서울특별시', 10], ['부산광역시', 20]],
+      rowCount: 2,
+      truncated: false,
+      elapsedMs: 0,
+    };
+    const option = assembleOption(mapResult, 'map', {
+      colorTheme: { ...DEFAULT_COLOR_THEME },
+      colorMap: { value: '#0055AA' },
+      itemColorOverrides: [{
+        kind: 'map',
+        seriesName: '__map__',
+        dimensions: ['부산광역시'],
+        occurrence: 0,
+        color: '#FFB000',
+      }],
+    });
+    const data = (option.series as Array<Record<string, any>>)[0].data;
+
+    expect(data[0].itemStyle.color).toBe('#0055AA');
+    expect(data[1].itemStyle.color).toBe('#FFB000');
     expect(option.visualMap).toBeDefined();
   });
 

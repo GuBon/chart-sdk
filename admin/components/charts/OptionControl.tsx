@@ -578,6 +578,10 @@ function PaletteControl({
             title={selectedTarget ? `${selectedTarget.label}에 적용할 색상 선택` : '먼저 시리즈 또는 차트 요소를 선택하세요'}
             disabled={unavailable}
             onClick={(event) => {
+              if (event.detail === 0) {
+                applyGradientPosition(gradientPosition ?? 0.5);
+                return;
+              }
               const bounds = event.currentTarget.getBoundingClientRect();
               applyGradientPosition((event.clientX - bounds.left) / Math.max(1, bounds.width));
             }}
@@ -588,17 +592,9 @@ function PaletteControl({
               const step = event.shiftKey ? 0.05 : 0.01;
               applyGradientPosition(current + (event.key === 'ArrowRight' ? step : -step));
             }}
-            className="relative h-5 flex-1 rounded-sm border border-black/10 outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
+            className="h-5 flex-1 cursor-crosshair rounded-sm border border-black/10 outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
             style={{ background: `linear-gradient(to right, ${displayPalette.join(', ')})` }}
-          >
-            {gradientPosition != null && (
-              <span
-                data-testid="palette-gradient-handle"
-                className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
-                style={{ left: `${gradientPosition * 100}%`, backgroundColor: normalizedSelected ?? undefined }}
-              />
-            )}
-          </button>
+          />
           <span className="shrink-0">{gradientLabels[1]}</span>
         </div>
       )}
@@ -757,7 +753,7 @@ function ColorTargetControl({
         </>
       )}
 
-      <div className={cn('flex flex-col gap-2', seriesTargets.length > 0 && 'mt-1 border-t border-border pt-2')}>
+      <div className={cn('flex flex-col gap-2', seriesTargets.length > 0 && 'mt-1')}>
         <div className="flex min-h-7 flex-wrap items-center gap-1.5">
           <span className="mr-auto text-[13px] text-text-secondary">차트 요소 색상</span>
           <Button

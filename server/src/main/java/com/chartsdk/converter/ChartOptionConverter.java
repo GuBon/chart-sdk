@@ -611,6 +611,7 @@ public class ChartOptionConverter {
         boolean reservedArea = nameIndex >= 0 && valueIndex >= 0;
         boolean spatial = reservedArea && geoJsonIndex >= 0;
         LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
+        Map<String, Object> explicitSeriesColors = map(opt.get("colorMap"));
         ItemColorResolver.Occurrences itemOccurrences = new ItemColorResolver.Occurrences();
         LinkedHashMap<String, Object> featuresByName = new LinkedHashMap<>();
         MessageDigest digest = spatial ? sha256() : null;
@@ -643,8 +644,9 @@ public class ChartOptionConverter {
             List<Object> dimensions = List.of(name);
             int occurrence = itemOccurrences.next("map", seriesName, dimensions);
             Object itemColor = itemColors.color("map", seriesName, dimensions, occurrence);
+            Object renderedColor = itemColor != null ? itemColor : explicitSeriesColors.get(seriesName);
             dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
-                    .add(withItemColor(point, itemColor, "areaColor", false));
+                    .add(withItemColor(point, renderedColor, "color", false));
             if (v < min) min = v;
             if (v > max) max = v;
         }
@@ -811,6 +813,7 @@ public class ChartOptionConverter {
         int valueIndex = columnIndex(columns, GEO_POINT_VALUE);
         int seriesIndex = columnIndex(columns, GEO_SERIES);
         LinkedHashMap<String, List<Object>> dataBySeries = new LinkedHashMap<>();
+        Map<String, Object> explicitSeriesColors = map(opt.get("colorMap"));
         ItemColorResolver.Occurrences occurrences = new ItemColorResolver.Occurrences();
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
@@ -830,8 +833,9 @@ public class ChartOptionConverter {
             List<Object> dimensions = List.of(roundCoordinate(longitude), roundCoordinate(latitude));
             int occurrence = occurrences.next("geoscatter", seriesName, dimensions);
             Object itemColor = itemColors.color("geoscatter", seriesName, dimensions, occurrence);
+            Object renderedColor = itemColor != null ? itemColor : explicitSeriesColors.get(seriesName);
             dataBySeries.computeIfAbsent(seriesName, ignored -> new ArrayList<>())
-                    .add(withItemColor(point, itemColor, "color", false));
+                    .add(withItemColor(point, renderedColor, "color", false));
             min = Math.min(min, intensity);
             max = Math.max(max, intensity);
         }

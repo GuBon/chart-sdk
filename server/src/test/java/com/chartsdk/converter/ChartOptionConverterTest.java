@@ -1288,7 +1288,7 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void mapItemOverrideUsesAreaColorAndKeepsVisualMap() {
+    void mapItemOverrideUsesColorAndKeepsVisualMap() {
         Map<String, Object> option = converter.convert(rows(), "map", Map.of(
                 "itemColorOverrides", List.of(Map.of(
                         "kind", "map",
@@ -1301,7 +1301,26 @@ class ChartOptionConverterTest {
 
         List<?> data = (List<?>) ((Map<?, ?>) ((List<?>) option.get("series")).get(0)).get("data");
         assertThat(((Map<?, ?>) data.get(0)).get("itemStyle")).isNull();
-        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("areaColor")).isEqualTo("#FFB000");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color")).isEqualTo("#FFB000");
+        assertThat(option.get("visualMap")).isNotNull();
+    }
+
+    @Test
+    void mapSeriesColorAppliesToEveryRegionAndItemOverrideWins() {
+        Map<String, Object> option = converter.convert(rows(), "map", Map.of(
+                "colorMap", Map.of("amount", "#0055AA"),
+                "itemColorOverrides", List.of(Map.of(
+                        "kind", "map",
+                        "seriesName", "__map__",
+                        "dimensions", List.of("B"),
+                        "occurrence", 0,
+                        "color", "#FFB000"
+                ))
+        ));
+
+        List<?> data = (List<?>) ((Map<?, ?>) ((List<?>) option.get("series")).get(0)).get("data");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(0)).get("itemStyle")).get("color")).isEqualTo("#0055AA");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) data.get(1)).get("itemStyle")).get("color")).isEqualTo("#FFB000");
         assertThat(option.get("visualMap")).isNotNull();
     }
 

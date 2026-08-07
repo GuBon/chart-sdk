@@ -1628,9 +1628,102 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await page.locator('header').getByRole('button', { name: '초기화', exact: true }).click();
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
-    await expect(theme).toHaveValue('category10');
-    await expect(theme.locator('option')).toHaveCount(35);
-    await expect(theme.locator('option').first()).toHaveText('Category10');
+    await expect(theme).toHaveValue('dark2');
+    await expect(theme.locator('option')).toHaveCount(8);
+    await expect(theme.locator('option').first()).toHaveText('Accent');
+  });
+
+  test('Polygon에서 그라디언트 클릭으로 시리즈와 개별 영역 색상을 구분해 적용한다', async ({ page }) => {
+    await page.goto('/charts/new');
+    await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+    await selectBase(page, 'sales public');
+    await useXAxis(page, 'category');
+    await addValue(page);
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+    await page.getByRole('button', { name: '영역 지도', exact: true }).click();
+    await page.getByRole('combobox', { name: '지도 경계 방식' }).selectOption('spatial');
+    await page.getByRole('button', { name: '실행', exact: true }).click();
+
+    const preview = page.getByTestId('chart-preview');
+    const canvas = preview.locator('canvas');
+    await expect(canvas).toBeVisible();
+    await openOptionTab(page, '스타일');
+    await openOptionSection(page, '색상');
+
+    const seriesChip = page.locator('[data-testid^="series-color-chip-"]').first();
+    await seriesChip.click();
+    const itemColorSection = page.getByText('차트 요소 색상', { exact: true }).locator('..').locator('..');
+    await expect(itemColorSection).not.toHaveClass(/border-t/);
+
+    const gradient = page.getByTestId('palette-gradient');
+    await expect(page.getByTestId('palette-gradient-handle')).toHaveCount(0);
+    const gradientBox = await gradient.boundingBox();
+    expect(gradientBox).not.toBeNull();
+    const seriesResponsePromise = page.waitForResponse((response) => {
+      if (response.request().method() !== 'POST' || new URL(response.url()).pathname !== '/api/v1/charts/preview') return false;
+      const colorMap = response.request().postDataJSON().options?.colorMap ?? {};
+      return Object.keys(colorMap).length === 1;
+    });
+    await gradient.click({ position: { x: gradientBox!.width * 0.75, y: gradientBox!.height / 2 } });
+    const seriesResponse = await seriesResponsePromise;
+    const seriesRequest = seriesResponse.request().postDataJSON();
+    const seriesColor = Object.values(seriesRequest.options.colorMap)[0] as string;
+    expect(seriesColor).toMatch(/^#[0-9A-F]{6}$/);
+
+    const seriesPayload = await seriesResponse.json();
+    const seriesData = seriesPayload.option.series[0].data as Array<Record<string, any>>;
+    expect(seriesData.length).toBeGreaterThan(1);
+    expect(seriesData.every((item) => item.itemStyle?.color === seriesColor)).toBe(true);
+
+    await page.getByTestId('chart-color-pick').click();
+    await expect(preview).toHaveAttribute('data-color-picking', 'true');
+    const rgb = {
+      red: Number.parseInt(seriesColor.slice(1, 3), 16),
+      green: Number.parseInt(seriesColor.slice(3, 5), 16),
+      blue: Number.parseInt(seriesColor.slice(5, 7), 16),
+    };
+    const colorPoint = await canvas.evaluate((element, expected) => {
+      const target = element as HTMLCanvasElement;
+      const context = target.getContext('2d');
+      if (!context) return null;
+      const pixels = context.getImageData(0, 0, target.width, target.height).data;
+      for (let y = 0; y < target.height; y += 2) {
+        for (let x = 0; x < target.width; x += 2) {
+          const offset = (y * target.width + x) * 4;
+          if (Math.abs(pixels[offset] - expected.red) <= 2
+            && Math.abs(pixels[offset + 1] - expected.green) <= 2
+            && Math.abs(pixels[offset + 2] - expected.blue) <= 2
+            && pixels[offset + 3] > 0) {
+            return { x: x / target.width, y: y / target.height };
+          }
+        }
+      }
+      return null;
+    }, rgb);
+    expect(colorPoint).not.toBeNull();
+    const canvasBox = await canvas.boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(
+      canvasBox!.x + canvasBox!.width * colorPoint!.x,
+      canvasBox!.y + canvasBox!.height * colorPoint!.y,
+    );
+    await expect(page.getByTestId('selected-chart-color-item')).toBeVisible();
+
+    const itemResponsePromise = page.waitForResponse((response) => {
+      if (response.request().method() !== 'POST' || new URL(response.url()).pathname !== '/api/v1/charts/preview') return false;
+      return response.request().postDataJSON().options?.itemColorOverrides?.length === 1;
+    });
+    await gradient.click({ position: { x: gradientBox!.width * 0.2, y: gradientBox!.height / 2 } });
+    const itemResponse = await itemResponsePromise;
+    const itemRequest = itemResponse.request().postDataJSON();
+    const itemColor = itemRequest.options.itemColorOverrides[0].color as string;
+    expect(itemRequest.options.itemColorOverrides[0]).toEqual(expect.objectContaining({ kind: 'map', occurrence: 0 }));
+    expect(itemColor).not.toBe(seriesColor);
+
+    const itemPayload = await itemResponse.json();
+    const itemData = itemPayload.option.series[0].data as Array<Record<string, any>>;
+    expect(itemData.filter((item) => item.itemStyle?.color === itemColor)).toHaveLength(1);
+    expect(itemData.filter((item) => item.itemStyle?.color === seriesColor)).toHaveLength(itemData.length - 1);
   });
 
   test('표본 추출 실행 결과에 방식·집계 주의문구가 표시된다', async ({ page }) => {
