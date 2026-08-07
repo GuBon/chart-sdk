@@ -84,7 +84,7 @@ async function useSumValue(page: Page, column = 'amount') {
 
 // S2-a 레이아웃 골격 + S2-b 스키마 탐색기 동작 검증.
 test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
-  test('신규 진입 시 편집 헤더와 노코드 구성 내부의 정의모드 탭이 보인다', async ({ page }) => {
+  test('신규 진입 시 편집 헤더와 차트 구성 내부의 정의모드 탭이 보인다', async ({ page }) => {
     await page.goto('/charts/new');
 
     // Top Bar
@@ -93,11 +93,11 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByRole('button', { name: '임베드 코드' })).toBeDisabled();
     await expect(page.getByPlaceholder('차트 이름')).toBeVisible();
 
-    // 정의 모드 탭은 전역 헤더가 아니라 노코드 구성 패널 안에 위치한다.
+    // 정의 모드 탭은 전역 헤더가 아니라 차트 구성 패널 안에 위치한다.
     const builderWorkspace = page.getByTestId('data-builder-workspace');
     const defineModeTabs = builderWorkspace.getByRole('tablist', { name: '차트 정의 방식' });
     await expect(defineModeTabs).toBeVisible();
-    await expect(defineModeTabs.getByRole('tab', { name: '노코드' })).toHaveAttribute('aria-selected', 'true');
+    await expect(defineModeTabs.getByRole('tab', { name: '차트 구성' })).toHaveAttribute('aria-selected', 'true');
     await expect(defineModeTabs.getByRole('tab', { name: /SQL/ })).toBeDisabled();
 
     // 테이블 목록과 차트 미리보기·옵션 패널의 기본 폭

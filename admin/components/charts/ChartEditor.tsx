@@ -61,6 +61,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ResizeHandle, useResizable } from '@/components/ui/Resizable';
 import { SchemaExplorer } from './SchemaExplorer';
 import { NocodeBuilder } from './NocodeBuilder';
+import { GeneratedSqlDisclosure } from './GeneratedSqlDisclosure';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
 import { ChartPreviewPanel } from './ChartPreviewPanel';
 import { OptionPanel, type OptionDock, type OptionDockPreference } from './OptionPanel';
@@ -1270,11 +1271,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   }}
                   onRun={runBuilder}
                   running={running}
-                  generatedSql={generatedSql}
-                  sqlOpen={sqlOpen}
-                  onToggleSql={() => setSqlOpen((v) => !v)}
                 />
               </div>
+              <GeneratedSqlDisclosure
+                sql={generatedSql}
+                open={sqlOpen}
+                onToggle={() => setSqlOpen((value) => !value)}
+              />
               <ResizeHandle dir="up" onPointerDown={resultsPanel.onPointerDown} />
               <div style={{ height: resultsPanel.size }} className="shrink-0 border-t border-border">
                 <ResultsPanel

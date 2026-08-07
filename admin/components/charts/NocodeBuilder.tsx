@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronRight, ChevronsLeft, Play, X } from 'lucide-react';
+import { ChevronDown, ChevronsLeft, Play, X } from 'lucide-react';
 import type { BuilderConfig, ChartType, Datasource, JoinSpec, SchemaTable, TableRef, WhereCond, YAxisField } from '@/lib/api';
 import {
   BUCKET_CHOICES,
@@ -63,12 +63,9 @@ interface Props {
   onChange: (next: BuilderConfig) => void;
   onRun: () => void;
   running: boolean;
-  generatedSql: string | null;
-  sqlOpen: boolean;
-  onToggleSql: () => void;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, axisColumnSelectionTarget, onRequestTableSelection, onRequestAxisColumnSelection, onCollapse, onChange, onRun, running, generatedSql, sqlOpen, onToggleSql }: Props) {
+export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, axisColumnSelectionTarget, onRequestTableSelection, onRequestAxisColumnSelection, onCollapse, onChange, onRun, running }: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -269,7 +266,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
               aria-selected="true"
               className="flex shrink-0 items-center whitespace-nowrap border-b-2 border-primary px-2 text-sm font-medium text-text-primary"
             >
-              노코드
+              차트 구성
             </button>
             <button
               type="button"
@@ -744,19 +741,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         )}
       </div>
 
-      {/* 생성된 SQL 보기 (기본 접힘) */}
-      <div className="border-t border-border">
-        <button type="button" onClick={onToggleSql} className="flex w-full items-center gap-2 px-4 py-2.5 text-left">
-          {sqlOpen ? <ChevronDown className="size-3.5 text-text-secondary" /> : <ChevronRight className="size-3.5 text-text-secondary" />}
-          <span className="text-[13px] text-text-primary">생성된 SQL 보기</span>
-          <span className="text-xs text-text-tertiary">· 읽기 전용</span>
-        </button>
-        {sqlOpen && (
-          <pre className="mx-4 mb-3 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs text-text-primary">
-            {generatedSql || '실행하면 생성된 SQL이 표시됩니다.'}
-          </pre>
-        )}
-      </div>
     </div>
   );
 }
