@@ -14,7 +14,7 @@ import {
 } from '../mocks/mockTransform';
 import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 import { MAJOR_TYPES, optionsWithDefaults, type MajorType } from '@chartsdk/chart-options';
-import { d3Palette } from '@chartsdk/chart-options/palettes';
+import { DEFAULT_COLOR_THEME, colorBrewerPalette } from '@chartsdk/chart-options/palettes';
 
 type LayoutContractCase = {
   name: string;
@@ -745,7 +745,7 @@ describe('계열 피벗·색상 계약', () => {
     expect(buildGeneratedSql(config, 'bar')).toContain('GROUP BY "region", "year"');
   });
 
-  it('D3 Category10을 기본으로 쓰고 10개 초과 색을 반복하지 않는다', () => {
+  it('ColorBrewer Dark2를 기본으로 쓰고 최대 색상 수를 넘으면 순환한다', () => {
     const many: QueryResult = {
       columns: [{ name: 'region', type: 'text' }, ...Array.from({ length: 14 }, (_, i) => ({ name: `s${i}`, type: 'number' }))],
       rows: [['서울', ...Array.from({ length: 14 }, (_, i) => i)]], rowCount: 1, truncated: false, elapsedMs: 0,
@@ -753,9 +753,9 @@ describe('계열 피벗·색상 계약', () => {
     const option = assembleOption(many, 'bar', {});
     const colors = Object.values(option.__chartsdkAutoColorMap as Record<string, string>);
     expect(colors).toHaveLength(14);
-    expect(new Set(colors).size).toBe(14);
-    expect(colors[0]).toBe('#1F77B4');
-    expect(colors[12]).not.toBe(colors[0]);
+    expect(new Set(colors).size).toBe(8);
+    expect(colors[0]).toBe('#1B9E77');
+    expect(colors[8]).toBe(colors[0]);
   });
 });
 
@@ -791,33 +791,33 @@ describe('표시 메타데이터 계약', () => {
   });
 });
 
-describe('D3 연속형 visualMap 색상 계약', () => {
-  it('일반 차트에서 선택한 순차형 테마를 전체 시리즈 구간에 펼친다', () => {
-    const viridis = d3Palette('viridis');
+describe('ColorBrewer visualMap 색상 계약', () => {
+  it('일반 차트는 정성형 팔레트를 공식 순서대로 시리즈에 배정한다', () => {
+    const dark2 = colorBrewerPalette('dark2');
     const option = assembleOption(result, 'bar', {
-      palettePreset: 'viridis',
-      palette: viridis,
-      colorTheme: { version: 3, seriesPreset: 'viridis', valuePreset: 'blues', seriesReversed: false, valueReversed: false },
-      autoColorMap: { s1: '#010203', s2: '#040506' },
+      palettePreset: 'dark2',
+      palette: dark2,
+      colorTheme: { version: 4, qualitativePreset: 'dark2', sequentialPreset: 'blues', divergingPreset: 'rdbu', valueFamily: 'sequential', valueReversed: false },
+      autoColorMap: {},
     });
     const series = option.series as Array<Record<string, any>>;
 
-    expect(series.map((item) => item.color)).toEqual([viridis[0], viridis.at(-1)]);
-    expect(option.__chartsdkAutoColorMap).toMatchObject({ s1: viridis[0], s2: viridis.at(-1) });
+    expect(series.map((item) => item.color)).toEqual([dark2[0], dark2[1]]);
+    expect(option.__chartsdkAutoColorMap).toMatchObject({ s1: dark2[0], s2: dark2[1] });
   });
 
   it.each(['map', 'heatmap'] as const)('%s 빈 옵션도 신규 기본 순차 팔레트로 해석한다', (chartType) => {
     const option = assembleOption(result, chartType, {});
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(d3Palette('blues'));
+    expect(colors).toEqual(colorBrewerPalette('blues'));
   });
 
-  it.each(['map', 'heatmap'] as const)('%s는 D3 연속형 테마 전체를 낮은 값부터 사용한다', (chartType) => {
+  it.each(['map', 'heatmap'] as const)('%s는 ColorBrewer 순차형 정지점을 낮은 값부터 사용한다', (chartType) => {
     const option = assembleOption(result, chartType, optionsWithDefaults(chartType));
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(d3Palette('blues'));
+    expect(colors).toEqual(colorBrewerPalette('blues'));
   });
 
   it.each(['map', 'heatmap'] as const)('%s 색상 방향을 반전한다', (chartType) => {
@@ -827,10 +827,10 @@ describe('D3 연속형 visualMap 색상 계약', () => {
     const option = assembleOption(result, chartType, options);
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual([...d3Palette('blues')].reverse());
+    expect(colors).toEqual([...colorBrewerPalette('blues')].reverse());
   });
 
-  it('CARTO 기반 구 저장 지도는 첫 D3 순차형 테마로 전환한다', () => {
+  it('구 저장 지도는 ColorBrewer 순차형 기본 팔레트로 전환한다', () => {
     const legacy = optionsWithDefaults('map', {
       palettePreset: 'safe',
       palette: ['#88CCEE', '#CC6677'],
@@ -838,13 +838,14 @@ describe('D3 연속형 visualMap 색상 계약', () => {
     const option = assembleOption(result, 'map', legacy);
     const colors = ((option.visualMap as Record<string, any>).inRange as Record<string, any>).color;
 
-    expect(colors).toEqual(d3Palette('blues'));
+    expect(colors).toEqual(colorBrewerPalette('blues'));
   });
 });
 
 describe('개별 데이터 색상 계약', () => {
   it('막대 하나만 data itemStyle로 덮어쓴다', () => {
     const option = assembleOption(result, 'bar', {
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       itemColorOverrides: [{
         kind: 'cartesian',
         seriesName: 's1',
@@ -861,6 +862,7 @@ describe('개별 데이터 색상 계약', () => {
 
   it('선의 점 색상만 바꾸고 선 전체 색상은 유지한다', () => {
     const option = assembleOption(result, 'line', {
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       colorMap: { s1: '#112233' },
       itemColorOverrides: [{
         kind: 'cartesian',
@@ -885,6 +887,7 @@ describe('개별 데이터 색상 계약', () => {
       elapsedMs: 0,
     };
     const option = assembleOption(scatterResult, 'scatter', {
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       itemColorOverrides: [{
         kind: 'scatter',
         seriesName: 'y',
@@ -924,10 +927,10 @@ describe('개별 데이터 색상 계약', () => {
       { value: [1, 10, 3], symbolSize: 6 },
       { value: [2, 20, 9], symbolSize: 28 },
     ]);
-    expect(option.__chartsdkAutoColorMap).toEqual({ y: '#1F77B4' });
+    expect(option.__chartsdkAutoColorMap).toEqual({ y: colorBrewerPalette('dark2')[0] });
   });
 
-  it('지도 지역 하나만 visualMap 위에 areaColor를 지정한다', () => {
+  it('지도 지역 하나만 visualMap 위에 color를 지정한다', () => {
     const mapResult: QueryResult = {
       columns: [{ name: 'region', type: 'text' }, { name: 'value', type: 'number' }],
       rows: [['서울특별시', 10], ['부산광역시', 20]],
@@ -936,6 +939,7 @@ describe('개별 데이터 색상 계약', () => {
       elapsedMs: 0,
     };
     const option = assembleOption(mapResult, 'map', {
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       itemColorOverrides: [{
         kind: 'map',
         seriesName: '__map__',
@@ -960,9 +964,9 @@ describe('개별 데이터 색상 계약', () => {
       elapsedMs: 0,
     };
     const option = assembleOption(pointResult, 'geoscatter', {
-      palettePreset: 'category10',
-      palette: ['#123456', '#654321'],
-      colorTheme: { version: 3, seriesPreset: 'category10', valuePreset: 'blues', seriesReversed: false, valueReversed: false },
+      palettePreset: 'dark2',
+      palette: colorBrewerPalette('dark2'),
+      colorTheme: { version: 4, qualitativePreset: 'dark2', sequentialPreset: 'blues', divergingPreset: 'rdbu', valueFamily: 'sequential', valueReversed: false },
       itemColorOverrides: [{
         kind: 'geoscatter',
         seriesName: '__geoscatter__',
@@ -973,7 +977,7 @@ describe('개별 데이터 색상 계약', () => {
     });
     const series = (option.series as Array<Record<string, any>>)[0];
 
-    expect(series.itemStyle.color).toBe('#123456');
+    expect(series.itemStyle.color).toBe(colorBrewerPalette('dark2')[0]);
     expect(series.data[0]).toEqual({
       name: '126.978, 37.5665',
       value: [126.978, 37.5665, null, null],
@@ -1058,6 +1062,7 @@ describe('ECharts 6.1 지도 계열 계약', () => {
     };
     const option = assembleOption(groupedAreas, 'map', {
       variant: 'map',
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       colorMap: { 온라인: '#0055AA' },
     });
     const series = option.series as Array<Record<string, any>>;
@@ -1118,6 +1123,7 @@ describe('ECharts 6.1 지도 계열 계약', () => {
   it('효과 포인트는 계열별 색상과 공통 점 스타일을 적용한다', () => {
     const option = assembleOption(groupedPoints, 'geoscatter', {
       variant: 'effectScatter',
+      colorTheme: { ...DEFAULT_COLOR_THEME },
       colorMap: { 온라인: '#0055AA' },
       geoscatter: {
         symbol: 'triangle',

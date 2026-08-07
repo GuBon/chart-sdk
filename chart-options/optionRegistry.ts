@@ -18,12 +18,12 @@
  */
 
 import {
-  D3_THEME_CHOICES,
+  COLORBREWER_CHOICES,
   DEFAULT_COLOR_THEME,
   DEFAULT_PALETTE,
   DEFAULT_PALETTE_PRESET,
   DEFAULT_SEQUENTIAL_PRESET,
-  d3Palette,
+  colorBrewerPalette,
   defaultPalettePresetForChartType,
   normalizeColorTheme,
   switchPaletteForChartType,
@@ -293,16 +293,16 @@ export const OPTION_REGISTRY: OptionDef[] = [
     default: DEFAULT_PALETTE_PRESET,
     defaultByType: { heatmap: DEFAULT_SEQUENTIAL_PRESET, map: DEFAULT_SEQUENTIAL_PRESET },
     echarts: '@palettePreset',
-    choices: D3_THEME_CHOICES,
-    help: '모든 차트에서 같은 D3 색상 테마를 제공하며, 현재 차트에 어울리는 유형을 먼저 표시합니다.',
+    choices: COLORBREWER_CHOICES,
+    help: '일반 차트에는 정성형, 영역 지도와 히트맵에는 순차형·발산형 ColorBrewer 팔레트를 제공합니다.',
   },
   {
     key: 'palette', zone: 'common', section: '색상', label: '테마 색상',
     control: 'palette', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     default: DEFAULT_PALETTE,
     defaultByType: {
-      heatmap: d3Palette(DEFAULT_SEQUENTIAL_PRESET),
-      map: d3Palette(DEFAULT_SEQUENTIAL_PRESET),
+      heatmap: colorBrewerPalette(DEFAULT_SEQUENTIAL_PRESET),
+      map: colorBrewerPalette(DEFAULT_SEQUENTIAL_PRESET),
     },
     echarts: 'color',
     help: '시리즈 또는 차트에서 선택한 요소에 팔레트 색상을 적용합니다. 직접 지정한 색은 테마를 바꿔도 유지되고, 지정 해제하면 현재 테마색으로 돌아갑니다.',
@@ -311,7 +311,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     key: 'paletteReversed', zone: 'common', section: '색상', label: '색상 방향 반전',
     control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: false,
     echarts: '@visualMap.inRange.color.reverse',
-    help: 'Sequential·Diverging·Cyclical 테마의 진행 방향을 서로 바꿉니다.',
+    help: '순차형·발산형 팔레트의 진행 방향을 서로 바꿉니다.',
   },
   {
     key: 'colorMap', zone: 'common', section: '색상', label: '시리즈 색상',
@@ -1563,18 +1563,19 @@ export function optionsWithDefaults(chartType: MajorType, options: Options = {})
   const normalized = migrateLegacyInteractionOptions(options, chartType);
   const next = mergeOptions(defaultsFor(chartType), normalized);
   const hasStoredOptions = Object.keys(options ?? {}).length > 0;
-  const usesLegacyColorTheme = hasStoredOptions && normalized.colorTheme?.version !== 3;
+  const usesLegacyColorTheme = hasStoredOptions && normalized.colorTheme?.version !== 4;
   if (!usesLegacyColorTheme) return next;
 
-  // CARTO 기반 구 저장 데이터는 현재 차트군의 첫 D3 테마로 전환한다.
-  // 사용자가 직접 지정한 colorMap/itemColorOverrides는 병합 결과에 그대로 남긴다.
+  // 모든 구 저장 데이터는 현재 차트군의 ColorBrewer 기본 팔레트로 일괄 전환한다.
   const defaultPreset = defaultPalettePresetForChartType(chartType);
   next.colorTheme = normalizeColorTheme(DEFAULT_COLOR_THEME, defaultPreset, chartType);
   next.palettePreset = defaultPreset;
-  next.palette = d3Palette(defaultPreset);
+  next.palette = colorBrewerPalette(defaultPreset);
   next.paletteReversed = false;
   next.paletteActiveIndex = 0;
   next.autoColorMap = {};
+  next.colorMap = {};
+  next.itemColorOverrides = [];
   return next;
 }
 

@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import {
-  d3Palette,
+  colorBrewerPalette,
   paletteFamilyOfPreset,
   type PaletteFamily,
 } from '@chartsdk/chart-options/palettes';
@@ -31,10 +31,9 @@ type ThemeChoiceGroup = {
 };
 
 const PALETTE_FAMILY_LABELS: Record<PaletteFamily, string> = {
-  categorical: 'Categorical',
-  sequential: 'Sequential',
-  diverging: 'Diverging',
-  cyclical: 'Cyclical',
+  qualitative: '정성형',
+  sequential: '순차형',
+  diverging: '발산형',
 };
 
 function groupThemeChoices(choices: ThemeSelectChoice[]): ThemeChoiceGroup[] {
@@ -236,6 +235,7 @@ export function ThemeSelect({
                 <button
                   type="button"
                   role="treeitem"
+                  aria-selected={selectedFamily}
                   aria-expanded={expanded}
                   aria-label={`${PALETTE_FAMILY_LABELS[group.family]} 테마 ${group.items.length}개`}
                   data-testid={`theme-group-${group.family}`}
@@ -309,9 +309,9 @@ function ThemeChoiceButton({
 }
 
 function PaletteStrip({ preset, testId }: { preset: unknown; testId: string }) {
-  const colors = d3Palette(preset);
+  const colors = colorBrewerPalette(preset);
   const family = paletteFamilyOfPreset(preset);
-  if (family && family !== 'categorical') {
+  if (family && family !== 'qualitative') {
     return (
       <span
         data-testid={testId}

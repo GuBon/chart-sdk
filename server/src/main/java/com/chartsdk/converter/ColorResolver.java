@@ -7,10 +7,9 @@ import java.util.Map;
 
 final class ColorResolver {
     private static final java.util.Set<String> CONTINUOUS_PRESETS = java.util.Set.of(
-            "blues", "greens", "greys", "oranges", "purples", "reds", "turbo", "viridis",
-            "inferno", "magma", "plasma", "cividis", "warm", "cool", "cubehelix-default",
-            "brbg", "prgn", "piyg", "puor", "rdbu", "rdgy", "rdylbu", "rdylgn", "spectral",
-            "rainbow", "sinebow"
+            "blues", "bugn", "bupu", "gnbu", "greens", "greys", "oranges", "orrd",
+            "pubu", "pubugn", "purd", "purples", "rdpu", "reds", "ylgn", "ylgnbu", "ylorbr", "ylorrd",
+            "brbg", "prgn", "piyg", "puor", "rdbu", "rdgy", "rdylbu", "rdylgn", "spectral"
     );
 
     private ColorResolver() {
@@ -50,15 +49,12 @@ final class ColorResolver {
                 return resolved;
             }
         }
-        java.util.Set<String> used = new java.util.LinkedHashSet<>();
-        resolved.values().forEach(value -> used.add(String.valueOf(value).toUpperCase()));
         for (int index = 0; index < names.size(); index++) {
             String name = names.get(index);
             if (resolved.get(name) != null) continue;
-            String color = index < palette.size() ? String.valueOf(palette.get(index)).toUpperCase() : null;
-            if (color == null || used.contains(color)) color = generatedColor(name, index, used);
-            resolved.put(name, color);
-            used.add(color);
+            if (!palette.isEmpty()) {
+                resolved.put(name, String.valueOf(palette.get(index % palette.size())).toUpperCase());
+            }
         }
         return resolved;
     }
@@ -97,8 +93,7 @@ final class ColorResolver {
     static Object paletteColor(Map<String, Object> opt, int index) {
         List<Object> palette = orderedPalette(opt);
         if (!palette.isEmpty()) {
-            if (index < palette.size()) return palette.get(index);
-            return generatedColor("series-index-" + index, index, java.util.Set.of());
+            return palette.get(Math.floorMod(index, palette.size()));
         }
         return null;
     }
@@ -129,49 +124,6 @@ final class ColorResolver {
         } catch (NumberFormatException e) {
             return 0;
         }
-    }
-
-    private static String generatedColor(String name, int index, java.util.Set<String> used) {
-        int attempt = 0;
-        String color;
-        do {
-            long hash = fnv1a(name + ":" + attempt);
-            double hue = (hash + Math.round(index * 137.508)) % 360;
-            double saturation = 62 + ((hash >>> 9) % 19);
-            double lightness = 38 + ((hash >>> 17) % 23);
-            color = hslToHex(hue, saturation, lightness);
-            attempt++;
-        } while (used.contains(color) && attempt < 720);
-        return color;
-    }
-
-    private static long fnv1a(String value) {
-        long hash = 0x811c9dc5L;
-        for (int i = 0; i < value.length(); i++) {
-            hash ^= value.charAt(i);
-            hash = (hash * 0x01000193L) & 0xffffffffL;
-        }
-        return hash;
-    }
-
-    private static String hslToHex(double hue, double saturation, double lightness) {
-        double sat = saturation / 100.0;
-        double light = lightness / 100.0;
-        double c = (1 - Math.abs(2 * light - 1)) * sat;
-        double x = c * (1 - Math.abs((hue / 60.0) % 2 - 1));
-        double m = light - c / 2;
-        double r = 0, g = 0, b = 0;
-        if (hue < 60) { r = c; g = x; }
-        else if (hue < 120) { r = x; g = c; }
-        else if (hue < 180) { g = c; b = x; }
-        else if (hue < 240) { g = x; b = c; }
-        else if (hue < 300) { r = x; b = c; }
-        else { r = c; b = x; }
-        return String.format("#%02X%02X%02X", channel(r + m), channel(g + m), channel(b + m));
-    }
-
-    private static int channel(double value) {
-        return Math.max(0, Math.min(255, (int) Math.round(value * 255)));
     }
 
     @SuppressWarnings("unchecked")

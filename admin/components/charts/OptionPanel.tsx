@@ -21,7 +21,7 @@ import { resolveChartDesignSize, resolveChartTypography } from '@chartsdk/chart-
 import {
   applyPaletteDirection,
   applyPalettePreset,
-  d3PaletteForChartType,
+  colorBrewerPaletteForChartType,
 } from '@chartsdk/chart-options/palettes';
 import {
   findItemColorOverride,
@@ -155,7 +155,7 @@ export function OptionPanel({
     ?? null;
   const paletteColors = Array.isArray(options.palette) && options.palette.length > 0
     ? options.palette.map(String)
-    : d3PaletteForChartType(chartType, options.palettePreset);
+    : colorBrewerPaletteForChartType(chartType, options.palettePreset);
 
   const valueOf = (definition: OptionDef) => {
     if (definition.key === 'chartType') return chartType;

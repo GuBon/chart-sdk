@@ -83,13 +83,14 @@
       ["2026-02-01", 20, 200]
     ],
     "options": {
-      "palette": ["#111111", "#222222"],
-      "palettePreset": "category10",
+      "palette": ["#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666"],
+      "palettePreset": "dark2",
       "colorTheme": {
-        "version": 3,
-        "seriesPreset": "category10",
-        "valuePreset": "blues",
-        "seriesReversed": false,
+        "version": 4,
+        "qualitativePreset": "dark2",
+        "sequentialPreset": "blues",
+        "divergingPreset": "rdbu",
+        "valueFamily": "sequential",
         "valueReversed": false
       },
       "legend": {
@@ -131,7 +132,7 @@
       "series.2.name": "cost · 3기간 이동평균",
       "series.2.data": [null, null, 200.0, 300.0],
       "series.2.lineStyle.type": "dashed",
-      "series.2.lineStyle.color": "#222222",
+      "series.2.lineStyle.color": "#D95F02",
       "legend.data": ["sales", "cost"]
     },
     "absent": [

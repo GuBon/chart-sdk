@@ -1385,7 +1385,7 @@ export function assembleOption(
       titleAtBottom(o) ? metrics.titleHeight : 0,
       typography.legend,
       fonts.legend,
-      o.colorTheme?.version === 3,
+      o.colorTheme?.version === 4,
     );
     const series: Record<string, any> = {
       type: 'heatmap',
@@ -1477,7 +1477,7 @@ export function assembleOption(
     if (mapSeries.length <= 1) delete opt.legend;
     opt.visualMap = visualMapConfig(
       min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
-      typography.legend, fonts.legend, o.colorTheme?.version === 3,
+      typography.legend, fonts.legend, o.colorTheme?.version === 4,
       mapSeries.map((series) => ({ seriesId: String(series.id), dimension: 0 })),
     );
     opt.series = mapSeries;
@@ -1610,7 +1610,7 @@ export function assembleOption(
       if (min === max) max = min + 1;
       opt.visualMap = visualMapConfig(
         min, max, palette, titleAtBottom(o) ? metrics.titleHeight : 0,
-        typography.legend, fonts.legend, o.colorTheme?.version === 3,
+        typography.legend, fonts.legend, o.colorTheme?.version === 4,
         pointSeries.map((series) => ({ seriesId: String(series.id), dimension: 2 })),
       );
     } else {

@@ -1,12 +1,13 @@
 # Third-Party Notices
 
-## D3 Scale Chromatic / D3 Color
+## ColorBrewer 2.0
 
-- 저작물: d3-scale-chromatic, d3-color
-- 제작자: Mike Bostock 및 기여자
-- 원본: https://github.com/d3/d3-scale-chromatic, https://github.com/d3/d3-color
-- 라이선스: ISC
+- 저작물: ColorBrewer software and ColorBrewer Color Schemes
+- 저작권: Copyright 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University
+- 원본: https://github.com/axismaps/colorbrewer
+- 라이선스: Apache License 2.0
+- 라이선스 전문: [`licenses/ColorBrewer-LICENSE.txt`](licenses/ColorBrewer-LICENSE.txt)
 
-이 프로젝트는 `d3-scale-chromatic`이 내보내는 Categorical·Sequential·Diverging·Cyclical 팔레트 35개를 차트 테마로 사용한다. 런타임 색상은 해당 패키지의 scheme 배열과 interpolator에서 가져오며 프로젝트 소스에 팔레트 HEX 배열을 복제하지 않는다.
+이 프로젝트는 ColorBrewer의 정성형 8개, 순차형 18개, 발산형 9개 팔레트의 공식 최대 클래스 HEX 배열을 `chart-options/colorBrewerSchemes.ts`에 포함한다.
 
-`d3-scale-chromatic`에 포함된 ColorBrewer 기반 색상 체계에는 Cynthia Brewer, Mark Harrower, The Pennsylvania State University의 Apache License 2.0 고지가 적용된다. 라이선스 전문은 설치된 `d3-scale-chromatic` 패키지의 `LICENSE` 파일에서 확인할 수 있다.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://www.apache.org/licenses/LICENSE-2.0. Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.

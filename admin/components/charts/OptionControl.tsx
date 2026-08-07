@@ -14,7 +14,7 @@ import {
 } from '@/lib/chartColorSelection';
 import {
   DEFAULT_PALETTE,
-  d3ThemeColorAt,
+  colorBrewerColorAt,
   isContinuousPalettePreset,
   paletteChoicesForChartType,
   paletteFamilyForChartType,
@@ -549,13 +549,11 @@ function PaletteControl({
   );
   const gradientLabels = family === 'diverging'
     ? ['낮은 쪽', '높은 쪽']
-    : family === 'cyclical'
-      ? ['시작', '순환 ↻']
-      : ['낮은 값', '높은 값'];
+    : ['낮은 값', '높은 값'];
   const applyGradientPosition = (displayPosition: number) => {
     if (unavailable) return;
     const position = Math.min(1, Math.max(0, displayPosition));
-    onApply(d3ThemeColorAt(preset, reversed ? 1 - position : position));
+    onApply(colorBrewerColorAt(preset, reversed ? 1 - position : position));
   };
   const openEditor = () => {
     const picker = document.getElementById('option-series-color-picker') as HTMLInputElement | null;
@@ -907,7 +905,7 @@ function nearestGradientPosition(color: string, preset: unknown, reversed: boole
   let bestDistance = Number.POSITIVE_INFINITY;
   for (let index = 0; index <= 100; index += 1) {
     const displayPosition = index / 100;
-    const candidate = d3ThemeColorAt(preset, reversed ? 1 - displayPosition : displayPosition);
+    const candidate = colorBrewerColorAt(preset, reversed ? 1 - displayPosition : displayPosition);
     const distance = hexColorDistance(color, candidate);
     if (distance < bestDistance) {
       bestDistance = distance;

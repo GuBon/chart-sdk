@@ -325,7 +325,7 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void bubbleSizeColumnScalesPointsWithoutBecomingAnotherSeries() {
+    void bubbleSizeColumnScalesPointsWithoutBecomingAnotherSeries() throws Exception {
         QueryRows bubbleRows = new QueryRows(
                 List.of(
                         Map.of("name", "x", "type", "number"),
@@ -337,7 +337,8 @@ class ChartOptionConverterTest {
                 false,
                 0
         );
-        Map<String, Object> option = converter.convert(bubbleRows, "scatter", Map.of(
+        ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(generatedDefaults()));
+        Map<String, Object> option = defaultedConverter.convert(bubbleRows, "scatter", Map.of(
                 "variant", "bubble",
                 "scatter", Map.of("bubbleField", "size", "symbolSize", 16)
         ));
@@ -559,7 +560,7 @@ class ChartOptionConverterTest {
         for (String chartType : List.of("map", "heatmap")) {
             Map<String, Object> forward = converter.convert(rows2(), chartType, Map.of(
                     "palette", colors,
-                    "colorTheme", Map.of("version", 3),
+                    "colorTheme", Map.of("version", 4),
                     "paletteReversed", false
             ));
             assertThat(valueAt(forward, "visualMap.inRange.color"))
@@ -568,7 +569,7 @@ class ChartOptionConverterTest {
 
             Map<String, Object> reversed = converter.convert(rows2(), chartType, Map.of(
                     "palette", colors,
-                    "colorTheme", Map.of("version", 3),
+                    "colorTheme", Map.of("version", 4),
                     "paletteReversed", true
             ));
             assertThat(valueAt(reversed, "visualMap.inRange.color"))
@@ -581,7 +582,7 @@ class ChartOptionConverterTest {
     }
 
     @Test
-    void legacyMapUsesFirstD3SequentialTheme() throws Exception {
+    void legacyMapUsesColorBrewerSequentialDefault() throws Exception {
         Map<String, Map<String, Object>> byType = generatedDefaults();
         ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));
         Map<String, Object> option = defaultedConverter.convert(rows(), "map", Map.of(
@@ -1173,7 +1174,7 @@ class ChartOptionConverterTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void d3CategoryColorsDoNotCycleAndPersistBySeriesName() throws Exception {
+    void colorBrewerQualitativeColorsCycleAndPersistBySeriesName() throws Exception {
         List<Map<String, Object>> columns = new java.util.ArrayList<>();
         columns.add(Map.of("name", "region", "type", "text"));
         List<Object> row = new java.util.ArrayList<>();
@@ -1184,17 +1185,22 @@ class ChartOptionConverterTest {
         }
         QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
 
-        List<?> category10 = (List<?>) generatedDefaults().get("bar").get("palette");
-        Map<String, Object> first = converter.convert(many, "bar", Map.of("palette", category10));
+        List<?> dark2 = (List<?>) generatedDefaults().get("bar").get("palette");
+        Map<String, Object> first = converter.convert(many, "bar", Map.of(
+                "palette", dark2,
+                "colorTheme", Map.of("version", 4)
+        ));
         Map<String, Object> auto = (Map<String, Object>) first.get("__chartsdkAutoColorMap");
-        assertThat(auto.values()).hasSize(14).doesNotHaveDuplicates();
-        assertThat(auto.get("s0")).isEqualTo(category10.get(0));
-        assertThat(auto.get("s9")).isEqualTo(category10.get(9));
-        assertThat(auto.get("s10")).isNotEqualTo(auto.get("s0"));
+        assertThat(auto.values()).hasSize(14);
+        assertThat(new java.util.LinkedHashSet<>(auto.values())).hasSize(dark2.size());
+        assertThat(auto.get("s0")).isEqualTo(dark2.get(0));
+        assertThat(auto.get("s7")).isEqualTo(dark2.get(7));
+        assertThat(auto.get("s8")).isEqualTo(auto.get("s0"));
 
         Map<String, Object> second = converter.convert(many, "line", Map.of(
                 "autoColorMap", auto,
-                "colorMap", Map.of("s4", "#010203")
+                "colorMap", Map.of("s4", "#010203"),
+                "colorTheme", Map.of("version", 4)
         ));
         List<Map<String, Object>> series = (List<Map<String, Object>>) second.get("series");
         assertThat(series.get(4).get("color")).isEqualTo("#010203");
@@ -1203,7 +1209,7 @@ class ChartOptionConverterTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void sequentialPaletteSpreadsAcrossEverySeriesInsteadOfFallingBackToGeneratedColors() {
+    void sequentialColorBrewerPaletteSpreadsAcrossEverySeries() {
         List<Map<String, Object>> columns = new java.util.ArrayList<>();
         columns.add(Map.of("name", "region", "type", "text"));
         List<Object> row = new java.util.ArrayList<>();
@@ -1215,8 +1221,9 @@ class ChartOptionConverterTest {
         QueryRows many = new QueryRows(columns, List.of(row), 1, false, 0);
 
         Map<String, Object> option = converter.convert(many, "bar", Map.of(
-                "palettePreset", "viridis",
+                "palettePreset", "blues",
                 "palette", List.of("#000000", "#FFFFFF"),
+                "colorTheme", Map.of("version", 4),
                 "autoColorMap", Map.of("s0", "#FF0000")
         ));
         Map<String, Object> auto = (Map<String, Object>) option.get("__chartsdkAutoColorMap");
