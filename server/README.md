@@ -15,7 +15,7 @@ com.chartsdk
 ├─ token/       사용자 임베드 토큰·JWT 검증 (mc_user_token, 1인 1활성)
 ├─ query/       SQL 실행 엔진(검증·읽기전용·타임아웃·행제한) + 노코드 SQL 생성기 + 식별자/리터럴 유틸
 ├─ converter/   (rows, chartType, options) → ECharts option 단일 변환기 (방식 A)
-└─ cache/       결과 캐시 (mc_chart_cache, 갱신 모드 live/ttl/manual)
+└─ cache/       수동 결과 스냅샷 (mc_chart_cache, 갱신 모드 manual/live)
 ```
 
 ## 현재 구현 메모
@@ -23,7 +23,7 @@ com.chartsdk
 - builder 저장은 클라이언트 `sqlQuery`를 신뢰하지 않고 서버가 `builderConfig`에서 SQL을 재생성·검증·리터럴화해 저장한다.
 - 노코드 `agg:"none"` 원본값 튜플 모드는 bar/line/pie/scatter/map에서 동작한다. 이 모드는 GROUP BY를 사용하지 않으며, sample을 켜면 선택된 원본 행만 반환한다.
 - 막대·선의 `builderConfig.seriesBy`는 두 번째 그룹 차원으로 SQL을 만들고 `SeriesPivot`에서 다중 시리즈로 전개한다.
-- PostGIS Polygon/Point와 geometry/geography SRID 변환, 저장 cache preview, SWR/single-flight TTL과 수동 refresh가 구현돼 있다.
+- PostGIS Polygon/Point와 geometry/geography SRID 변환, 저장 스냅샷 preview, live single-flight와 수동 refresh가 구현돼 있다.
 - 임베드 토큰 검증은 `EmbedTokenInterceptor`에서 끝내고, `EmbedController`는 검증된 principal만 사용한다.
 - 요청 바디는 핵심 API별 record DTO + Bean Validation으로 받으며, `ApiExceptionHandler`가 공통 에러 envelope을 만든다.
 
