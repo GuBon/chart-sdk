@@ -2,6 +2,7 @@
 
 import type { QueryResult } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { dataTablePreviewSummary } from '@/lib/dataTablePreview';
 import {
   confidenceBadgeText,
   normalizeSampling,
@@ -22,11 +23,24 @@ interface Props {
   running: boolean;
   error: string | null;
   rawTableLabel: string | null;
+  estimatedOriginalRowCount?: number | null;
 }
 
-export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTableLabel }: Props) {
+export function ResultsPanel({
+  result,
+  raw,
+  tab,
+  onTab,
+  running,
+  error,
+  rawTableLabel,
+  estimatedOriginalRowCount,
+}: Props) {
   const active = tab === 'result' ? result : raw;
   const sampling = active ? normalizeSampling(active) : undefined;
+  const previewSummary = active
+    ? dataTablePreviewSummary(active, tab, estimatedOriginalRowCount)
+    : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -38,9 +52,17 @@ export function ResultsPanel({ result, raw, tab, onTab, running, error, rawTable
         {tab === 'raw' && rawTableLabel && (
           <span className="min-w-0 truncate text-xs font-bold text-text-secondary" title={rawTableLabel}>{rawTableLabel}</span>
         )}
-        {active && (
-          <span className="text-xs text-text-tertiary">
-            {active.rowCount}행 · {active.elapsedMs}ms
+        {active && previewSummary && (
+          <span
+            className="ml-auto shrink-0 whitespace-nowrap text-xs text-text-tertiary"
+            data-testid="result-count-summary"
+          >
+            {tab === 'raw' ? '원본 전체 ' : '실행 전체 '}
+            {previewSummary.totalRowCount === null
+              ? `${active.rowCount.toLocaleString()}행 이상`
+              : `${previewSummary.totalRowCountEstimated ? '약 ' : ''}${previewSummary.totalRowCount.toLocaleString()}행`}
+            {' · 미리보기 '}{previewSummary.visibleRowCount.toLocaleString()}행
+            {' · '}{active.elapsedMs.toLocaleString()}ms
           </span>
         )}
         {sampling && (

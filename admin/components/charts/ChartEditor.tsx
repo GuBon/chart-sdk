@@ -1285,6 +1285,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   running={resultTab === 'raw' ? rawRunning : running}
                   error={resultTab === 'raw' ? rawError : runError}
                   rawTableLabel={rawTableLabel}
+                  estimatedOriginalRowCount={rawTable?.estimatedRowCount ?? null}
                 />
               </div>
             </section>

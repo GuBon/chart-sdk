@@ -286,7 +286,9 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 탐색기에서 테이블 선택 → 원본 데이터 자동 로드
     await selectBase(page, 'sales public');
-    await expect(page.getByText(/행 ·/)).toBeVisible();
+    await expect(page.getByTestId('result-count-summary')).toHaveText(
+      /원본 전체 약 500,000,000행 · 미리보기 12행/,
+    );
 
     await useXAxis(page, 'category');
     await addValue(page);
@@ -294,6 +296,9 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 집계 결과(실행 결과 탭) — 카테고리 라벨 표시
     await expect(page.getByRole('cell', { name: '의류', exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('result-count-summary')).toHaveText(
+      /실행 전체 \d+행 · 미리보기 \d+행/,
+    );
 
     // 생성된 SQL
     await page.getByText('생성된 SQL 보기').click();

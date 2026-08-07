@@ -1,10 +1,13 @@
 import type { QueryResult } from '@/lib/api';
+import { dataTablePreviewRows, DATA_TABLE_PREVIEW_LIMIT } from '@/lib/dataTablePreview';
 import type { SamplingGroupCount } from '@chartsdk/chart-options/sampling';
 
-// 결과/원본 데이터 공통 표(258:232). 원본 미리보기가 제한된 경우에만 1,000행 안내를 표시한다.
+// 차트 데이터는 건드리지 않고, 결과/원본 데이터 하단 표에만 최대 행 수를 적용한다.
 export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGroups?: SamplingGroupCount[] }) {
   const sampleCountByKey = new Map(sampleGroups?.map((group) => [String(group.key ?? ''), group.sampleCount]));
   const showSampleCount = sampleCountByKey.size > 0;
+  const previewRows = dataTablePreviewRows(data.rows);
+  const limited = data.truncated || data.rows.length > DATA_TABLE_PREVIEW_LIMIT;
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
@@ -27,7 +30,7 @@ export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGro
             </tr>
           </thead>
           <tbody>
-            {data.rows.map((row, i) => (
+            {previewRows.map((row, i) => (
               <tr key={i} className="border-b border-border">
                 {row.map((cell, j) => (
                   <td key={j} className="px-4 py-2 text-text-primary">
@@ -44,7 +47,11 @@ export function DataTable({ data, sampleGroups }: { data: QueryResult; sampleGro
           </tbody>
         </table>
       </div>
-      {data.truncated && <p className="border-t border-border px-4 py-2 text-xs text-text-tertiary">1,000행까지 표시</p>}
+      {limited && (
+        <p className="border-t border-border px-4 py-2 text-xs text-text-tertiary">
+          하단 표는 최대 {DATA_TABLE_PREVIEW_LIMIT.toLocaleString()}행까지 표시합니다.
+        </p>
+      )}
     </div>
   );
 }
