@@ -44,6 +44,7 @@ com.chartsdk
 - Gradle Wrapper가 저장소에 포함돼 있다. macOS/Linux는 `./gradlew bootRun`, Windows PowerShell은 `.\gradlew.bat bootRun`을 사용한다.
 - DB 연결: 환경변수 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD` (기본값은 `application.yml` 참조).
 - 운영 Flyway 분리: `SPRING_FLYWAY_URL` · `SPRING_FLYWAY_USER` · `SPRING_FLYWAY_PASSWORD`. 미설정 시 runtime datasource 재사용.
+- Flyway 이력 테이블: `public.mc_flyway_schema_history`. 기존 `public.flyway_schema_history`는 첫 부팅에서 이력을 보존한 채 자동으로 이름을 변경한다.
 - 레거시 datasource 비밀번호: `DATASOURCE_PASSWORD_MIGRATE_LEGACY_ON_STARTUP=true`로 1회 변환 후
   미암호화 0건을 확인하고 `DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT=false`로 전환한다.
 - 쿼리 timeout 기본값: preview/catalog/explain 10초, chart/sample/federation 30초.

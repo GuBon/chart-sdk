@@ -1,5 +1,5 @@
 -- Runtime grants are conditional so migrations also work before production roles are provisioned.
--- Only ChartSDK-owned mc_* objects are granted; Flyway history remains migration-only.
+-- Only application-owned mc_* objects are granted; mc_flyway_schema_history remains migration-only.
 DO $block$
 DECLARE
     relation record;
@@ -17,6 +17,7 @@ BEGIN
           JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'public'
            AND c.relname LIKE 'mc\_%' ESCAPE '\'
+           AND c.relname <> 'mc_flyway_schema_history'
            AND c.relkind IN ('r', 'p', 'S')
     LOOP
         IF relation.relkind = 'S' THEN
@@ -28,8 +29,8 @@ BEGIN
         END IF;
     END LOOP;
 
-    IF to_regclass('public.flyway_schema_history') IS NOT NULL THEN
-        REVOKE ALL ON TABLE public.flyway_schema_history FROM chartsdk_app;
+    IF to_regclass('public.mc_flyway_schema_history') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.mc_flyway_schema_history FROM chartsdk_app;
     END IF;
 END
 $block$;

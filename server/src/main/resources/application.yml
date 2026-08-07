@@ -18,6 +18,11 @@ spring:
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
+    # history 도 ChartSDK 소유 객체이므로 mc_ 네임스페이스를 쓴다. 기존 flyway_schema_history 는
+    # FlywayHistoryTableConfiguration 이 마이그레이션 직전에 이름만 바꾼다(rename = 소유 role 권한 필요).
+    # role 분리 배포는 SPRING_FLYWAY_USER/SPRING_FLYWAY_PASSWORD 로 소유자 계정을 주입한다.
+    # 미설정 시 위 runtime datasource 를 그대로 재사용한다.
+    table: mc_flyway_schema_history
     validate-on-migrate: true
     clean-disabled: true
     baseline-on-migrate: true

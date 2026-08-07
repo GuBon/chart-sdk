@@ -94,6 +94,7 @@ class FlywayV10MigrationIT {
     private static Flyway flyway(String target) {
         return Flyway.configure()
                 .dataSource(URL, USER, PASSWORD)
+                .table(FlywayHistoryTableConfiguration.HISTORY_TABLE)
                 .locations("classpath:db/migration")
                 .target(target)
                 .cleanDisabled(true)

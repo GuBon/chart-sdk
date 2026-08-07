@@ -67,7 +67,7 @@ class FlywayV9MigrationIT {
     @Test
     void v9IsRecordedAndReplacesLegacyPalettesAndOverrides() {
         assertThat(jdbc.queryForObject("""
-                SELECT count(*) FROM flyway_schema_history
+                SELECT count(*) FROM mc_flyway_schema_history
                  WHERE version='9' AND success=true
                 """, Integer.class)).isEqualTo(1);
 
@@ -113,6 +113,7 @@ class FlywayV9MigrationIT {
     private static Flyway flyway(String target) {
         return Flyway.configure()
                 .dataSource(URL, USER, PASSWORD)
+                .table(FlywayHistoryTableConfiguration.HISTORY_TABLE)
                 .locations("classpath:db/migration")
                 .target(target)
                 .cleanDisabled(true)

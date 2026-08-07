@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 \connect chartsol
 
--- Run once as the current database owner after Flyway V8 succeeds.
+-- Run once as the current database owner after Flyway succeeds.
 REVOKE CONNECT ON DATABASE chartsol FROM PUBLIC;
 GRANT CONNECT ON DATABASE chartsol TO chartsdk_migrator;
 GRANT CONNECT ON DATABASE chartsol TO chartsdk_app;
@@ -11,7 +11,7 @@ REVOKE CREATE ON SCHEMA public FROM chartsdk_app;
 GRANT USAGE ON SCHEMA public TO chartsdk_app;
 
 ALTER FUNCTION public.mc_touch_updated_at() OWNER TO chartsdk_migrator;
-ALTER TABLE public.flyway_schema_history OWNER TO chartsdk_migrator;
+ALTER TABLE public.mc_flyway_schema_history OWNER TO chartsdk_migrator;
 ALTER TABLE public.mc_user OWNER TO chartsdk_migrator;
 ALTER TABLE public.mc_user_token OWNER TO chartsdk_migrator;
 ALTER TABLE public.mc_datasource OWNER TO chartsdk_migrator;
@@ -48,7 +48,7 @@ GRANT USAGE, SELECT ON SEQUENCE
     public.mc_chart_id_seq
 TO chartsdk_app;
 
-REVOKE ALL ON TABLE public.flyway_schema_history FROM chartsdk_app;
+REVOKE ALL ON TABLE public.mc_flyway_schema_history FROM chartsdk_app;
 
 -- Future mc_* grants are applied by docs/afterMigrate__runtime_grants.sql.
 -- Do not use broad default table privileges: they would also expose Flyway history.

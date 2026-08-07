@@ -40,6 +40,7 @@ class RuntimeDatabaseRoleIT {
             assumeTrue(rolesAvailable, "Runtime roles are not provisioned in this existing local volume");
         }
         Flyway.configure().dataSource(META_URL, ADMIN_USER, ADMIN_PASSWORD)
+                .table("mc_flyway_schema_history")
                 .baselineOnMigrate(true)
                 .locations("classpath:db/migration").load().migrate();
         runtime = jdbc(META_URL, APP_USER, APP_PASSWORD);
@@ -85,7 +86,7 @@ class RuntimeDatabaseRoleIT {
         assertThat(runtime.queryForObject(
                 "SELECT has_schema_privilege(current_user, 'public', 'CREATE')", Boolean.class)).isFalse();
         assertThat(runtime.queryForObject(
-                "SELECT has_table_privilege(current_user, 'public.flyway_schema_history', 'SELECT')",
+                "SELECT has_table_privilege(current_user, 'public.mc_flyway_schema_history', 'SELECT')",
                 Boolean.class)).isFalse();
     }
 

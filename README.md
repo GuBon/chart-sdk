@@ -119,7 +119,8 @@ NEXT_PUBLIC_ENABLE_MSW=false
 ```
 
 운영에서는 메타 DB runtime과 Flyway 계정을 분리한다. `chartsdk_app`은 `mc_*` DML만 수행하고,
-`chartsdk_migrator`가 Flyway를 실행한다. 별도 Flyway 설정을 생략하면 로컬·테스트 호환을 위해 runtime datasource를 재사용한다.
+`chartsdk_migrator`가 Flyway를 실행한다. Flyway 이력도 동일한 네임스페이스 원칙에 따라
+`mc_flyway_schema_history`에 저장한다. 별도 Flyway 설정을 생략하면 로컬·테스트 호환을 위해 runtime datasource를 재사용한다.
 
 ```bash
 DATABASE_USER=chartsdk_app

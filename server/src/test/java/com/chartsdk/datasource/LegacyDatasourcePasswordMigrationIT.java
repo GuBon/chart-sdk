@@ -35,6 +35,7 @@ class LegacyDatasourcePasswordMigrationIT {
         admin.execute("DROP DATABASE IF EXISTS " + DATABASE + " WITH (FORCE)");
         admin.execute("CREATE DATABASE " + DATABASE);
         Flyway.configure().dataSource(URL, USER, PASSWORD)
+                .table("mc_flyway_schema_history")
                 .locations("classpath:db/migration").load().migrate();
         dataSource = dataSource(URL);
         jdbc = new JdbcTemplate(dataSource);

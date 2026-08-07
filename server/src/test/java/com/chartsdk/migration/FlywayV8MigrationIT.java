@@ -67,7 +67,7 @@ class FlywayV8MigrationIT {
     @Test
     void v8IsRecordedAndPreservesTheV7SamplingSnapshot() {
         assertThat(jdbc.queryForObject("""
-                SELECT count(*) FROM flyway_schema_history
+                SELECT count(*) FROM mc_flyway_schema_history
                  WHERE version='8' AND success=true
                 """, Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject(
@@ -125,6 +125,7 @@ class FlywayV8MigrationIT {
     private static Flyway flyway(String target) {
         return Flyway.configure()
                 .dataSource(URL, USER, PASSWORD)
+                .table(FlywayHistoryTableConfiguration.HISTORY_TABLE)
                 .locations("classpath:db/migration")
                 .target(target)
                 .cleanDisabled(true)
