@@ -1,10 +1,10 @@
 import type { PreviewFitMode } from '@chartsdk/chart-options/display';
 
-export type PreviewOptionDock = 'right' | 'bottom';
+export type PreviewOptionDock = 'left' | 'bottom';
 
 export const OPTION_PANEL_COLLAPSED_SIZE = 40;
 export const OPTION_PANEL_DIVIDER_SIZE = 1;
-export const MIN_RIGHT_DOCK_PREVIEW_WIDTH = 520;
+export const MIN_SIDE_DOCK_PREVIEW_WIDTH = 520;
 export const OPTION_DOCK_HYSTERESIS = 40;
 export const CHART_PREVIEW_PADDING = 24;
 
@@ -25,11 +25,11 @@ export function optionDockThresholds({
   const optionSlotWidth = optionPanelCollapsed
     ? OPTION_PANEL_COLLAPSED_SIZE
     : Math.max(0, optionPanelWidth) + OPTION_PANEL_DIVIDER_SIZE;
-  const balancedWidth = optionSlotWidth + MIN_RIGHT_DOCK_PREVIEW_WIDTH;
+  const balancedWidth = optionSlotWidth + MIN_SIDE_DOCK_PREVIEW_WIDTH;
 
   return {
-    enterRightAt: balancedWidth + OPTION_DOCK_HYSTERESIS,
-    leaveRightAt: balancedWidth - OPTION_DOCK_HYSTERESIS,
+    enterSideAt: balancedWidth + OPTION_DOCK_HYSTERESIS,
+    leaveSideAt: balancedWidth - OPTION_DOCK_HYSTERESIS,
   };
 }
 
@@ -39,15 +39,15 @@ export function resolveAutoOptionDock({
   optionPanelCollapsed,
   currentDock,
 }: ResolveAutoOptionDockInput): PreviewOptionDock {
-  const { enterRightAt, leaveRightAt } = optionDockThresholds({
+  const { enterSideAt, leaveSideAt } = optionDockThresholds({
     optionPanelWidth,
     optionPanelCollapsed,
   });
 
-  if (currentDock === 'right') {
-    return workspaceWidth <= leaveRightAt ? 'bottom' : 'right';
+  if (currentDock === 'left') {
+    return workspaceWidth <= leaveSideAt ? 'bottom' : 'left';
   }
-  return workspaceWidth >= enterRightAt ? 'right' : 'bottom';
+  return workspaceWidth >= enterSideAt ? 'left' : 'bottom';
 }
 
 interface ChartPreviewGeometryInput {

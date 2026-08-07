@@ -11,16 +11,16 @@ describe('차트 미리보기 반응형 레이아웃', () => {
       optionPanelWidth: 400,
       optionPanelCollapsed: false,
     })).toEqual({
-      enterRightAt: 961,
-      leaveRightAt: 881,
+      enterSideAt: 961,
+      leaveSideAt: 881,
     });
 
     expect(optionDockThresholds({
       optionPanelWidth: 400,
       optionPanelCollapsed: true,
     })).toEqual({
-      enterRightAt: 600,
-      leaveRightAt: 520,
+      enterSideAt: 600,
+      leaveSideAt: 520,
     });
   });
 
@@ -28,9 +28,9 @@ describe('차트 미리보기 반응형 레이아웃', () => {
     const base = { optionPanelWidth: 400, optionPanelCollapsed: false };
 
     expect(resolveAutoOptionDock({ ...base, workspaceWidth: 960, currentDock: 'bottom' })).toBe('bottom');
-    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 961, currentDock: 'bottom' })).toBe('right');
-    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 882, currentDock: 'right' })).toBe('right');
-    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 881, currentDock: 'right' })).toBe('bottom');
+    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 961, currentDock: 'bottom' })).toBe('left');
+    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 882, currentDock: 'left' })).toBe('left');
+    expect(resolveAutoOptionDock({ ...base, workspaceWidth: 881, currentDock: 'left' })).toBe('bottom');
   });
 
   it('실제 미리보기 영역으로 가로·세로 화면 맞춤 배율을 계산한다', () => {

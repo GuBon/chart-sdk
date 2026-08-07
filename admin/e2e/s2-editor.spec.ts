@@ -24,6 +24,19 @@ async function openOptionTab(page: Page, name: string) {
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
 
+async function expectOptionPanelLeftOfPreview(page: Page) {
+  const optionEditor = page.getByTestId('visual-option-editor');
+  const previewPanel = page.getByTestId('chart-preview-panel');
+  await expect(optionEditor).toHaveCSS('border-right-width', '1px');
+  const [optionBox, previewBox] = await Promise.all([
+    optionEditor.boundingBox(),
+    previewPanel.boundingBox(),
+  ]);
+  expect(optionBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  expect(optionBox!.x).toBeLessThan(previewBox!.x);
+}
+
 async function openOptionSection(page: Page, name: string) {
   const panel = page.getByRole('tabpanel');
   const button = panel.getByRole('button', { name, exact: true });
@@ -344,7 +357,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
-  test('시각화 옵션 배치를 자동·오른쪽·아래쪽으로 선택하고 사용자 선택을 저장한다', async ({ page }) => {
+  test('시각화 옵션 배치를 자동·왼쪽·아래쪽으로 선택하고 사용자 선택을 저장한다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
 
     const workspace = page.getByTestId('visual-editor-workspace');
@@ -352,10 +365,10 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(dockSelect).toHaveValue('auto');
     await expect(workspace).toHaveAttribute('data-option-dock', 'bottom');
 
-    await dockSelect.selectOption('right');
-    await expect(workspace).toHaveAttribute('data-option-dock-preference', 'right');
-    await expect(workspace).toHaveAttribute('data-option-dock', 'right');
-    await expect(page.getByTestId('visual-option-editor')).toHaveCSS('border-left-width', '1px');
+    await dockSelect.selectOption('left');
+    await expect(workspace).toHaveAttribute('data-option-dock-preference', 'left');
+    await expect(workspace).toHaveAttribute('data-option-dock', 'left');
+    await expectOptionPanelLeftOfPreview(page);
 
     await dockSelect.selectOption('bottom');
     await expect(workspace).toHaveAttribute('data-option-dock', 'bottom');
@@ -427,6 +440,8 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     expect(dataRailBox?.x).toBeLessThan(builderRailBox?.x ?? 0);
     expect(builderRailBox?.x).toBeLessThan(expandedBox?.x ?? 0);
     expect(expandedBox?.width).toBeGreaterThanOrEqual(1200);
+    await expect(page.getByTestId('visual-editor-workspace')).toHaveAttribute('data-option-dock', 'left');
+    await expectOptionPanelLeftOfPreview(page);
     await expect(page.getByRole('button', { name: '너비 맞춤' })).toBeVisible();
 
     await page.getByRole('button', { name: '시각화 옵션 접기' }).click();

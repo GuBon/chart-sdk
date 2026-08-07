@@ -130,7 +130,9 @@ function useStoredOptionDockPreference(key: string) {
   const [restored, setRestored] = useState(false);
   useEffect(() => {
     const stored = window.localStorage.getItem(key);
-    if (stored === 'auto' || stored === 'right' || stored === 'bottom') setValue(stored);
+    // 오른쪽 옵션 패널을 사용하던 기존 설정은 새 왼쪽 배치로 자연스럽게 이전한다.
+    const normalized = stored === 'right' ? 'left' : stored;
+    if (normalized === 'auto' || normalized === 'left' || normalized === 'bottom') setValue(normalized);
     setRestored(true);
   }, [key]);
   useEffect(() => {
@@ -471,7 +473,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   });
   const resultsPanel = useResizable(288, 120, 560, 'up', 'chartsdk.editor.resultsHeight');
   const optionEditor = useResizable(280, 120, 720, 'up', 'chartsdk.editor.optionHeight');
-  const optionEditorWidth = useResizable(400, 320, 520, 'right', 'chartsdk.editor.optionWidth');
+  const optionEditorWidth = useResizable(400, 320, 520, 'left', 'chartsdk.editor.optionWidth');
   const rightPanelSize = rightPanel.size;
   const setRightPanelSize = rightPanel.setSize;
 
@@ -490,9 +492,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     return () => observer.disconnect();
   }, [optionEditorCollapsed, optionEditorWidth.size]);
 
-  // 오른쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 우측 작업영역을 먼저 확보한다.
+  // 왼쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 시각화 작업영역을 먼저 확보한다.
   useEffect(() => {
-    if (!optionDockPreferenceRestored || optionDockPreference !== 'right' || builderCollapsed) return;
+    if (!optionDockPreferenceRestored || optionDockPreference !== 'left' || builderCollapsed) return;
     const editorWidth = editorBodyRef.current?.clientWidth;
     if (editorWidth == null) return;
     const leftWidth = leftCollapsed ? 40 : leftPanel.size;
@@ -501,7 +503,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       const preferredWidth = optionDockThresholds({
         optionPanelWidth: optionEditorWidth.size,
         optionPanelCollapsed: optionEditorCollapsed,
-      }).enterRightAt;
+      }).enterSideAt;
       const targetWidth = Math.min(preferredWidth, availableWidth);
       if (rightPanelSize < targetWidth) setRightPanelSize(targetWidth);
     } else {
@@ -1142,6 +1144,79 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     ? `${datasources.find((datasource) => datasource.id === rawTable.datasourceId)?.name ?? `ds${rawTable.datasourceId}`} · ${rawTable.schema}.${rawTable.name}`
     : null;
 
+  const visualOptionEditor = optionEditorCollapsed ? (
+    <button
+      type="button"
+      onClick={() => setOptionEditorCollapsed(false)}
+      className={actualOptionDock === 'left'
+        ? 'flex w-10 shrink-0 flex-col items-center justify-center gap-1.5 border-r border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'
+        : 'flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'}
+    >
+      <ChevronUp className={`size-3.5 ${actualOptionDock === 'left' ? 'rotate-90' : ''}`} />
+      <span className={actualOptionDock === 'left' ? '[writing-mode:vertical-rl]' : ''}>시각화 옵션 펼치기</span>
+    </button>
+  ) : (
+    <div
+      data-testid="visual-option-editor"
+      style={actualOptionDock === 'left'
+        ? { width: optionEditorWidth.size }
+        : { height: optionEditor.size, maxHeight: '50%' }}
+      className={actualOptionDock === 'left'
+        ? 'min-h-0 shrink-0 overflow-y-auto border-r border-border'
+        : 'shrink-0 overflow-y-auto border-t border-border'}
+    >
+      <OptionPanel
+        chartType={chartType}
+        options={options}
+        builderConfig={builder}
+        columns={resultKind === 'chart' ? result?.columns ?? [] : []}
+        rows={resultKind === 'chart' ? result?.rows ?? [] : []}
+        hasResult={resultKind === 'chart' && !!result}
+        dockPreference={optionDockPreference}
+        actualDock={actualOptionDock}
+        onChangeDockPreference={setOptionDockPreference}
+        mapViewportSession={mapViewportSession}
+        canSaveMapViewport={canSaveMapViewport}
+        canResetMapViewport={canResetMapViewport}
+        savingMapViewport={saving}
+        onSaveMapViewport={saveMapViewport}
+        onResetMapViewport={resetMapViewport}
+        onMapViewportSelectMode={(mode: MapViewportMode) => {
+          if (mode === 'manual') setColorPicking(false);
+          dispatchMapViewport({ type: 'selectPanel', mode });
+        }}
+        onMapViewportChange={(viewport: MapViewport) => {
+          setColorPicking(false);
+          dispatchMapViewport({ type: 'apply', viewport });
+          setDirty(true);
+        }}
+        colorSelection={colorSelection}
+        colorPicking={colorPicking}
+        computedAt={computedAt}
+        refreshing={refreshing}
+        refreshError={refreshError}
+        refreshDisabledReason={savedId == null
+          ? '차트를 저장한 뒤 갱신할 수 있습니다.'
+          : hasUnsavedChanges
+            ? '변경사항을 저장한 뒤 갱신하세요.'
+            : null}
+        onRefreshNow={refreshNow}
+        onColorSelectionChange={setColorSelection}
+        onColorPickingChange={changeColorPicking}
+        onCollapse={() => setOptionEditorCollapsed(true)}
+        onChangeChartType={changeChartType}
+        onChangeOptions={changeOptions}
+      />
+    </div>
+  );
+
+  const visualOptionDivider = !optionEditorCollapsed && (
+    <ResizeHandle
+      dir={actualOptionDock === 'left' ? 'left' : 'up'}
+      onPointerDown={actualOptionDock === 'left' ? optionEditorWidth.onPointerDown : optionEditor.onPointerDown}
+    />
+  );
+
   return (
     <>
       {/* Top Bar — 편집 헤더 */}
@@ -1305,7 +1380,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           style={builderCollapsed ? { flex: '1 1 0%', width: 'auto' } : { width: rightPanel.size }}
           className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-border bg-bg-panel"
         >
-          <div className={`flex min-h-0 flex-1 ${actualOptionDock === 'right' ? 'flex-row' : 'flex-col'}`}>
+          <div className={`flex min-h-0 flex-1 ${actualOptionDock === 'left' ? 'flex-row' : 'flex-col'}`}>
+            {actualOptionDock === 'left' && visualOptionEditor}
+            {actualOptionDock === 'left' && visualOptionDivider}
+
             <div className="min-h-[180px] min-w-0 flex-1">
               <ChartPreviewPanel
                 option={option}
@@ -1339,78 +1417,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 onChangeOptions={changeOptions}
               />
             </div>
-
-            {optionEditorCollapsed ? (
-              <button
-                type="button"
-                onClick={() => setOptionEditorCollapsed(false)}
-                className={actualOptionDock === 'right'
-                  ? 'flex w-10 shrink-0 flex-col items-center justify-center gap-1.5 border-l border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'
-                  : 'flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'}
-              >
-                <ChevronUp className={`size-3.5 ${actualOptionDock === 'right' ? '-rotate-90' : ''}`} />
-                <span className={actualOptionDock === 'right' ? '[writing-mode:vertical-rl]' : ''}>시각화 옵션 펼치기</span>
-              </button>
-            ) : (
-              <>
-                <ResizeHandle
-                  dir={actualOptionDock === 'right' ? 'right' : 'up'}
-                  onPointerDown={actualOptionDock === 'right' ? optionEditorWidth.onPointerDown : optionEditor.onPointerDown}
-                />
-                <div
-                  data-testid="visual-option-editor"
-                  style={actualOptionDock === 'right'
-                    ? { width: optionEditorWidth.size }
-                    : { height: optionEditor.size, maxHeight: '50%' }}
-                  className={actualOptionDock === 'right'
-                    ? 'min-h-0 shrink-0 overflow-y-auto border-l border-border'
-                    : 'shrink-0 overflow-y-auto border-t border-border'}
-                >
-                <OptionPanel
-                  chartType={chartType}
-                  options={options}
-                  builderConfig={builder}
-                  columns={resultKind === 'chart' ? result?.columns ?? [] : []}
-                  rows={resultKind === 'chart' ? result?.rows ?? [] : []}
-                  hasResult={resultKind === 'chart' && !!result}
-                  dockPreference={optionDockPreference}
-                  actualDock={actualOptionDock}
-                  onChangeDockPreference={setOptionDockPreference}
-                  mapViewportSession={mapViewportSession}
-                  canSaveMapViewport={canSaveMapViewport}
-                  canResetMapViewport={canResetMapViewport}
-                  savingMapViewport={saving}
-                  onSaveMapViewport={saveMapViewport}
-                  onResetMapViewport={resetMapViewport}
-                  onMapViewportSelectMode={(mode: MapViewportMode) => {
-                    if (mode === 'manual') setColorPicking(false);
-                    dispatchMapViewport({ type: 'selectPanel', mode });
-                  }}
-                  onMapViewportChange={(viewport: MapViewport) => {
-                    setColorPicking(false);
-                    dispatchMapViewport({ type: 'apply', viewport });
-                    setDirty(true);
-                  }}
-                  colorSelection={colorSelection}
-                  colorPicking={colorPicking}
-                  computedAt={computedAt}
-                  refreshing={refreshing}
-                  refreshError={refreshError}
-                  refreshDisabledReason={savedId == null
-                    ? '차트를 저장한 뒤 갱신할 수 있습니다.'
-                    : hasUnsavedChanges
-                      ? '변경사항을 저장한 뒤 갱신하세요.'
-                      : null}
-                  onRefreshNow={refreshNow}
-                  onColorSelectionChange={setColorSelection}
-                  onColorPickingChange={changeColorPicking}
-                  onCollapse={() => setOptionEditorCollapsed(true)}
-                  onChangeChartType={changeChartType}
-                  onChangeOptions={changeOptions}
-                />
-                </div>
-              </>
-            )}
+            {actualOptionDock === 'bottom' && visualOptionDivider}
+            {actualOptionDock === 'bottom' && visualOptionEditor}
           </div>
         </aside>
       </div>

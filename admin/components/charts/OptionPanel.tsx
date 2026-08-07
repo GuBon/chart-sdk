@@ -41,7 +41,7 @@ import { OptionControl, TypographyPolicy, autoTypographySizeOf } from './OptionC
 import { MapViewportControl } from './MapViewportControl';
 import { staticColorSelections } from '@/lib/chartColorSelection';
 
-export type OptionDockPreference = 'auto' | 'right' | 'bottom';
+export type OptionDockPreference = 'auto' | 'left' | 'bottom';
 export type OptionDock = Exclude<OptionDockPreference, 'auto'>;
 
 interface Props {
@@ -292,12 +292,12 @@ export function OptionPanel({
             data-testid="option-dock-select"
             aria-label="옵션 패널 배치"
             title={dockPreference === 'auto'
-              ? `자동 배치 · 현재 ${actualDock === 'right' ? '오른쪽' : '아래쪽'}`
-              : `${actualDock === 'right' ? '오른쪽' : '아래쪽'}에 고정됨`}
+              ? `자동 배치 · 현재 ${actualDock === 'left' ? '왼쪽' : '아래쪽'}`
+              : `${actualDock === 'left' ? '왼쪽' : '아래쪽'}에 고정됨`}
             value={dockPreference}
             options={[
               { value: 'auto', label: '자동' },
-              { value: 'right', label: '오른쪽 고정' },
+              { value: 'left', label: '왼쪽 고정' },
               { value: 'bottom', label: '아래쪽 고정' },
             ]}
             onChange={(event) => onChangeDockPreference(event.target.value as OptionDockPreference)}
