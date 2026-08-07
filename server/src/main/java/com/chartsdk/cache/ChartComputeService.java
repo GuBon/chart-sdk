@@ -21,7 +21,8 @@ import java.util.Set;
  */
 @Service
 public class ChartComputeService {
-    private static final int MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS = 3_600;
+    /** manual 차트 실행 시 표본 행 캐시 재사용 허용 시간. 저장 검증(ChartService)과 재계산이 같은 값을 쓴다. */
+    public static final int MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS = 3_600;
     private final JdbcTemplate jdbc;
     private final FederatedQueryRunner runner;
     private final ChartCacheService cache;

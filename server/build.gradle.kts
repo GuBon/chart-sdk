@@ -73,7 +73,7 @@ val verifyFlywayResources by tasks.registering {
     doLast {
         val sourceDirectory = file("../docs")
         val packagedDirectory = layout.buildDirectory.dir("resources/main/db/migration").get().asFile
-        val requiredMigration = "V9__colorbrewer_palettes.sql"
+        val requiredMigration = "V10__remove_ttl_refresh_mode.sql"
         val requiredCallback = "afterMigrate__runtime_grants.sql"
         val migrationPattern = Regex("V[0-9]+__.+\\.sql")
 

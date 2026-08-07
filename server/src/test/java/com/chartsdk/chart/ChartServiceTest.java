@@ -127,7 +127,7 @@ class ChartServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void batchPreviewRecomputesLiveChartsAndCachesOnlyManualExpectations() {
+    void batchPreviewRecomputesLiveChartsWithoutFetchingTheirSnapshots() {
         ChartDefinition manual = charts.previewDefinition(null, 12L);
         ChartDefinition live = new ChartDefinition(
                 24L, 1L, "SELECT category FROM sales", "bar",
@@ -144,9 +144,11 @@ class ChartServiceTest {
         Map<String, Object> previews = (Map<String, Object>) response.get("previews");
 
         assertThat(previews).containsKeys("12", "24");
+        // live 카드는 재계산 결과만 쓰므로 대형 JSONB 스냅샷을 배치 조회에서 읽지 않는다.
         verify(compute).cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null)));
+        assertThat((Map<String, Object>) previews.get("24"))
+                .containsEntry("computedAt", "2026-08-07T06:00:00Z");
         verify(compute).serve(24L, "live", 5, null);
-        verify(converter).convert(queryRows, "bar", Map.of(), Map.of(), "live");
     }
 
     @Test

@@ -27,6 +27,9 @@ import java.util.Set;
 
 @Service
 public class ChartService {
+    /** 목록 카드 1회 응답이 다루는 차트 상한(API 방어선). 목록 UI 자체는 8개/페이지로 조회한다. */
+    static final int MAX_PREVIEW_CARDS = 60;
+
     private final ChartRepository charts;
     private final CurrentUserProvider currentUser;
     private final QueryExecutor queries;
@@ -78,8 +81,11 @@ public class ChartService {
     public Map<String, Object> previews(String ids) {
         Map<String, Object> previews = new LinkedHashMap<>();
         Map<String, Object> errors = new LinkedHashMap<>();
-        List<Long> requested = parseIds(ids).stream().limit(60).toList();
+        List<Long> requested = parseIds(ids).stream().limit(MAX_PREVIEW_CARDS).toList();
         Map<Long, ChartDefinition> definitions = charts.previewDefinitions(ownerId(), requested);
+        // live 카드는 재계산 결과만 쓰고 실패 시 에러 카드가 되므로(스냅샷 폴백 없음 — 목록이 장애를
+        // 숨기지 않는다) 대형 JSONB 스냅샷을 배치 조회에서 아예 읽지 않는다. 목록 1회 요청의 live 재계산
+        // 수는 목록 UI 페이지 크기(8)가 자연 상한이다 — 별도 상한을 두지 않는다(이력 N19.1 재평가).
         Map<Long, ChartCacheExpectation> expectations = new LinkedHashMap<>();
         definitions.forEach((id, chart) -> {
             if (!"live".equals(chart.refreshMode())) {
@@ -87,20 +93,20 @@ public class ChartService {
             }
         });
         Map<Long, CachedChartRows> cached = compute.cachedCompatible(expectations);
-        requested.forEach((id) -> {
+        for (Long id : requested) {
             try {
-                // 목록 카드는 option만 필요하다. 최대 60개 카드 응답에 rows를 중복 싣지 않는다.
+                // 목록 카드는 option만 필요하다. 최대 MAX_PREVIEW_CARDS 개 응답에 rows를 중복 싣지 않는다.
                 ChartDefinition chart = definitions.get(id);
                 if (chart == null) {
                     errors.put(String.valueOf(id), "Chart not found.");
-                    return;
+                    continue;
                 }
                 CachedChartRows rows = "live".equals(chart.refreshMode())
                         ? compute.serve(chart.id(), chart.refreshMode(), chart.version(), chart.sampling())
                         : cached.get(id);
                 if (rows == null) {
                     errors.put(String.valueOf(id), "Preview snapshot is not ready.");
-                    return;
+                    continue;
                 }
                 previews.put(String.valueOf(id), previewPayload(chart, rows, false));
             } catch (ApiException e) {
@@ -108,7 +114,7 @@ public class ChartService {
             } catch (RuntimeException e) {
                 errors.put(String.valueOf(id), "Preview unavailable.");
             }
-        });
+        }
         return Map.of("previews", previews, "errors", errors);
     }
 
@@ -213,7 +219,8 @@ public class ChartService {
             Set<Long> expectedDatasources = configured.isEmpty()
                     ? Set.of(input.datasourceId()) : configured;
             Map<Long, Long> sourceVersions = runtimeVersions.snapshot(expectedDatasources);
-            int sampleCacheMaxAge = "live".equals(input.refreshMode()) ? 0 : 3_600;
+            int sampleCacheMaxAge = "live".equals(input.refreshMode())
+                    ? 0 : ChartComputeService.MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS;
             FederatedQueryRunner.BuiltResult built = runner.runBuilder(
                     input.datasourceId(), input.builderConfig(), chartType, false, sampleCacheMaxAge);
             String storedSql = SqlLiterals.inline(built.sql().text(), built.sql().params());
