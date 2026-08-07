@@ -48,7 +48,8 @@ public class EmbedChartService {
                 displayRows,
                 chart.chartType(),
                 chart.options(),
-                chart.builderConfig()
+                chart.builderConfig(),
+                chart.refreshMode()
         ));
         if (rows.sampling() != null) rows.sampling().putInto(response);
         return response;

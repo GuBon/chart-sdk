@@ -94,6 +94,16 @@ class ChartOptionConverterTest {
     }
 
     @Test
+    void liveRefreshModeAlwaysHidesTheManualSnapshotTimestamp() {
+        Map<String, Object> option = converter.convert(rows(), "bar", Map.of(
+                "refreshMode", "live",
+                "showComputedAt", true
+        ));
+
+        assertThat(option.get("__chartsdkShowComputedAt")).isEqualTo(false);
+    }
+
+    @Test
     void generatedMapAndHeatmapDefaultsUseTheFullSequentialPalette() throws Exception {
         Map<String, Map<String, Object>> byType = generatedDefaults();
         ChartOptionConverter defaultedConverter = new ChartOptionConverter(new OptionDefaults(byType));

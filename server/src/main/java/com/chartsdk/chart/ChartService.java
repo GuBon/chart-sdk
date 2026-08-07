@@ -81,8 +81,11 @@ public class ChartService {
         List<Long> requested = parseIds(ids).stream().limit(60).toList();
         Map<Long, ChartDefinition> definitions = charts.previewDefinitions(ownerId(), requested);
         Map<Long, ChartCacheExpectation> expectations = new LinkedHashMap<>();
-        definitions.forEach((id, chart) -> expectations.put(
-                id, new ChartCacheExpectation(chart.version(), chart.sampling())));
+        definitions.forEach((id, chart) -> {
+            if (!"live".equals(chart.refreshMode())) {
+                expectations.put(id, new ChartCacheExpectation(chart.version(), chart.sampling()));
+            }
+        });
         Map<Long, CachedChartRows> cached = compute.cachedCompatible(expectations);
         requested.forEach((id) -> {
             try {
@@ -92,7 +95,9 @@ public class ChartService {
                     errors.put(String.valueOf(id), "Chart not found.");
                     return;
                 }
-                CachedChartRows rows = cached.get(id);
+                CachedChartRows rows = "live".equals(chart.refreshMode())
+                        ? compute.serve(chart.id(), chart.refreshMode(), chart.version(), chart.sampling())
+                        : cached.get(id);
                 if (rows == null) {
                     errors.put(String.valueOf(id), "Preview snapshot is not ready.");
                     return;
@@ -170,7 +175,8 @@ public class ChartService {
                 displayRows,
                 chart.chartType(),
                 chart.options(),
-                chart.builderConfig()
+                chart.builderConfig(),
+                chart.refreshMode()
         ));
         if (includeRows) {
             response.put("columns", FieldDisplayNameResolver.displayColumns(

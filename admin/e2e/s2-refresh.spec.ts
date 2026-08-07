@@ -27,6 +27,8 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
       .toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: '캐시 사용', exact: true })).toHaveCount(0);
     await expect(page.getByText('캐시 유효 시간', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('switch', { name: '데이터 기준 시각 표시' })).toHaveCount(0);
+    await expect(page.getByTestId('chart-design-canvas').getByText(/데이터 기준/)).toHaveCount(0);
   });
 
   test('지금 갱신은 스냅샷 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {

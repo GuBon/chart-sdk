@@ -70,7 +70,8 @@ class ChartServiceTest {
                 .thenReturn(cached);
         when(compute.cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null))))
                 .thenReturn(Map.of(12L, cached));
-        when(converter.convert(queryRows, "bar", Map.of())).thenReturn(Map.of("series", List.of()));
+        when(converter.convert(queryRows, "bar", Map.of(), Map.of(), "manual"))
+                .thenReturn(Map.of("series", List.of()));
     }
 
     @Test
@@ -122,6 +123,30 @@ class ChartServiceTest {
         assertThat(errors).containsEntry("13", "Preview snapshot is not ready.");
         verify(compute, never()).serve(anyLong(), any(), anyInt(), any());
         verify(compute, never()).recompute(anyLong());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void batchPreviewRecomputesLiveChartsAndCachesOnlyManualExpectations() {
+        ChartDefinition manual = charts.previewDefinition(null, 12L);
+        ChartDefinition live = new ChartDefinition(
+                24L, 1L, "SELECT category FROM sales", "bar",
+                Map.of(), Map.of(), "live", 5, null);
+        CachedChartRows fresh = new CachedChartRows(
+                queryRows, Instant.parse("2026-08-07T06:00:00Z"));
+        when(charts.previewDefinitions(null, List.of(12L, 24L)))
+                .thenReturn(Map.of(12L, manual, 24L, live));
+        when(compute.serve(24L, "live", 5, null)).thenReturn(fresh);
+        when(converter.convert(queryRows, "bar", Map.of(), Map.of(), "live"))
+                .thenReturn(Map.of("series", List.of(), "__chartsdkShowComputedAt", false));
+
+        Map<String, Object> response = service.previews("12,24");
+        Map<String, Object> previews = (Map<String, Object>) response.get("previews");
+
+        assertThat(previews).containsKeys("12", "24");
+        verify(compute).cachedCompatible(Map.of(12L, new ChartCacheExpectation(3, null)));
+        verify(compute).serve(24L, "live", 5, null);
+        verify(converter).convert(queryRows, "bar", Map.of(), Map.of(), "live");
     }
 
     @Test

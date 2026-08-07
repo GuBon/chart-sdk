@@ -105,11 +105,27 @@ public class ChartOptionConverter {
         return convert(rows, chartType, options, Map.of());
     }
 
+    /**
+     * 클라이언트 제출 옵션 전용(run/run-builder/preview) — 편집기는 refresh_mode 컬럼 키까지 포함한
+     * 옵션 전체를 보내므로 여기서 꺼낸다. 저장된 차트 서빙은 컬럼값을 받는 5-인자 오버로드를 쓴다.
+     */
     public Map<String, Object> convert(
             QueryRows rows,
             String chartType,
             Map<String, Object> options,
             Map<String, Object> builderConfig
+    ) {
+        return convert(rows, chartType, options, builderConfig,
+                string(options == null ? null : options.get("refreshMode"), "manual"));
+    }
+
+    /** 저장된 차트 서빙 경로(단건 preview·목록·임베드) — refreshMode 는 mc_chart 컬럼값을 받는다. */
+    public Map<String, Object> convert(
+            QueryRows rows,
+            String chartType,
+            Map<String, Object> options,
+            Map<String, Object> builderConfig,
+            String refreshMode
     ) {
         Map<String, Object> storedOptions = options == null ? Map.of() : options;
         Map<String, Object> normalizedOptions = migrateLegacyInteractionOptions(
@@ -181,7 +197,8 @@ public class ChartOptionConverter {
         if (!seriesDisplayNames.isEmpty()) {
             o.put(FieldDisplayNameResolver.SERIES_DISPLAY_NAMES_KEY, seriesDisplayNames);
         }
-        o.put(SHOW_COMPUTED_AT_KEY, !Boolean.FALSE.equals(opt.get("showComputedAt")));
+        o.put(SHOW_COMPUTED_AT_KEY,
+                !"live".equals(refreshMode) && !Boolean.FALSE.equals(opt.get("showComputedAt")));
         o.put("__chartsdkValueFormat", Map.of(
                 "tooltip", string(map(opt.get("tooltip")).get("valueFormat"), "raw"),
                 "yAxis", string(map(opt.get("yAxis")).get("format"), "raw"),

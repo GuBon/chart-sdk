@@ -1142,10 +1142,14 @@ export function assembleOption(
   chartType: ChartType,
   options: Record<string, any>,
   builderConfig: Record<string, any> | null = null,
+  // 저장 차트 서빙 경로는 mc_chart 컬럼값을 명시적으로 넘긴다(서버 5-인자 convert 미러).
+  // 생략 시 클라이언트 제출 옵션에서 꺼낸다(run-builder/preview — 서버 4-인자 convert 미러).
+  refreshMode: string | null = null,
 ): Record<string, unknown> {
   // Java 변환기와 동일하게 저장 옵션 마이그레이션과 대분류 기본값 병합을 변환기 진입점에서 수행한다.
   // 호출자가 부분 저장 옵션을 넘겨도 MSW 미리보기와 실제 서버가 같은 결과를 내야 한다.
   const o = optionsWithDefaults(chartType as MajorType, options ?? {});
+  const resolvedRefreshMode = refreshMode ?? o.refreshMode;
   const fieldLabels = seriesDisplayNames(builderConfig, result.columns);
   const xField = String(builderConfig?.xAxis ?? '').trim();
   const fieldSnapshots = builderConfig?.fieldDisplayNames;
@@ -1208,7 +1212,7 @@ export function assembleOption(
     color: palette,
     backgroundColor: o.backgroundColor ?? '#ffffff',
     __chartsdkAutoColorMap: autoColorMap,
-    __chartsdkShowComputedAt: o.showComputedAt !== false,
+    __chartsdkShowComputedAt: resolvedRefreshMode !== 'live' && o.showComputedAt !== false,
     ...(Object.keys(fieldLabels).length > 0 ? { [SERIES_DISPLAY_NAMES_KEY]: fieldLabels } : {}),
     __chartsdkValueFormat: {
       tooltip: o.tooltip?.valueFormat ?? 'raw',

@@ -64,6 +64,11 @@ function computedAtFor(chartId: number): string {
   return computedAtByChart[chartId] ?? '2026-07-27T00:00:00.000Z';
 }
 
+// 저장 차트 서빙은 서버(5-인자 convert)처럼 refresh_mode 컬럼값을 assembleOption에 명시적으로 넘긴다.
+function storedRefreshMode(chart: { refreshMode?: unknown }): string | null {
+  return typeof chart.refreshMode === 'string' ? chart.refreshMode : null;
+}
+
 export const handlers = [
   // ── 차트 ──────────────────────────────────────────
   http.get('/api/v1/charts', ({ request }) => {
@@ -106,7 +111,7 @@ export const handlers = [
     const errors: Record<string, string> = {};
     for (const id of ids) {
       const saved = savedCharts[id] as
-        | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+        | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown }
         | undefined;
       const summary = chartList.find((c) => c.id === id);
       const chart = saved ?? (summary ? chartDetail(summary) : null);
@@ -121,7 +126,7 @@ export const handlers = [
         truncated: result.truncated,
         ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
         computedAt: computedAtFor(id),
-        option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
+        option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig, storedRefreshMode(chart)),
       };
     }
     return HttpResponse.json({ previews, errors });
@@ -136,7 +141,7 @@ export const handlers = [
 
     const chartId = Number(new URL(request.url).searchParams.get('chartId'));
     const saved = savedCharts[chartId] as
-      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown }
       | undefined;
     const summary = chartList.find((chart) => chart.id === chartId);
     const chart = saved ?? (summary ? chartDetail(summary) : null);
@@ -149,13 +154,13 @@ export const handlers = [
       truncated: result.truncated,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: computedAtFor(chartId),
-      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig, storedRefreshMode(chart)),
     });
   }),
   http.get('/api/v1/charts/:id/preview', ({ params }) => {
     const id = Number(params.id);
     const saved = savedCharts[id] as
-      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown> }
+      | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown }
       | undefined;
     const summary = chartList.find((c) => c.id === id);
     const chart = saved ?? (summary ? chartDetail(summary) : null);
@@ -170,7 +175,7 @@ export const handlers = [
       elapsedMs: result.elapsedMs,
       ...(result.sampling ? { sampling: result.sampling, approximate: result.sampling.approximate, sampleRate: result.sampleRate } : {}),
       computedAt: computedAtFor(id),
-      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig),
+      option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig, storedRefreshMode(chart)),
     });
   }),
   http.post('/api/v1/charts/:id/refresh', ({ params }) => {
