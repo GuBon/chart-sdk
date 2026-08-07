@@ -23,7 +23,6 @@ const EXTERNAL_OR_COMPOSITE_KEYS = new Set([
   'palettePreset',
   'colorMap',
   'refreshMode',
-  'cacheTtlSeconds',
   'refreshNow',
 ]);
 

@@ -35,8 +35,7 @@ describe('차트 종류별 편집 초안', () => {
     const barOptions = {
       ...defaultsFor('bar'),
       description: '공통 설명',
-      refreshMode: 'ttl',
-      cacheTtlSeconds: 600,
+      refreshMode: 'manual',
       bar: { width: 62, gap: 18 },
       title: '막대 제목',
     } as Options;
@@ -69,8 +68,7 @@ describe('차트 종류별 편집 초안', () => {
     expect(restored.options.bar).toMatchObject({ width: 62, gap: 18 });
     expect(restored.options.title).toBe('막대 제목');
     expect(restored.options.description).toBe('원형에서 바꾼 공통 설명');
-    expect(restored.options.refreshMode).toBe('ttl');
-    expect(restored.options.cacheTtlSeconds).toBe(600);
+    expect(restored.options.refreshMode).toBe('manual');
   });
 
   it('여러 차트를 방문해도 종류별 마지막 데이터와 옵션을 각각 유지한다', () => {

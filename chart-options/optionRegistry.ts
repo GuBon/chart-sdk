@@ -182,13 +182,6 @@ const FORMAT_CHOICES = [
   { value: 'percent',  label: '백분율 (%)' },
 ];
 
-const TTL_CHOICES = [
-  { value: 900,   label: '15분' },
-  { value: 3600,  label: '1시간' },
-  { value: 21600, label: '6시간' },
-  { value: 86400, label: '24시간' },
-];
-
 // ── 레지스트리 본체 ───────────────────────────────────────────────
 
 export const OPTION_REGISTRY: OptionDef[] = [
@@ -591,29 +584,23 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ── 데이터 갱신 ──
   {
     key: 'refreshMode', zone: 'common', section: '데이터 갱신', label: '갱신 모드',
-    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'ttl',
+    control: 'segment', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 'manual',
     storage: 'column', column: 'refresh_mode', echarts: '@none',
-    choices: [{ value: 'live', label: '항상 최신 조회' }, { value: 'ttl', label: '캐시 사용' }, { value: 'manual', label: '수동' }],
-    help: 'PRD 7.7 결과 캐싱',
-  },
-  {
-    key: 'cacheTtlSeconds', zone: 'common', section: '데이터 갱신', label: '캐시 유효 시간',
-    control: 'select', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: 3600,
-    storage: 'column', column: 'cache_ttl_seconds', echarts: '@none',
-    showIf: (o) => o.refreshMode === 'ttl', choices: TTL_CHOICES,
+    choices: [{ value: 'manual', label: '수동' }, { value: 'live', label: '항상 최신 조회' }],
+    help: '수동 스냅샷 또는 요청마다 최신 조회 중 하나를 선택합니다.',
   },
   {
     key: 'refreshNow', zone: 'common', section: '데이터 갱신', label: '지금 갱신',
     control: 'button', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], tier: 'T2',
     storage: 'none', echarts: '@none',
-    help: '저장된 차트 캐시를 즉시 다시 계산하고 마지막 계산 시각과 미리보기를 갱신합니다.',
+    help: '저장된 차트 스냅샷을 즉시 다시 계산하고 마지막 계산 시각과 미리보기를 갱신합니다.',
   },
   {
     key: 'showComputedAt', zone: 'common', section: '데이터 갱신', label: '데이터 기준 시각 표시',
     control: 'toggle', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'], default: true,
     showIf: (o) => o.refreshMode !== 'live',
     echarts: '@caption.computedAt',
-    help: 'S4 "데이터 기준 {시각}" 캡션 (캐시 모드일 때만)',
+    help: 'S4 "데이터 기준 {시각}" 캡션 (수동 모드일 때만)',
   },
 
   // ════════════════════════════ ZONE 2 · 좌표/축 ════════════════════════════

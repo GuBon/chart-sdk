@@ -8,6 +8,9 @@ const DATASOURCE_NAMES: Record<number, string> = {
 };
 const AUTHOR_NAMES = ['김건영', '이서현', '박지원'] as const;
 
+/** live 갱신 모드 시드 차트('월별 순이익'). e2e s2-refresh가 이 id로 진입해 live UI 계약을 검증한다. */
+export const LIVE_REFRESH_CHART_ID = 24;
+
 export const charts: ChartSummary[] = ([
   // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
   { id: 12, name: '월별 매출', description: '영업부 매출을 월 단위로 집계', chartType: 'bar', datasourceId: 2, updatedAt: '2026-06-10T09:30:00Z' },
@@ -252,8 +255,7 @@ export function chartDetail(summary: ChartSummary): Chart {
     sqlQuery: 'SELECT category, SUM(amount) AS total FROM sales GROUP BY category',
     builderConfig: { table: { datasourceId: summary.datasourceId, schema: 'public', name: 'sales' }, xAxis: 'category', xAxisBucket: null, yAxis: [{ column: 'amount', agg: 'sum' }], where: [], orderBy: null, sample: null },
     options: { legend: { show: true } },
-    refreshMode: 'ttl',
-    cacheTtlSeconds: 3600,
+    refreshMode: summary.id === LIVE_REFRESH_CHART_ID ? 'live' : 'manual',
     createdAt: '2026-06-01T10:00:00Z',
   };
 }

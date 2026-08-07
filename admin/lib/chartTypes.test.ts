@@ -32,12 +32,10 @@ describe('chart type presentation metadata', () => {
 
     const refreshMode = OPTION_REGISTRY.find((definition) => definition.key === 'refreshMode');
     expect(refreshMode?.choices).toEqual([
-      { value: 'live', label: '항상 최신 조회' },
-      { value: 'ttl', label: '캐시 사용' },
       { value: 'manual', label: '수동' },
+      { value: 'live', label: '항상 최신 조회' },
     ]);
-    expect(OPTION_REGISTRY.find((definition) => definition.key === 'cacheTtlSeconds')?.label)
-      .toBe('캐시 유효 시간');
+    expect(OPTION_REGISTRY.find((definition) => definition.key === 'cacheTtlSeconds')).toBeUndefined();
     expect(OPTION_REGISTRY.find((definition) => definition.key === 'line.areaOpacity')?.label)
       .toBe('영역 불투명도');
   });

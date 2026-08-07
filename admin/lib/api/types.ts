@@ -6,7 +6,7 @@ import type { SamplingMetadata, SamplingMode } from '@chartsdk/chart-options/sam
 export type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'boxplot' | 'heatmap' | 'map' | 'geoscatter';
 export type GeoSeriesType = 'map' | 'heatmap' | 'scatter' | 'effectScatter';
 export type DefineMode = 'builder' | 'sql';
-export type RefreshMode = 'live' | 'ttl' | 'manual';
+export type RefreshMode = 'live' | 'manual';
 
 export type ChartOptions = Record<string, unknown>;
 
@@ -160,7 +160,6 @@ export interface Chart {
   chartType: ChartType;
   options: ChartOptions;
   refreshMode: RefreshMode;
-  cacheTtlSeconds: number;
   createdAt: string;
   updatedAt: string;
 }

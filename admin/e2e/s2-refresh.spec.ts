@@ -15,8 +15,21 @@ async function openDataRefresh(page: Page) {
   return section.getByTestId('option-action-refreshNow');
 }
 
-test.describe('S2 저장 차트 캐시 갱신', () => {
-  test('지금 갱신은 캐시 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {
+test.describe('S2 저장 차트 스냅샷 갱신', () => {
+  test('데이터 탭은 수동·항상 최신 조회만 제공하고 저장된 live 모드를 복원한다', async ({ page }) => {
+    // 24 = mocks/seed.ts LIVE_REFRESH_CHART_ID('월별 순이익') — 시드에서 유일한 live 차트.
+    await page.goto('/charts/analytics-db/public/sales/24');
+    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await openDataRefresh(page);
+
+    await expect(page.getByRole('button', { name: '수동', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '항상 최신 조회', exact: true }))
+      .toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: '캐시 사용', exact: true })).toHaveCount(0);
+    await expect(page.getByText('캐시 유효 시간', { exact: true })).toHaveCount(0);
+  });
+
+  test('지금 갱신은 스냅샷 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     await expect(page.getByTestId('chart-design-canvas').getByText(/데이터 기준/)).toBeVisible();

@@ -7,7 +7,7 @@ import {
 import type { BuilderConfig, GeoSeriesType } from '@/lib/api';
 import { normalizeBuilderForChartType } from '@/lib/builder';
 
-const SHARED_OPTION_KEYS = ['description', 'refreshMode', 'cacheTtlSeconds'] as const;
+const SHARED_OPTION_KEYS = ['description', 'refreshMode'] as const;
 
 export interface ChartDataBindingDraft {
   xAxis: BuilderConfig['xAxis'];

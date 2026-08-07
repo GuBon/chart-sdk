@@ -68,7 +68,7 @@ import { OptionPanel, type OptionDock, type OptionDockPreference } from './Optio
 import { EmbedModal } from './EmbedModal';
 
 // optionRegistry storage='column' 키 (chartType 은 별도 state). 저장 시 options JSONB 에서 분리.
-const COLUMN_OPTION_KEYS = ['description', 'refreshMode', 'cacheTtlSeconds'] as const;
+const COLUMN_OPTION_KEYS = ['description', 'refreshMode'] as const;
 const LEFT_PANEL_DEFAULT_WIDTH = 320;
 const RIGHT_PANEL_DEFAULT_WIDTH = 440;
 const PANEL_COLLAPSE_THRESHOLD = 48;
@@ -380,7 +380,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         if (definitionResult.status === 'fulfilled') {
           const c = definitionResult.value;
           let restoredBuilder = migrateBuilderConfig(normalizeBuilder(c.builderConfig), c.datasourceId);
-          let restoredOptions = optionsWithDefaults(c.chartType, c.options);
+          let restoredOptions = optionsWithDefaults(c.chartType, {
+            ...c.options,
+            description: c.description ?? '',
+            refreshMode: c.refreshMode,
+          });
           if (c.chartType === 'map' || c.chartType === 'geoscatter') {
             restoredBuilder = normalizeBuilderForChartType({
               ...restoredBuilder,
@@ -876,29 +880,32 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         builderConfig: builder,
         chartType,
         options: jsonb,
-        refreshMode: (cols.refreshMode as RefreshMode) ?? 'ttl',
-        cacheTtlSeconds: Number(cols.cacheTtlSeconds ?? 3600),
+        refreshMode: (cols.refreshMode as RefreshMode) ?? 'manual',
         ...(savedId != null && savedVersion != null ? { version: savedVersion } : {}),
       };
       let persistedChartId = savedId;
+      let persistedRefreshMode = input.refreshMode;
       if (savedId == null) {
         const created = await chartsApi.create(input);
         persistedChartId = created.id;
+        persistedRefreshMode = created.refreshMode;
         setSavedId(created.id); // 이후 저장은 update — 중복 생성 방지, 임베드 버튼 활성화
         setSavedVersion(created.version);
         replaceEditorPath(chartEditPath(created.id, created.mainTable));
       } else {
         const updated = await chartsApi.update(savedId, input);
+        persistedRefreshMode = updated.refreshMode;
         setSavedVersion(updated.version);
         replaceEditorPath(chartEditPath(savedId, updated.mainTable));
       }
-      setOptions(optionsToSave);
+      const persistedOptions: Options = { ...optionsToSave, refreshMode: persistedRefreshMode };
+      setOptions(persistedOptions);
       const savedDefinition: EditorDefinitionSnapshot = {
         name: name.trim(),
         datasourceId: primaryDatasourceId,
         builder,
         chartType,
-        options: optionsToSave,
+        options: persistedOptions,
       };
       const savedPreview: EditorPreviewSnapshot = {
         result,
@@ -910,7 +917,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setSavedSnapshot(createEditorSnapshot(savedDefinition, savedPreview));
       dispatchMapViewport({
         type: 'saveGlobal',
-        viewport: normalizeMapViewport(optionsToSave.map?.viewport),
+        viewport: normalizeMapViewport(persistedOptions.map?.viewport),
       });
       setDirty(false);
       setToast('저장되었습니다');
