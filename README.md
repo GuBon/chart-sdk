@@ -31,7 +31,7 @@
 ## 개발
 
 ```bash
-# 필요 도구: Node >= 22, JDK 17
+# 필요 도구: Node >= 22, JDK 21
 npm install                 # 워크스페이스 의존성
 npm run gen:defaults        # chart-options/defaults.json 생성 (server가 로드)
 npm run dev                 # sdk.js 빌드·공개 경로 복사 후 admin (Next) 개발 서버

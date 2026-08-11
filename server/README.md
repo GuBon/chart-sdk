@@ -40,7 +40,7 @@ com.chartsdk
 
 ## 실행
 
-- JDK 17.
+- JDK 21.
 - Gradle Wrapper가 저장소에 포함돼 있다. macOS/Linux는 `./gradlew bootRun`, Windows PowerShell은 `.\gradlew.bat bootRun`을 사용한다.
 - DB 연결: 환경변수 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD` (기본값은 `application.yml` 참조).
 - 운영 Flyway 분리: `SPRING_FLYWAY_URL` · `SPRING_FLYWAY_USER` · `SPRING_FLYWAY_PASSWORD`. 미설정 시 runtime datasource 재사용.
