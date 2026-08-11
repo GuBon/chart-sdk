@@ -41,13 +41,16 @@ test.describe('S5 데이터소스 관리', () => {
 
     await page.getByRole('link', { name: 'sales' }).click();
     await expect(page).toHaveURL('/charts/analytics-db/public/sales?view=columns');
-    await expect(page.getByRole('heading', { name: 'sales', exact: true })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: '컬럼명' })).toBeVisible();
+    // 관계 제목은 데이터 표시 이름을 우선한다 — 실제 이름은 설명 줄과 컬럼 표의 '실제 이름' 열로 확인한다.
+    await expect(page.getByRole('heading', { name: '매출', exact: true })).toBeVisible();
+    await expect(page.getByText('public.sales · TABLE')).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '표시 이름' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '실제 이름' })).toBeVisible();
 
     await page.getByRole('navigation', { name: '테이블 보기' }).getByRole('link', { name: '차트', exact: true }).click();
     await expect(page).toHaveURL('/charts/analytics-db/public/sales');
     await expect(page.locator('#chart-type-filter')).toBeVisible();
-    const visitorChart = page.locator('div.group').filter({ hasText: '일별 방문자' });
+    const visitorChart = page.getByRole('article').filter({ hasText: '일별 방문자' });
     await expect(visitorChart).toBeVisible();
     await expect(visitorChart.getByRole('link', { name: '편집' }))
       .toHaveAttribute('href', '/charts/analytics-db/public/sales/13');
