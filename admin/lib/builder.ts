@@ -532,14 +532,7 @@ export function normalizeBuilderForChartType(cfg: BuilderConfig, chartType: Char
   };
 }
 
-/** X/Y 없이 조건·정렬된 행만 조회하는 실행 전용 모드. 공간 차트의 전용 컬럼 구성은 차트 모드로 본다. */
-export function isTableQueryMode(cfg: BuilderConfig, chartType: ChartType): boolean {
-  const spatialGeoPoint = usesGeoPointInput(cfg, chartType) && cfg.geoPoint?.mode === 'spatial';
-  const spatialGeoArea = chartType === 'map' && geoSeriesTypeFor(cfg, chartType) === 'map' && cfg.geoArea?.mode === 'spatial';
-  return !spatialGeoPoint && !spatialGeoArea && !cfg.xAxis && cfg.yAxis.length === 0;
-}
-
-/** 테이블·조인·공통 옵션 검증. 차트 모양(X/Y)과 조회 전용 정렬 검증은 호출자가 이어서 수행한다. */
+/** 테이블·조인·공통 옵션 검증. 차트 모양(X/Y) 검증은 호출자가 이어서 수행한다. */
 function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[]): string | null {
   if (!cfg.table) return '테이블을 선택하세요.';
   if (cfg.sample?.rate != null && (cfg.sample.rate < MIN_SAMPLE_RATE || cfg.sample.rate > MAX_SAMPLE_RATE ||
@@ -586,19 +579,9 @@ function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[])
   return null;
 }
 
-/** 실행 버튼 검증. 완성된 차트 구성 또는 X/Y가 모두 없는 테이블 조회 구성을 허용한다. */
+/** 실행 버튼 검증. 차트별 필수 축 또는 공간 전용 컬럼 구성이 완성된 경우만 허용한다. */
 export function builderExecutionIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
-  const commonIssue = builderCommonValidationIssue(cfg, tables);
-  if (commonIssue) return commonIssue;
-  if (!isTableQueryMode(cfg, chartType)) return builderValidationIssue(cfg, chartType, tables);
-
-  if (cfg.orderBy) {
-    const prefix = 'column:';
-    if (!cfg.orderBy.target.startsWith(prefix)) return '조회 정렬 기준으로 원본 컬럼을 선택하세요.';
-    const column = cfg.orderBy.target.slice(prefix.length);
-    if (!column || !columnType(column, cfg, tables)) return '조회 정렬 컬럼을 선택하세요.';
-  }
-  return null;
+  return builderValidationIssue(cfg, chartType, tables);
 }
 
 export function builderValidationIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {

@@ -112,6 +112,14 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(defineModeTabs).toBeVisible();
     await expect(defineModeTabs.getByRole('tab', { name: '차트 구성' })).toHaveAttribute('aria-selected', 'true');
     await expect(defineModeTabs.getByRole('tab', { name: /SQL/ })).toBeDisabled();
+    await expect(page.getByTestId('schema-sidebar')).toBeVisible();
+    await expect(page.getByTestId('chart-preview-panel')).toBeVisible();
+    await expect(page.getByTestId('visual-option-editor')).toBeVisible();
+    await expect(page.getByTestId('visual-workspace-lock')).toBeVisible();
+    await expect(page.getByTestId('visual-editor-content')).toHaveAttribute('aria-hidden', 'true');
+    await expect(page.getByText('먼저 차트를 실행하세요')).toBeVisible();
+    await expect(page.getByRole('button', { name: '차트 미리보기 접기' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 접기' })).toHaveCount(0);
 
     // 테이블 목록과 차트 미리보기·옵션 패널의 기본 폭
     const sidePanels = page.locator('aside');
@@ -119,7 +127,35 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(sidePanels.last()).toHaveCSS('width', '440px');
   });
 
-  test('미리보기는 720px을 넘어 확장되고 끝까지 줄인 데이터·노코드 패널은 자동으로 접힌다', async ({ page }) => {
+  test('차트 종류와 데이터 구성 그룹을 독립적으로 접고 실행 전에 중분류를 선택한다', async ({ page }) => {
+    await page.goto('/charts/new');
+
+    const chartTypeToggle = page.getByTestId('builder-chart-type-toggle');
+    const dataConfigToggle = page.getByTestId('builder-data-config-toggle');
+    const chartTypeContent = page.getByTestId('builder-chart-type-content');
+    const dataConfigContent = page.getByTestId('builder-data-config-content');
+
+    await expect(chartTypeToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(dataConfigToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(chartTypeContent.getByRole('button', { name: '막대', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await chartTypeContent.getByRole('button', { name: '누적', exact: true }).click();
+    await expect(chartTypeToggle).toContainText('막대 · 누적');
+
+    await chartTypeToggle.click();
+    await expect(chartTypeToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(chartTypeContent).toHaveCount(0);
+    await expect(dataConfigContent).toBeVisible();
+
+    await dataConfigToggle.click();
+    await expect(dataConfigToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(dataConfigContent).toHaveCount(0);
+
+    await chartTypeToggle.click();
+    await expect(chartTypeContent).toBeVisible();
+    await expect(dataConfigContent).toHaveCount(0);
+  });
+
+  test('미리보기는 720px을 넘어 확장되고 구성 패널은 최소 폭 전에, 데이터 패널은 끝에서 접힌다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
 
     const previewWorkspace = page.getByTestId('visual-editor-workspace');
@@ -136,8 +172,13 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.mouse.move(previewHandle.x - (targetPreviewWidth - previewBefore.width), previewHandle.y + previewHandle.height / 2, { steps: 8 });
     await page.mouse.up();
     expect((await previewWorkspace.boundingBox())?.width).toBeGreaterThan(720);
+    await expect(builderWorkspace).toHaveCount(0);
+    const builderRail = page.getByTestId('data-builder-workspace-rail');
+    await expect(builderRail).toBeVisible();
+    await builderRail.click();
     await expect(builderWorkspace).toBeVisible();
 
+    verticalHandles = page.locator('[role="separator"][aria-orientation="vertical"]');
     const builderBox = await builderWorkspace.boundingBox();
     const expandedPreviewHandle = await verticalHandles.last().boundingBox();
     if (!builderBox || !expandedPreviewHandle) throw new Error('노코드 패널 경계를 찾을 수 없습니다.');
@@ -146,9 +187,9 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.mouse.move(builderBox.x + 24, expandedPreviewHandle.y + expandedPreviewHandle.height / 2, { steps: 8 });
     await page.mouse.up();
     await expect(builderWorkspace).toHaveCount(0);
-    await expect(page.getByTestId('data-builder-workspace-rail')).toBeVisible();
+    await expect(builderRail).toBeVisible();
 
-    await page.getByTestId('data-builder-workspace-rail').click();
+    await builderRail.click();
     await expect(builderWorkspace).toBeVisible();
     verticalHandles = page.locator('[role="separator"][aria-orientation="vertical"]');
     const datasourcePanel = page.getByTestId('schema-sidebar');
@@ -295,17 +336,27 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
   test('실행 시 집계 결과표와 생성 SQL이 채워진다', async ({ page }) => {
     await page.goto('/charts/new');
+    await expect(page.getByTestId('visual-workspace-lock')).toBeVisible();
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
 
     // 탐색기에서 테이블 선택 → 원본 데이터 자동 로드
     await selectBase(page, 'sales public');
+    await expect(page.getByRole('button', { name: '실행', exact: true })).toBeDisabled();
+    await expect(page.getByText('X축 컬럼을 선택하세요.', { exact: true })).toBeVisible();
     await expect(page.getByTestId('result-count-summary')).toHaveText(
       /원본 전체 약 500,000,000행 · 미리보기 12행/,
     );
 
     await useXAxis(page, 'category');
+    await expect(page.getByRole('button', { name: '실행', exact: true })).toBeDisabled();
+    await expect(page.getByText('Y축을 1개 이상 추가하세요.', { exact: true })).toBeVisible();
     await addValue(page);
+    await expect(page.getByRole('button', { name: '실행', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '실행', exact: true }).click();
+    await expect(page.getByTestId('visual-workspace-lock')).toHaveCount(0);
+    await expect(page.getByTestId('visual-editor-content')).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(page.getByTestId('chart-preview-panel')).toBeVisible();
+    await expect(page.getByTestId('visual-option-editor')).toBeVisible();
 
     // 집계 결과(실행 결과 탭) — 카테고리 라벨 표시
     await expect(page.getByRole('cell', { name: '의류', exact: true }).first()).toBeVisible();
@@ -348,12 +399,14 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // ECharts 캔버스 렌더
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
-    // 옵션 패널 + 대분류 선택기
+    // 차트 종류 선택기는 차트 구성에 있고 시각화 옵션에서는 중복 노출하지 않는다.
     await expect(page.getByText('시각화 옵션')).toBeVisible();
-    await expect(page.getByRole('button', { name: '원형' })).toBeVisible();
+    const chartTypeGroup = page.getByTestId('builder-chart-type-group');
+    await expect(chartTypeGroup.getByRole('button', { name: '원형', exact: true })).toBeVisible();
+    await expect(page.getByTestId('visual-option-editor').getByRole('button', { name: '원형', exact: true })).toHaveCount(0);
 
     // 대분류 전환(막대→원형) 후에도 미리보기 유지
-    await page.getByRole('button', { name: '원형', exact: true }).click();
+    await chartTypeGroup.getByRole('button', { name: '원형', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   });
 
@@ -362,24 +415,33 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     const workspace = page.getByTestId('visual-editor-workspace');
     const dockSelect = page.getByRole('combobox', { name: '옵션 패널 배치' });
+    await expect(page.getByTestId('visual-workspace-lock')).toHaveCount(0);
     await expect(dockSelect).toHaveValue('auto');
     await expect(workspace).toHaveAttribute('data-option-dock', 'bottom');
+    await expect(page.getByTestId('chart-preview-panel')).toBeVisible();
+    await expect(page.getByTestId('visual-option-editor')).toBeVisible();
+    await expect(page.getByRole('button', { name: '차트 미리보기 접기' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 접기' })).toHaveCount(0);
 
     await dockSelect.selectOption('left');
     await expect(workspace).toHaveAttribute('data-option-dock-preference', 'left');
     await expect(workspace).toHaveAttribute('data-option-dock', 'left');
     await expectOptionPanelLeftOfPreview(page);
+    await expect(page.getByRole('button', { name: '차트 미리보기 접기' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 접기' })).toHaveCount(0);
 
     await dockSelect.selectOption('bottom');
     await expect(workspace).toHaveAttribute('data-option-dock', 'bottom');
     await expect(page.getByTestId('visual-option-editor')).toHaveCSS('border-top-width', '1px');
+    await expect(page.getByRole('button', { name: '차트 미리보기 접기' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 접기' })).toHaveCount(0);
 
     await page.reload();
     await expect(page.getByRole('combobox', { name: '옵션 패널 배치' })).toHaveValue('bottom');
     await expect(page.getByTestId('visual-editor-workspace')).toHaveAttribute('data-option-dock', 'bottom');
   });
 
-  test('가로·세로 프리셋과 직접 크기 편집, 패널별 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
+  test('가로·세로 프리셋과 직접 크기 편집, 데이터·구성 패널 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
@@ -444,9 +506,9 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expectOptionPanelLeftOfPreview(page);
     await expect(page.getByRole('button', { name: '너비 맞춤' })).toBeVisible();
 
-    await page.getByRole('button', { name: '시각화 옵션 접기' }).click();
-    await expect(page.getByTestId('visual-option-editor')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '시각화 옵션 펼치기' })).toBeVisible();
+    await expect(page.getByTestId('visual-option-editor')).toBeVisible();
+    await expect(page.getByRole('button', { name: '시각화 옵션 접기' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '시각화 옵션 펼치기' })).toHaveCount(0);
 
     const focusPreviewButton = page.getByRole('button', { name: '전체 화면', exact: true });
     await focusPreviewButton.click();
@@ -465,7 +527,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.reload();
     await expect(page.getByTestId('schema-sidebar')).toHaveCount(0);
     await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
-    await expect(page.getByTestId('visual-option-editor')).toHaveCount(0);
+    await expect(page.getByTestId('visual-option-editor')).toBeVisible();
     await expect(page.getByTestId('schema-sidebar-rail')).toBeVisible();
     await expect(page.getByTestId('data-builder-workspace-rail')).toBeVisible();
 
@@ -905,7 +967,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // 차트 12 base=sales-db(ds2) → 왼쪽 목록에서 ds2 의 users 로 변경해도 표본 설정 유지.
     await selectBase(page, /users/);
     await page.getByRole('button', { name: '변경', exact: true }).click();
-    // 기준 테이블을 바꾸면 축이 초기화되어 조회 전용 모드가 된다. 새 축을 구성하면 보존된 표본 설정이 다시 보인다.
+    // 기준 테이블을 바꾸면 축이 초기화되어 실행이 차단된다. 새 축을 구성해도 보존된 표본 설정은 유지된다.
     await useXAxis(page, 'region');
     await addValue(page);
     await useSumValue(page, 'id');

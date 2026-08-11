@@ -188,12 +188,15 @@ export const OPTION_REGISTRY: OptionDef[] = [
   // ════════════════════════════ ZONE 1 · 공통 ════════════════════════════
 
   // ── 기본 ──
+  // chartType·variant 의 편집 UI 는 Admin 의 ChartTypeSelector(중앙 「차트 종류」 그룹)가 단독으로 소유한다.
+  // 시각화 옵션 패널은 visualOptionDefinitions 로 이 두 키를 걸러내므로 OptionControl 에 렌더러를 두지 않는다.
+  // 여기 정의는 저장 계약(chart_type 컬럼 / options.variant)과 서버 변환기 매핑을 위해 유지한다.
   {
     key: 'chartType', zone: 'common', section: '기본', label: '대분류',
     control: 'iconGrid', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     storage: 'column', column: 'chart_type', default: 'bar', echarts: '@series.type',
     choices: MAJOR_TYPE_CHOICES,
-    help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 옵션 패널). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
+    help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 차트 종류 그룹). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
   },
   {
     key: 'variant', zone: 'common', section: '기본', label: '중분류',

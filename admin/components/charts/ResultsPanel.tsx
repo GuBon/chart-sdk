@@ -1,8 +1,13 @@
 'use client';
 
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { QueryResult } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { dataTablePreviewSummary } from '@/lib/dataTablePreview';
+import {
+  flexRowMinimumWidth,
+  RESULTS_HEADER_FLEXIBLE_ITEM_MIN_WIDTH,
+} from '@/lib/chartEditorLayout';
 import {
   confidenceBadgeText,
   normalizeSampling,
@@ -24,6 +29,7 @@ interface Props {
   error: string | null;
   rawTableLabel: string | null;
   estimatedOriginalRowCount?: number | null;
+  onMinimumWidthChange?: (width: number) => void;
 }
 
 export function ResultsPanel({
@@ -35,25 +41,83 @@ export function ResultsPanel({
   error,
   rawTableLabel,
   estimatedOriginalRowCount,
+  onMinimumWidthChange,
 }: Props) {
+  const headerRef = useRef<HTMLDivElement>(null);
   const active = tab === 'result' ? result : raw;
   const sampling = active ? normalizeSampling(active) : undefined;
   const previewSummary = active
     ? dataTablePreviewSummary(active, tab, estimatedOriginalRowCount)
     : null;
 
+  const reportMinimumWidth = useCallback(() => {
+    const header = headerRef.current;
+    if (!header || !onMinimumWidthChange) return;
+
+    const styles = window.getComputedStyle(header);
+    const itemWidths = Array.from(header.children, (child) => {
+      const element = child as HTMLElement;
+      const intrinsicWidth = Math.max(element.scrollWidth, element.getBoundingClientRect().width);
+      return element.dataset.minimumWidth === 'flexible'
+        ? Math.min(intrinsicWidth, RESULTS_HEADER_FLEXIBLE_ITEM_MIN_WIDTH)
+        : intrinsicWidth;
+    });
+
+    onMinimumWidthChange(flexRowMinimumWidth({
+      itemWidths,
+      gap: Number.parseFloat(styles.columnGap) || 0,
+      paddingStart: Number.parseFloat(styles.paddingInlineStart) || 0,
+      paddingEnd: Number.parseFloat(styles.paddingInlineEnd) || 0,
+    }));
+  }, [onMinimumWidthChange]);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!header || !onMinimumWidthChange) return;
+
+    reportMinimumWidth();
+    const resizeObserver = new ResizeObserver(reportMinimumWidth);
+    resizeObserver.observe(header);
+    Array.from(header.children).forEach((child) => resizeObserver.observe(child));
+
+    const mutationObserver = new MutationObserver(reportMinimumWidth);
+    mutationObserver.observe(header, { childList: true, characterData: true, subtree: true });
+
+    let cancelled = false;
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) reportMinimumWidth();
+    });
+
+    return () => {
+      cancelled = true;
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [onMinimumWidthChange, reportMinimumWidth]);
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border px-4">
-        <div className="flex gap-1 rounded-md bg-muted p-0.5">
+      <div
+        ref={headerRef}
+        data-testid="results-panel-header"
+        className="flex h-[52px] shrink-0 items-center gap-3 overflow-hidden border-b border-border px-4"
+      >
+        <div data-minimum-width="fixed" className="flex shrink-0 gap-1 whitespace-nowrap rounded-md bg-muted p-0.5">
           <Tab label="원본 데이터" active={tab === 'raw'} onClick={() => onTab('raw')} />
           <Tab label="실행 결과" active={tab === 'result'} onClick={() => onTab('result')} />
         </div>
         {tab === 'raw' && rawTableLabel && (
-          <span className="min-w-0 truncate text-xs font-bold text-text-secondary" title={rawTableLabel}>{rawTableLabel}</span>
+          <span
+            data-minimum-width="flexible"
+            className="min-w-0 truncate whitespace-nowrap text-xs font-bold text-text-secondary"
+            title={rawTableLabel}
+          >
+            {rawTableLabel}
+          </span>
         )}
         {active && previewSummary && (
           <span
+            data-minimum-width="fixed"
             className="ml-auto shrink-0 whitespace-nowrap text-xs text-text-tertiary"
             data-testid="result-count-summary"
           >
@@ -66,7 +130,11 @@ export function ResultsPanel({
           </span>
         )}
         {sampling && (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary" data-testid="sample-badge">
+          <span
+            data-minimum-width="fixed"
+            className="shrink-0 whitespace-nowrap rounded bg-muted px-1.5 py-0.5 text-[11px] text-text-secondary"
+            data-testid="sample-badge"
+          >
             {sampling.approximate
               ? [
                   `${samplingMethodLabel(sampling.method)}${sampling.sampledRowCount !== undefined ? ` ${sampling.sampledRowCount.toLocaleString()}행` : ''}`,
@@ -97,7 +165,7 @@ export function ResultsPanel({
         ) : (
           <p className="p-4 text-[13px] text-text-tertiary">
             {tab === 'result'
-              ? '차트 구성을 완성하거나 축 없이 조건·정렬을 설정한 뒤 [실행]을 누르세요.'
+              ? '차트 구성을 완성한 뒤 [실행]을 누르세요.'
               : '왼쪽 데이터 패널에서 테이블을 선택하면 원본 데이터가 표시됩니다.'}
           </p>
         )}
@@ -124,7 +192,7 @@ function Tab({ label, active, onClick }: { label: string; active: boolean; onCli
       type="button"
       onClick={onClick}
       className={cn(
-        'rounded px-3 py-1 text-[13px] transition-colors',
+        'shrink-0 whitespace-nowrap rounded px-3 py-1 text-[13px] transition-colors',
         active ? 'bg-bg-panel font-medium text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary',
       )}
     >

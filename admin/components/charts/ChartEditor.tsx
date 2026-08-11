@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, ChevronUp, ChevronsRight, Plus, RotateCcw } from 'lucide-react';
+import { ChevronLeft, ChevronsRight, LockKeyhole, Plus, RotateCcw } from 'lucide-react';
 import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
 import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
@@ -16,7 +16,6 @@ import {
   dataPanelColumnSelectionIssue,
   emptyBuilder,
   emptyJoin,
-  isTableQueryMode,
   migrateBuilderConfig,
   normalizeBuilder,
   normalizeBuilderForChartType,
@@ -37,6 +36,14 @@ import {
   resolveChartTypeTransition,
   type ChartTypeDraftStore,
 } from '@/lib/chartTypeDrafts';
+import {
+  EDITOR_PANEL_LAYOUT,
+  maximumVisualWorkspaceWidth,
+  normalizeBuilderMinimumWidth,
+  projectedBuilderWidth,
+  resolveBuilderExpansion,
+  shouldCollapseBuilder,
+} from '@/lib/chartEditorLayout';
 import { optionDockThresholds, resolveAutoOptionDock } from '@/lib/chartPreviewLayout';
 import {
   cloneEditorSnapshot,
@@ -69,10 +76,6 @@ import { EmbedModal } from './EmbedModal';
 
 // optionRegistry storage='column' 키 (chartType 은 별도 state). 저장 시 options JSONB 에서 분리.
 const COLUMN_OPTION_KEYS = ['description', 'refreshMode'] as const;
-const LEFT_PANEL_DEFAULT_WIDTH = 320;
-const RIGHT_PANEL_DEFAULT_WIDTH = 440;
-const PANEL_COLLAPSE_THRESHOLD = 48;
-const PANEL_RESTORE_MIN_WIDTH = 200;
 const OPTION_DOCK_MANUAL_MIN_WIDTH = 640;
 
 /** mode=rows SQL에 실제로 참여하는 구성만 비교한다. 축·계열·표본 변경은 원본 미리보기를 무효화하지 않는다. */
@@ -111,33 +114,43 @@ function configuredNoCodeSettings(config: BuilderConfig): string[] {
   return settings;
 }
 
-function useStoredBoolean(key: string, initial: boolean) {
+function useStoredBoolean(key: string, initial: boolean, storageEnabled = true) {
   const [value, setValue] = useState(initial);
   const [restored, setRestored] = useState(false);
   useEffect(() => {
+    if (!storageEnabled) {
+      setValue(initial);
+      setRestored(true);
+      return;
+    }
     const stored = window.localStorage.getItem(key);
     if (stored === 'true' || stored === 'false') setValue(stored === 'true');
     setRestored(true);
-  }, [key]);
+  }, [initial, key, storageEnabled]);
   useEffect(() => {
-    if (restored) window.localStorage.setItem(key, String(value));
-  }, [key, restored, value]);
+    if (restored && storageEnabled) window.localStorage.setItem(key, String(value));
+  }, [key, restored, storageEnabled, value]);
   return [value, setValue] as const;
 }
 
-function useStoredOptionDockPreference(key: string) {
+function useStoredOptionDockPreference(key: string, storageEnabled = true) {
   const [value, setValue] = useState<OptionDockPreference>('auto');
   const [restored, setRestored] = useState(false);
   useEffect(() => {
+    if (!storageEnabled) {
+      setValue('auto');
+      setRestored(true);
+      return;
+    }
     const stored = window.localStorage.getItem(key);
     // 오른쪽 옵션 패널을 사용하던 기존 설정은 새 왼쪽 배치로 자연스럽게 이전한다.
     const normalized = stored === 'right' ? 'left' : stored;
     if (normalized === 'auto' || normalized === 'left' || normalized === 'bottom') setValue(normalized);
     setRestored(true);
-  }, [key]);
+  }, [key, storageEnabled]);
   useEffect(() => {
-    if (restored) window.localStorage.setItem(key, value);
-  }, [key, restored, value]);
+    if (restored && storageEnabled) window.localStorage.setItem(key, value);
+  }, [key, restored, storageEnabled, value]);
   return [value, setValue, restored] as const;
 }
 
@@ -223,6 +236,7 @@ function queryResultFromPreview(preview: ChartDataResponse): QueryResult | null 
 
 // S2 차트 편집 셸 — 좌(스키마)·중(빌더+결과)·우(미리보기+옵션)의 상태 허브. (S2-a~f)
 export function ChartEditor({ chartId }: { chartId?: number }) {
+  const restoreEditorPanelState = chartId != null;
   const router = useRouter();
   const [name, setName] = useState('');
   const [datasourceId, setDatasourceId] = useState<number | null>(null);
@@ -270,11 +284,15 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
   const [embedOpen, setEmbedOpen] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false);
-  const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false);
-  const [optionEditorCollapsed, setOptionEditorCollapsed] = useStoredBoolean('chartsdk.editor.optionEditorCollapsed', false);
-  const [optionDockPreference, setOptionDockPreference, optionDockPreferenceRestored] = useStoredOptionDockPreference('chartsdk.editor.optionDock');
+  const [visualWorkspaceActivated, setVisualWorkspaceActivated] = useState(chartId != null);
+  const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false, restoreEditorPanelState);
+  const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false, restoreEditorPanelState);
+  const [optionDockPreference, setOptionDockPreference, optionDockPreferenceRestored] = useStoredOptionDockPreference(
+    'chartsdk.editor.optionDock',
+    restoreEditorPanelState,
+  );
   const [autoOptionDock, setAutoOptionDock] = useState<OptionDock>('bottom');
+  const [builderMinimumWidth, setBuilderMinimumWidth] = useState<number>(EDITOR_PANEL_LAYOUT.builder.minExpandedWidth);
   const [mapViewportSession, dispatchMapViewport] = useReducer(
     mapViewportSessionReducer,
     undefined,
@@ -283,6 +301,10 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [savedSnapshot, setSavedSnapshot] = useState<SavedEditorSnapshot | null>(null);
   const [colorSelection, setColorSelection] = useState<ColorSelection | null>(null);
   const [colorPicking, setColorPicking] = useState(false);
+
+  useEffect(() => {
+    setVisualWorkspaceActivated(chartId != null);
+  }, [chartId]);
 
   const applyResolvedOption = (nextOption: Record<string, unknown> | null) => {
     setOption(nextOption);
@@ -464,20 +486,57 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   }, [builder, chartType, options, result, resultKind]);
 
   // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
-  const leftPanel = useResizable(LEFT_PANEL_DEFAULT_WIDTH, 200, 480, 'left', 'chartsdk.editor.leftWidth', {
-    shouldCollapse: (nextSize) => nextSize <= PANEL_COLLAPSE_THRESHOLD,
-    onCollapse: () => setLeftCollapsed(true),
-  });
-  const rightPanel = useResizable(RIGHT_PANEL_DEFAULT_WIDTH, 280, null, 'right', 'chartsdk.editor.rightWidth', {
-    shouldCollapse: (_nextSize, event) => {
-      const bounds = builderWorkspaceRef.current?.getBoundingClientRect();
-      return bounds != null && event.clientX <= bounds.left + PANEL_COLLAPSE_THRESHOLD;
+  const leftPanel = useResizable(
+    EDITOR_PANEL_LAYOUT.dataPanel.defaultWidth,
+    EDITOR_PANEL_LAYOUT.dataPanel.minWidth,
+    EDITOR_PANEL_LAYOUT.dataPanel.maxWidth,
+    'left',
+    'chartsdk.editor.leftWidth',
+    {
+      shouldCollapse: (nextSize) => nextSize <= EDITOR_PANEL_LAYOUT.collapseGestureWidth,
+      onCollapse: () => setLeftCollapsed(true),
     },
-    onCollapse: () => setBuilderCollapsed(true),
-  });
-  const resultsPanel = useResizable(288, 120, 560, 'up', 'chartsdk.editor.resultsHeight');
-  const optionEditor = useResizable(280, 120, 720, 'up', 'chartsdk.editor.optionHeight');
-  const optionEditorWidth = useResizable(400, 320, 520, 'left', 'chartsdk.editor.optionWidth');
+  );
+  const rightPanel = useResizable(
+    EDITOR_PANEL_LAYOUT.visualWorkspace.defaultWidth,
+    EDITOR_PANEL_LAYOUT.visualWorkspace.minWidth,
+    null,
+    'right',
+    'chartsdk.editor.rightWidth',
+    {
+      shouldCollapse: (_nextSize, event) => {
+        const bounds = builderWorkspaceRef.current?.getBoundingClientRect();
+        return bounds != null && shouldCollapseBuilder(
+          projectedBuilderWidth(bounds.left, event.clientX),
+          builderMinimumWidth,
+        );
+      },
+      onCollapse: () => setBuilderCollapsed(true),
+    },
+  );
+  const resultsPanel = useResizable(
+    EDITOR_PANEL_LAYOUT.resultsPanel.defaultHeight,
+    EDITOR_PANEL_LAYOUT.resultsPanel.minHeight,
+    EDITOR_PANEL_LAYOUT.resultsPanel.maxHeight,
+    'up',
+    'chartsdk.editor.resultsHeight',
+  );
+  const optionEditor = useResizable(
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.defaultHeight,
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.minHeight,
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.maxHeight,
+    'up',
+    'chartsdk.editor.optionHeight',
+  );
+  const optionEditorWidth = useResizable(
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.defaultWidth,
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.minWidth,
+    EDITOR_PANEL_LAYOUT.visualOptionPanel.maxWidth,
+    'left',
+    'chartsdk.editor.optionWidth',
+  );
+  const leftPanelSize = leftPanel.size;
+  const setLeftPanelSize = leftPanel.setSize;
   const rightPanelSize = rightPanel.size;
   const setRightPanelSize = rightPanel.setSize;
 
@@ -488,25 +547,29 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setAutoOptionDock((current) => resolveAutoOptionDock({
         workspaceWidth: entry.contentRect.width,
         optionPanelWidth: optionEditorWidth.size,
-        optionPanelCollapsed: optionEditorCollapsed,
+        optionPanelCollapsed: false,
         currentDock: current,
       }));
     });
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, [optionEditorCollapsed, optionEditorWidth.size]);
+  }, [optionEditorWidth.size]);
 
   // 왼쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 시각화 작업영역을 먼저 확보한다.
   useEffect(() => {
     if (!optionDockPreferenceRestored || optionDockPreference !== 'left' || builderCollapsed) return;
     const editorWidth = editorBodyRef.current?.clientWidth;
     if (editorWidth == null) return;
-    const leftWidth = leftCollapsed ? 40 : leftPanel.size;
-    const availableWidth = editorWidth - leftWidth - PANEL_RESTORE_MIN_WIDTH;
+    const availableWidth = maximumVisualWorkspaceWidth({
+      editorWidth,
+      dataPanelWidth: leftPanel.size,
+      dataPanelCollapsed: leftCollapsed,
+      builderMinimumWidth,
+    });
     if (availableWidth >= OPTION_DOCK_MANUAL_MIN_WIDTH) {
       const preferredWidth = optionDockThresholds({
         optionPanelWidth: optionEditorWidth.size,
-        optionPanelCollapsed: optionEditorCollapsed,
+        optionPanelCollapsed: false,
       }).enterSideAt;
       const targetWidth = Math.min(preferredWidth, availableWidth);
       if (rightPanelSize < targetWidth) setRightPanelSize(targetWidth);
@@ -515,11 +578,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }
   }, [
     builderCollapsed,
+    builderMinimumWidth,
     leftCollapsed,
     leftPanel.size,
     optionDockPreference,
     optionDockPreferenceRestored,
-    optionEditorCollapsed,
     optionEditorWidth.size,
     rightPanelSize,
     setRightPanelSize,
@@ -533,19 +596,64 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     const workspace = builderWorkspaceRef.current;
     if (!workspace) return;
     const observer = new ResizeObserver(([entry]) => {
-      if (entry.contentRect.width <= PANEL_COLLAPSE_THRESHOLD) setBuilderCollapsed(true);
+      if (shouldCollapseBuilder(entry.contentRect.width, builderMinimumWidth)) setBuilderCollapsed(true);
     });
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, [builderCollapsed, setBuilderCollapsed]);
+  }, [builderCollapsed, builderMinimumWidth, setBuilderCollapsed]);
+
+  const updateBuilderMinimumWidth = useCallback((width: number) => {
+    const normalized = normalizeBuilderMinimumWidth(width);
+    if (normalized === builderMinimumWidth) return;
+
+    if (!builderCollapsed && normalized > builderMinimumWidth) {
+      const editorWidth = editorBodyRef.current?.clientWidth;
+      const layout = editorWidth == null ? null : resolveBuilderExpansion({
+        editorWidth,
+        dataPanelWidth: leftPanelSize,
+        dataPanelCollapsed: leftCollapsed,
+        builderMinimumWidth: normalized,
+        visualWorkspaceWidth: rightPanelSize,
+      });
+
+      if (layout) {
+        if (layout.dataPanelWidth !== leftPanelSize) setLeftPanelSize(layout.dataPanelWidth);
+        if (layout.dataPanelCollapsed !== leftCollapsed) setLeftCollapsed(layout.dataPanelCollapsed);
+        if (layout.visualWorkspaceWidth !== rightPanelSize) setRightPanelSize(layout.visualWorkspaceWidth);
+      } else {
+        setBuilderCollapsed(true);
+      }
+    }
+
+    setBuilderMinimumWidth(normalized);
+  }, [
+    builderCollapsed,
+    builderMinimumWidth,
+    leftCollapsed,
+    leftPanelSize,
+    rightPanelSize,
+    setLeftPanelSize,
+    setRightPanelSize,
+    setBuilderCollapsed,
+    setLeftCollapsed,
+  ]);
 
   const expandBuilderPanel = () => {
     const editorWidth = editorBodyRef.current?.clientWidth;
-    if (editorWidth != null) {
-      const leftWidth = leftCollapsed ? 40 : leftPanel.size;
-      const availableRightWidth = Math.max(280, editorWidth - leftWidth - PANEL_RESTORE_MIN_WIDTH);
-      if (rightPanel.size > availableRightWidth) rightPanel.setSize(availableRightWidth);
-    }
+    if (editorWidth == null) return;
+
+    const layout = resolveBuilderExpansion({
+      editorWidth,
+      dataPanelWidth: leftPanel.size,
+      dataPanelCollapsed: leftCollapsed,
+      builderMinimumWidth,
+      visualWorkspaceWidth: rightPanel.size,
+    });
+    if (!layout) return;
+
+    if (layout.dataPanelWidth !== leftPanel.size) leftPanel.setSize(layout.dataPanelWidth);
+    if (layout.dataPanelCollapsed !== leftCollapsed) setLeftCollapsed(layout.dataPanelCollapsed);
+    if (layout.visualWorkspaceWidth !== rightPanel.size) rightPanel.setSize(layout.visualWorkspaceWidth);
     setBuilderCollapsed(false);
   };
 
@@ -770,6 +878,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       return;
     }
     setAxisColumnSelectionTarget(null);
+    setVisualWorkspaceActivated(true);
     const requestId = ++runRequestId.current;
     setRunning(true);
     setRunError(null);
@@ -779,20 +888,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setColorSelection(null);
     setColorPicking(false);
     try {
-      const tableQuery = isTableQueryMode(builder, chartType);
       const res = await queryApi.runBuilder({
         datasourceId: primaryDatasourceId,
         builderConfig: builder,
         chartType,
         options,
-        mode: tableQuery ? 'rows' : 'aggregate',
+        mode: 'aggregate',
       });
       if (requestId !== runRequestId.current) return;
       setResult(res);
-      setResultKind(tableQuery ? 'table' : 'chart');
+      setResultKind('chart');
       setGeneratedSql(res.generatedSql ?? null);
-      if (tableQuery) setOption(null);
-      else applyResolvedOption(res.option ?? null);
+      applyResolvedOption(res.option ?? null);
       setResultTab('result');
     } catch (e) {
       if (requestId !== runRequestId.current) return;
@@ -1072,6 +1179,11 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setDirty(true);
   };
 
+  const changeChartVariant = (nextVariant: string) => {
+    if (nextVariant === options.variant) return;
+    changeOptions({ ...options, variant: nextVariant });
+  };
+
   const changeColorPicking = (picking: boolean) => {
     setColorPicking(picking);
     if (picking) dispatchMapViewport({ type: 'setEditing', editing: false });
@@ -1151,19 +1263,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     ? `${datasources.find((datasource) => datasource.id === rawTable.datasourceId)?.name ?? `ds${rawTable.datasourceId}`} · ${rawTable.schema}.${rawTable.name}`
     : null;
 
-  const visualOptionEditor = optionEditorCollapsed ? (
-    <button
-      type="button"
-      onClick={() => setOptionEditorCollapsed(false)}
-      className={actualOptionDock === 'left'
-        ? 'flex w-10 shrink-0 flex-col items-center justify-center gap-1.5 border-r border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'
-        : 'flex h-10 shrink-0 items-center justify-center gap-1.5 border-t border-border text-xs font-medium text-text-secondary hover:bg-muted hover:text-text-primary'}
-    >
-      <ChevronUp className={`size-3.5 ${actualOptionDock === 'left' ? 'rotate-90' : ''}`} />
-      <span className={actualOptionDock === 'left' ? '[writing-mode:vertical-rl]' : ''}>시각화 옵션 펼치기</span>
-    </button>
-  ) : (
+  const visualOptionEditor = (
     <div
+      id="visual-option-editor"
       data-testid="visual-option-editor"
       style={actualOptionDock === 'left'
         ? { width: optionEditorWidth.size }
@@ -1210,19 +1312,19 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         onRefreshNow={refreshNow}
         onColorSelectionChange={setColorSelection}
         onColorPickingChange={changeColorPicking}
-        onCollapse={() => setOptionEditorCollapsed(true)}
-        onChangeChartType={changeChartType}
         onChangeOptions={changeOptions}
       />
     </div>
   );
 
-  const visualOptionDivider = !optionEditorCollapsed && (
+  const visualOptionDivider = (
     <ResizeHandle
       dir={actualOptionDock === 'left' ? 'left' : 'up'}
       onPointerDown={actualOptionDock === 'left' ? optionEditorWidth.onPointerDown : optionEditor.onPointerDown}
     />
   );
+
+  const visualWorkspaceLocked = chartId == null && !visualWorkspaceActivated;
 
   return (
     <>
@@ -1335,11 +1437,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           />
         ) : (
           <>
-            <section ref={builderWorkspaceRef} id="data-builder-workspace" data-testid="data-builder-workspace" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <section
+              ref={builderWorkspaceRef}
+              id="data-builder-workspace"
+              data-testid="data-builder-workspace"
+              data-min-expanded-width={builderMinimumWidth}
+              className="flex min-w-0 flex-1 flex-col overflow-hidden"
+            >
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <NocodeBuilder
                   config={builder}
                   chartType={chartType}
+                  chartVariant={String(options.variant ?? '')}
                   tables={tables}
                   datasources={datasources}
                   tableSelectionTarget={tableSelectionTarget}
@@ -1351,6 +1460,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                     // 데이터 구성 변경 → 기존 실행 결과/SQL/option 무효화(stale 저장 방지). 재실행 필요.
                     applyBuilderChange(b);
                   }}
+                  onChangeChartType={changeChartType}
+                  onChangeChartVariant={changeChartVariant}
                   onRun={runBuilder}
                   running={running}
                 />
@@ -1371,6 +1482,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                   error={resultTab === 'raw' ? rawError : runError}
                   rawTableLabel={rawTableLabel}
                   estimatedOriginalRowCount={rawTable?.estimatedRowCount ?? null}
+                  onMinimumWidthChange={updateBuilderMinimumWidth}
                 />
               </div>
             </section>
@@ -1385,9 +1497,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           data-option-dock={actualOptionDock}
           data-option-dock-preference={optionDockPreference}
           style={builderCollapsed ? { flex: '1 1 0%', width: 'auto' } : { width: rightPanel.size }}
-          className="flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-border bg-bg-panel"
+          className="relative flex min-w-0 shrink-0 flex-col overflow-hidden border-l border-border bg-bg-panel"
         >
-          <div className={`flex min-h-0 flex-1 ${actualOptionDock === 'left' ? 'flex-row' : 'flex-col'}`}>
+          <div
+            data-testid="visual-editor-content"
+            inert={visualWorkspaceLocked}
+            aria-hidden={visualWorkspaceLocked}
+            className={`flex min-h-0 flex-1 transition-[opacity,filter] duration-200 ${actualOptionDock === 'left' ? 'flex-row' : 'flex-col'} ${visualWorkspaceLocked ? 'pointer-events-none select-none opacity-35 saturate-50' : ''}`}
+          >
             {actualOptionDock === 'left' && visualOptionEditor}
             {actualOptionDock === 'left' && visualOptionDivider}
 
@@ -1427,6 +1544,21 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             {actualOptionDock === 'bottom' && visualOptionDivider}
             {actualOptionDock === 'bottom' && visualOptionEditor}
           </div>
+          {visualWorkspaceLocked && (
+            <div
+              data-testid="visual-workspace-lock"
+              role="status"
+              className="absolute inset-0 z-20 flex items-center justify-center bg-black/15 px-6 backdrop-blur-[1px]"
+            >
+              <div className="max-w-[320px] rounded-xl border border-border bg-bg-panel/95 px-5 py-4 text-center shadow-lg">
+                <LockKeyhole className="mx-auto size-5 text-text-secondary" aria-hidden />
+                <p className="mt-2 text-sm font-semibold text-text-primary">먼저 차트를 실행하세요</p>
+                <p className="mt-1 text-xs leading-5 text-text-secondary">
+                  왼쪽에서 데이터와 차트를 구성한 뒤 실행을 누르면 미리보기와 시각화 옵션이 활성화됩니다.
+                </p>
+              </div>
+            </div>
+          )}
         </aside>
       </div>
 

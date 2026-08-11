@@ -140,7 +140,7 @@ export function ChartPreviewPanel({
   };
 
   return (
-    <div className="chart-preview-panel flex h-full min-h-0 flex-col" data-testid="chart-preview-panel">
+    <div id="chart-preview-panel" className="chart-preview-panel flex h-full min-h-0 flex-col" data-testid="chart-preview-panel">
       <div className="shrink-0 border-b border-border bg-bg-panel px-3 py-2.5">
         <div className="flex items-center gap-2">
           <div className="min-w-0">

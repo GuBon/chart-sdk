@@ -11,7 +11,6 @@ import {
   optionEditorTabOf,
   optionEditorTabsFor,
   setPath,
-  visibleDefs,
   type MajorType,
   type OptionDef,
   type OptionEditorTab,
@@ -40,6 +39,7 @@ import type { MapViewportSession } from '@/lib/mapViewportSession';
 import { OptionControl, TypographyPolicy, autoTypographySizeOf } from './OptionControl';
 import { MapViewportControl } from './MapViewportControl';
 import { staticColorSelections } from '@/lib/chartColorSelection';
+import { visualOptionDefinitions } from '@/lib/visualOptionDefinitions';
 
 export type OptionDockPreference = 'auto' | 'left' | 'bottom';
 export type OptionDock = Exclude<OptionDockPreference, 'auto'>;
@@ -53,7 +53,6 @@ interface Props {
   hasResult: boolean;
   dockPreference: OptionDockPreference;
   actualDock: OptionDock;
-  onChangeChartType: (next: MajorType) => void;
   onChangeOptions: (next: Options) => void;
   onChangeDockPreference: (next: OptionDockPreference) => void;
   mapViewportSession: MapViewportSession;
@@ -73,7 +72,6 @@ interface Props {
   onRefreshNow: () => void;
   onColorSelectionChange: (selection: ColorSelection | null) => void;
   onColorPickingChange: (picking: boolean) => void;
-  onCollapse?: () => void;
 }
 
 /** optionRegistry를 작업 탭·섹션으로 구성한다. 개별 입력 종류의 렌더링은 OptionControl이 담당한다. */
@@ -86,7 +84,6 @@ export function OptionPanel({
   hasResult,
   dockPreference,
   actualDock,
-  onChangeChartType,
   onChangeOptions,
   onChangeDockPreference,
   mapViewportSession,
@@ -106,7 +103,6 @@ export function OptionPanel({
   onRefreshNow,
   onColorSelectionChange,
   onColorPickingChange,
-  onCollapse,
 }: Props) {
   const [query, setQuery] = useState('');
   const [activeTabByType, setActiveTabByType] = useState<Partial<Record<MajorType, OptionEditorTab>>>({});
@@ -119,7 +115,7 @@ export function OptionPanel({
     ? '이동평균을 사용하는 동안에는 시간 오름차순으로 고정됩니다.'
     : null;
   const normalizedQuery = query.toLowerCase().trim();
-  const allDefinitions = visibleDefs(chartType, options);
+  const allDefinitions = visualOptionDefinitions(chartType, options);
   const matchedDefinitions = allDefinitions.filter(
     (definition) => !normalizedQuery
       || definition.label.toLowerCase().includes(normalizedQuery)
@@ -268,10 +264,6 @@ export function OptionPanel({
     setPath(next, 'itemColorOverrides', []);
     onChangeOptions(next);
   };
-  const changeType = (nextType: MajorType) => {
-    if (nextType === chartType) return;
-    onChangeChartType(nextType);
-  };
   const setActiveTab = (tab: OptionEditorTab) => {
     setActiveTabByType((previous) => ({ ...previous, [chartType]: tab }));
   };
@@ -303,11 +295,6 @@ export function OptionPanel({
             onChange={(event) => onChangeDockPreference(event.target.value as OptionDockPreference)}
             className="h-7 w-[126px] py-0 pl-2.5 pr-7 text-xs"
           />
-          {onCollapse && (
-            <button type="button" onClick={onCollapse} aria-label="시각화 옵션 접기" className="flex size-7 items-center justify-center rounded text-text-secondary hover:bg-muted hover:text-text-primary">
-              <ChevronDown className="size-4" />
-            </button>
-          )}
         </div>
       </div>
       <div className="px-4 pb-2">
@@ -451,7 +438,6 @@ export function OptionPanel({
                             onClick: onRefreshNow,
                           } : undefined}
                           onChange={(value) => setValue(definition, value)}
-                          onChangeType={changeType}
                           onSelectColorTarget={(selection) => {
                             onColorSelectionChange(selection);
                             onColorPickingChange(false);

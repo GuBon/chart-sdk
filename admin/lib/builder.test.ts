@@ -20,7 +20,6 @@ import {
   isNumericType,
   isSpatialAreaType,
   isSpatialPointType,
-  isTableQueryMode,
   migrateBuilderConfig,
   migrateTableRef,
   normalizeBuilder,
@@ -83,31 +82,33 @@ const crossJoin = (): BuilderConfig => ({
   yAxis: [{ column: 'users_2.tier', agg: 'count' }], where: [], orderBy: null, sample: null,
 });
 
-describe('축 없는 조회 실행', () => {
-  it('X/Y가 모두 없으면 차트 검증은 실패하지만 실행 검증은 통과한다', () => {
-    const cfg = bar({ xAxis: null, yAxis: [] });
-
-    expect(isTableQueryMode(cfg, 'bar')).toBe(true);
-    expect(builderValidationIssue(cfg, 'bar', TABLES)).toBe('X축 컬럼을 선택하세요.');
-    expect(builderExecutionIssue(cfg, 'bar', TABLES)).toBeNull();
+describe('차트 실행 검증', () => {
+  it('X/Y가 모두 없으면 X축 오류로 실행을 차단한다', () => {
+    expect(builderExecutionIssue(bar({ xAxis: null, yAxis: [] }), 'bar', TABLES))
+      .toBe('X축 컬럼을 선택하세요.');
   });
 
-  it('조회 모드는 원본 컬럼 정렬만 허용한다', () => {
-    const invalid = bar({ xAxis: null, yAxis: [], orderBy: { target: 'x', direction: 'desc' } });
-    const valid = bar({ xAxis: null, yAxis: [], orderBy: { target: 'column:amount', direction: 'desc' } });
-
-    expect(builderExecutionIssue(invalid, 'bar', TABLES)).toContain('원본 컬럼');
-    expect(builderExecutionIssue(valid, 'bar', TABLES)).toBeNull();
+  it('X축만 있고 Y축이 없으면 Y축 오류로 실행을 차단한다', () => {
+    expect(builderExecutionIssue(bar({ yAxis: [] }), 'bar', TABLES))
+      .toBe('Y축을 1개 이상 추가하세요.');
   });
 
-  it('공간 컬럼 구성은 X/Y가 없어도 조회 모드가 아니라 차트 모드다', () => {
+  it('Y축만 있고 X축이 없으면 X축 오류로 실행을 차단한다', () => {
+    expect(builderExecutionIssue(bar({ xAxis: null }), 'bar', TABLES))
+      .toBe('X축 컬럼을 선택하세요.');
+  });
+
+  it('X/Y가 완성된 일반 차트는 실행을 허용한다', () => {
+    expect(builderExecutionIssue(bar(), 'bar', TABLES)).toBeNull();
+  });
+
+  it('완성된 공간 컬럼 구성은 X/Y 없이 실행을 허용한다', () => {
     const cfg = bar({
       xAxis: null,
       yAxis: [],
       geoPoint: { mode: 'spatial', spatialColumn: 'location', sizeColumn: null },
     });
 
-    expect(isTableQueryMode(cfg, 'geoscatter')).toBe(false);
     expect(builderExecutionIssue(cfg, 'geoscatter', TABLES)).toBeNull();
   });
 });

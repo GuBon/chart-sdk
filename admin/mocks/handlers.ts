@@ -361,7 +361,9 @@ export const handlers = [
   // ── 노코드 실행/미리보기(S2) — 목 변환기 ───────────
   http.post('/api/v1/query/run-builder', async ({ request }) => {
     const body = (await request.json()) as { builderConfig: BuilderConfig; chartType: ChartType; options: Record<string, unknown>; mode?: 'aggregate' | 'rows' };
-    const validationIssue = builderExecutionIssue(body.builderConfig, body.chartType, schemaTables);
+    const validationIssue = body.mode === 'rows'
+      ? null
+      : builderExecutionIssue(body.builderConfig, body.chartType, schemaTables);
     if (validationIssue) return err(400, 'INVALID_BUILDER_CONFIG', validationIssue);
     if (body.mode === 'rows') {
       return HttpResponse.json({ ...buildRawRows(body.builderConfig), generatedSql: buildRowsSql(body.builderConfig) });

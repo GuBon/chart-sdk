@@ -5,11 +5,12 @@ interface Props<T extends string | number> {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
+  ariaLabel?: string;
 }
 
-export function Segmented<T extends string | number>({ value, options, onChange }: Props<T>) {
+export function Segmented<T extends string | number>({ value, options, onChange, ariaLabel }: Props<T>) {
   return (
-    <div className="inline-flex rounded-md bg-muted p-0.5">
+    <div className="inline-flex rounded-md bg-muted p-0.5" role="group" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={String(o.value)}

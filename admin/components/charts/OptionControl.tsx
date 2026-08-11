@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { getVariants, type MajorType, type OptionDef } from '@chartsdk/chart-options';
+import { type MajorType, type OptionDef } from '@chartsdk/chart-options';
 import type { ChartTypography } from '@chartsdk/chart-options/display';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -7,7 +7,6 @@ import { Segmented } from '@/components/ui/Segmented';
 import { Switch } from '@/components/ui/Switch';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
-import { CHART_TYPE_META } from '@/lib/chartTypes';
 import {
   bubbleSizeColumns,
   colorSelectionFromItemTarget,
@@ -87,7 +86,6 @@ export function OptionControl({
   lockNote,
   autoValue,
   onChange,
-  onChangeType,
   onSelectColorTarget,
   onColorPickingChange,
   onApplySelectedColor,
@@ -125,7 +123,6 @@ export function OptionControl({
   /** 값이 비어 자동으로 해석될 때 실제 적용되는 값(슬라이더 표시·눈금 위치용). */
   autoValue?: number | null;
   onChange: (value: unknown) => void;
-  onChangeType: (type: MajorType) => void;
   onSelectColorTarget: (target: ColorSelection) => void;
   onColorPickingChange: (picking: boolean) => void;
   onApplySelectedColor: (color: string) => void;
@@ -142,44 +139,6 @@ export function OptionControl({
   );
   // 잠긴 옵션은 저장값을 유지한 채 입력만 막는다 — 잠금이 풀리면 이전 값이 그대로 다시 쓰인다.
   const disabled = disabledProp || lockNote != null;
-
-  if (def.control === 'iconGrid') {
-    const choices = def.choices ?? [];
-    const groups = [...new Set(choices.filter((choice) => choice.group).map((choice) => choice.group!))];
-    const typeButton = (choice: NonNullable<OptionDef['choices']>[number]) => {
-      const Icon = CHART_TYPE_META[choice.value as MajorType]?.Icon ?? CHART_TYPE_META.bar.Icon;
-      const active = choice.value === value;
-      return (
-        <button
-          key={choice.value}
-          type="button"
-          aria-label={choice.label}
-          onClick={() => onChangeType(choice.value as MajorType)}
-          className={cn(
-            'flex flex-col items-center gap-1.5 rounded-md border py-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-            active ? 'border-primary bg-muted text-text-primary' : 'border-border text-text-secondary hover:bg-muted',
-          )}
-        >
-          <Icon className="size-4" />
-          {choice.label}
-        </button>
-      );
-    };
-    return (
-      <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-4 gap-2">{choices.filter((choice) => !choice.group).map(typeButton)}</div>
-        {groups.map((group) => (
-          <div key={group} className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">{group}</span>
-              <span className="h-px flex-1 bg-border" />
-            </div>
-            <div className="grid grid-cols-4 gap-2">{choices.filter((choice) => choice.group === group).map(typeButton)}</div>
-          </div>
-        ))}
-      </div>
-    );
-  }
 
   if (def.control === 'textarea') {
     return (
@@ -302,7 +261,7 @@ export function OptionControl({
   let control: ReactNode = null;
   switch (def.control) {
     case 'segment': {
-      const choices = def.key === 'variant' ? getVariants(chartType) : (def.choices ?? []);
+      const choices = def.choices ?? [];
       control = <div className={disabled ? 'pointer-events-none opacity-50' : undefined}><Segmented value={String(value)} options={choices.map((choice) => ({ value: String(choice.value), label: choice.label }))} onChange={(next) => onChange(coerce(def, next))} /></div>;
       break;
     }

@@ -22,7 +22,6 @@ import {
   isNumericType,
   isSpatialAreaType,
   isSpatialPointType,
-  isTableQueryMode,
   geoSeriesTypeFor,
   orderTargets,
   relationDisplayName,
@@ -41,6 +40,8 @@ import { Switch } from '@/components/ui/Switch';
 import { isRelationSelectable } from '@/lib/relations';
 import { cn } from '@/lib/cn';
 import type { TableSelectionTarget } from '@/lib/tableSelection';
+import { BuilderAccordionGroup } from './BuilderAccordionGroup';
+import { ChartTypeSelector, chartTypeSelectionLabel } from './ChartTypeSelector';
 
 // 표본 크기 입력 옆 안내 — 전체 추정 행수(reltuples)는 정확치가 아니라 "약 N행"으로 표기. 작으면 전량 정확 계산.
 function sampleTotalHint(estimatedRowCount?: number): string {
@@ -49,10 +50,11 @@ function sampleTotalHint(estimatedRowCount?: number): string {
   return isFullScanTable(estimatedRowCount) ? `${total} — 작아서 전량 정확 계산됩니다` : `${total} 중 무작위 표본`;
 }
 
-// S2 중앙 노코드 구성 폼(259:191). builderConfig 를 편집하고 [실행]을 트리거한다.
+// S2 중앙 차트 구성 폼(259:191). builderConfig를 편집하고 [실행]을 트리거한다.
 interface Props {
   config: BuilderConfig;
   chartType: ChartType;
+  chartVariant: string;
   tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
   datasources: Datasource[];
   tableSelectionTarget: TableSelectionTarget | null;
@@ -61,11 +63,29 @@ interface Props {
   onRequestAxisColumnSelection: (target: DataPanelColumnTarget) => void;
   onCollapse: () => void;
   onChange: (next: BuilderConfig) => void;
+  onChangeChartType: (next: ChartType) => void;
+  onChangeChartVariant: (next: string) => void;
   onRun: () => void;
   running: boolean;
 }
 
-export function NocodeBuilder({ config, chartType, tables, datasources, tableSelectionTarget, axisColumnSelectionTarget, onRequestTableSelection, onRequestAxisColumnSelection, onCollapse, onChange, onRun, running }: Props) {
+export function NocodeBuilder({
+  config,
+  chartType,
+  chartVariant,
+  tables,
+  datasources,
+  tableSelectionTarget,
+  axisColumnSelectionTarget,
+  onRequestTableSelection,
+  onRequestAxisColumnSelection,
+  onCollapse,
+  onChange,
+  onChangeChartType,
+  onChangeChartVariant,
+  onRun,
+  running,
+}: Props) {
   // 조인 시 활성 테이블 전부 qualified, 미조인 시 base unqualified (생성규칙 11.2)
   const colOptions = columnsForBuilder(config, tables);
   const xType = colOptions.find((c) => c.value === config.xAxis)?.type;
@@ -82,7 +102,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const geoAreaMode = config.geoArea?.mode ?? 'regions';
   const spatialGeoArea = areaInput && geoAreaMode === 'spatial';
   const spatialGeometry = spatialGeoPoint || spatialGeoArea;
-  const tableQueryMode = isTableQueryMode(config, chartType);
   const spatialPointOptions = colOptions
     .filter((column) => isSpatialPointType(column.type))
     .map((column) => ({ ...column, label: `${column.label} · ${column.type}` }));
@@ -95,7 +114,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
   const supportsSeriesBy = supportsSeriesByForChart(chartType);
   const maxSeries = isPie || areaInput || isBoxplot || !!config.seriesBy || pointInput ? 1 : Infinity;
   const hideBucket = isScatter || isBoxplot || pointInput;
-  const hideSampleRow = tableQueryMode;
   const xLabel = areaInput ? '지역' : isBoxplot ? '카테고리' : pointInput ? '경도' : 'X축';
   const yLabel = areaInput ? '값' : isBoxplot || isPie ? '값' : pointInput ? '위도' : 'Y축 값';
   const yAggChoices = aggChoicesForChart(chartType);
@@ -221,9 +239,17 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
     : baseSchemaTable?.relationType === 'VIEW'
       ? 'View 조회 결과에서 무작위 행 표본'
       : sampleTotalHint(baseSchemaTable?.estimatedRowCount);
-  const sortTargets = tableQueryMode
-    ? colOptions.map((column) => ({ value: `column:${column.value}`, label: `${column.label} (원본)` }))
-    : orderTargets(config, tables);
+  const sortTargets = orderTargets(config, tables);
+  const dataGroupSummary = config.table
+    ? [
+        baseTableLabel,
+        joins.length > 0 ? `조인 ${joins.length}개` : null,
+        config.xAxis ? 'X축 설정' : null,
+        config.yAxis.length > 0 ? `Y축 ${config.yAxis.length}개` : null,
+        config.where.length > 0 ? `조건 ${config.where.length}개` : null,
+        config.sample ? '표본' : null,
+      ].filter(Boolean).join(' · ')
+    : '테이블을 선택하세요';
 
   return (
     <div
@@ -241,8 +267,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           <div className="flex-1" />
           {executionIssue ? (
             <span className="min-w-0 truncate text-xs text-danger" title={executionIssue}>{executionIssue}</span>
-          ) : tableQueryMode ? (
-            <span className="min-w-0 truncate text-xs text-text-tertiary">축 없이 조건·정렬 결과만 실행합니다.</span>
           ) : warning ? (
             <span className="min-w-0 truncate text-xs text-amber-600" title={warning}>{warning}</span>
           ) : null}
@@ -296,8 +320,25 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
         </div>
       </div>
 
-      {/* 구성 폼 */}
-      <div className="flex flex-col gap-4 p-4">
+      <BuilderAccordionGroup
+        id="builder-chart-type"
+        title="차트 종류"
+        summary={chartTypeSelectionLabel(chartType, chartVariant)}
+      >
+        <ChartTypeSelector
+          chartType={chartType}
+          variant={chartVariant}
+          onChangeChartType={onChangeChartType}
+          onChangeVariant={onChangeChartVariant}
+        />
+      </BuilderAccordionGroup>
+
+      <BuilderAccordionGroup
+        id="builder-data-config"
+        title="데이터 구성"
+        summary={dataGroupSummary}
+        contentClassName="flex flex-col gap-4 p-4"
+      >
         {/* 테이블 조인 (생성규칙 11장) — base 다음, 컬럼 참조는 qualified */}
         {config.table && (
           <Row label="조인">
@@ -675,7 +716,6 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
           )}
         </Row>}
 
-        {!hideSampleRow && (
         <Row label="표본 추출">
           <Switch
             aria-label="표본 추출"
@@ -738,8 +778,7 @@ export function NocodeBuilder({ config, chartType, tables, datasources, tableSel
             </span>
           )}
         </Row>
-        )}
-      </div>
+      </BuilderAccordionGroup>
 
     </div>
   );
