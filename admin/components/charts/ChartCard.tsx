@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Trash2, Triangle } from 'lucide-react';
+import { Copy, Trash2, Triangle } from 'lucide-react';
 import type { ChartOptions, ChartSummary } from '@/lib/api';
 import { CHART_TYPE_META } from '@/lib/chartTypes';
 import { Button } from '@/components/ui/Button';
@@ -20,11 +20,13 @@ export function ChartCard({
   previewOption,
   onEmbed,
   onDelete,
+  onDuplicate,
 }: {
   chart: ChartSummary;
   previewOption?: ChartOptions | null;
   onEmbed: (c: ChartSummary) => void;
   onDelete: (c: ChartSummary) => void;
+  onDuplicate: (c: ChartSummary) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { label, Icon } = CHART_TYPE_META[chart.chartType];
@@ -37,14 +39,26 @@ export function ChartCard({
           <MiniChart option={previewOption} />
         </div>
       </div>
-      <button
-        type="button"
-        aria-label={`${chart.name} 삭제`}
-        onClick={() => onDelete(chart)}
-        className="absolute right-2 top-2 hidden rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-danger group-hover:block"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+      {/* 가끔 쓰는 부차 액션(복제·삭제)은 hover 코너에 묶는다. 복제는 중립색, 삭제는 danger.
+          group-focus-within: 마우스 hover 없이 키보드로 카드에 진입해도 도달·조작할 수 있게 노출한다(접근성). */}
+      <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex group-focus-within:flex">
+        <button
+          type="button"
+          aria-label={`${chart.name} 복제`}
+          onClick={() => onDuplicate(chart)}
+          className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-text-primary"
+        >
+          <Copy className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label={`${chart.name} 삭제`}
+          onClick={() => onDelete(chart)}
+          className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-danger"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
 
       <div className="flex h-[70px] shrink-0 flex-col gap-1.5 px-3.5 py-2">
         <div className="flex items-center gap-2">

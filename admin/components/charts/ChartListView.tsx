@@ -13,6 +13,7 @@ import { Pagination } from '@/components/ui/Pagination';
 import { Select } from '@/components/ui/Select';
 import { ChartCard } from './ChartCard';
 import { DeleteChartModal } from './DeleteChartModal';
+import { DuplicateChartModal } from './DuplicateChartModal';
 import { EmbedModal } from './EmbedModal';
 import { useChartPage } from './useChartPage';
 import { SearchBox } from '@/components/layout/SearchBox';
@@ -48,10 +49,18 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
 
   const [toDelete, setToDelete] = useState<ChartSummary | null>(null);
   const [toEmbed, setToEmbed] = useState<ChartSummary | null>(null);
+  const [toDuplicate, setToDuplicate] = useState<ChartSummary | null>(null);
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
 
   useEffect(() => {
     pendingParamsRef.current = paramsString;
   }, [paramsString]);
+
+  useEffect(() => {
+    if (!duplicateNotice) return;
+    const timer = setTimeout(() => setDuplicateNotice(null), 3000);
+    return () => clearTimeout(timer);
+  }, [duplicateNotice]);
 
   const navigate = useCallback((path: string, next: URLSearchParams) => {
     const query = next.toString();
@@ -161,7 +170,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] items-start gap-4">
           {charts?.map((chart) => (
-            <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} />
+            <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} onDuplicate={setToDuplicate} />
           ))}
           {!hasFilter && page === 1 && (
             <Link
@@ -178,7 +187,27 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
       {charts && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
 
       {toDelete && <DeleteChartModal chart={toDelete} onClose={() => setToDelete(null)} onDeleted={() => { setToDelete(null); reload(); }} />}
+      {toDuplicate && (
+        <DuplicateChartModal
+          chart={toDuplicate}
+          onClose={() => setToDuplicate(null)}
+          onDuplicated={(copy) => {
+            setToDuplicate(null);
+            setDuplicateNotice(`‘${copy.name}’ 차트를 복제했습니다.`);
+            reload();
+          }}
+        />
+      )}
       {toEmbed && <EmbedModal chart={toEmbed} onClose={() => setToEmbed(null)} />}
+      {duplicateNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg"
+        >
+          {duplicateNotice}
+        </div>
+      )}
     </>
   );
 }

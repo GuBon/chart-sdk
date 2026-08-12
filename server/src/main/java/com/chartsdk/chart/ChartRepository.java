@@ -18,6 +18,9 @@ import java.util.Map;
 
 @Repository
 public class ChartRepository {
+    private static final int CHART_NAME_MAX_LENGTH = 200;
+    private static final String DUPLICATE_NAME_SUFFIX = " (복사)";
+
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
 
@@ -200,11 +203,13 @@ public class ChartRepository {
             StringBuilder sql = new StringBuilder("""
                     INSERT INTO mc_chart(owner_id, name, description, datasource_id, define_mode, sql_query, builder_config,
                                          chart_type, options, refresh_mode)
-                    SELECT owner_id, name || ' (복사)', description, datasource_id, define_mode, sql_query, builder_config,
+                    SELECT owner_id, LEFT(name, ?) || ?, description, datasource_id, define_mode, sql_query, builder_config,
                            chart_type, options, refresh_mode
                       FROM mc_chart WHERE id=?
                     """);
             java.util.ArrayList<Object> params = new java.util.ArrayList<>();
+            params.add(CHART_NAME_MAX_LENGTH - DUPLICATE_NAME_SUFFIX.length());
+            params.add(DUPLICATE_NAME_SUFFIX);
             params.add(id);
             appendOwnerScope(sql, params, ownerId);
             sql.append(" RETURNING id");
