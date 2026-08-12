@@ -3,6 +3,8 @@ package com.chartsdk.cache;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.datasource.DatasourceRuntimeVersions;
 import com.chartsdk.query.QueryRows;
+import com.chartsdk.query.engine.DistinctCountCompositionPolicy;
+import com.chartsdk.query.engine.SourceCompositionPolicy;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,22 +31,32 @@ public class ChartComputeService {
     private final ChartRefreshCoordinator refreshes;
     private final ObjectMapper mapper;
     private final DatasourceRuntimeVersions runtimeVersions;
+    private final SourceCompositionPolicy composition;
 
     public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
                                ChartRefreshCoordinator refreshes, ObjectMapper mapper) {
         this(jdbc, runner, cache, refreshes, mapper, new DatasourceRuntimeVersions());
     }
 
-    @Autowired
     public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
                                ChartRefreshCoordinator refreshes, ObjectMapper mapper,
                                DatasourceRuntimeVersions runtimeVersions) {
+        this(jdbc, runner, cache, refreshes, mapper, runtimeVersions,
+                new DistinctCountCompositionPolicy());
+    }
+
+    @Autowired
+    public ChartComputeService(JdbcTemplate jdbc, FederatedQueryRunner runner, ChartCacheService cache,
+                               ChartRefreshCoordinator refreshes, ObjectMapper mapper,
+                               DatasourceRuntimeVersions runtimeVersions,
+                               SourceCompositionPolicy composition) {
         this.jdbc = jdbc;
         this.runner = runner;
         this.cache = cache;
         this.refreshes = refreshes;
         this.mapper = mapper;
         this.runtimeVersions = runtimeVersions;
+        this.composition = composition;
     }
 
     /** 차트를 즉시 재계산해 캐시에 반영. 차트 없으면 404. */
@@ -108,10 +120,13 @@ public class ChartComputeService {
         return cache.findCompatible(expectations);
     }
 
-    /** 차트가 2개 이상 데이터소스를 참조하는가 — 임베드 캐시-온리 판정의 단일 진실원. */
+    /**
+     * 이 차트가 스냅샷-온리 서빙 대상인가 — 차트 단위 판정 진입점. distinct 소스 수는 여기서 세고,
+     * 임계 규칙 자체는 {@link SourceCompositionPolicy#requiresSnapshot(int)}가 단일 소유한다(설계 §4.4).
+     */
     public boolean isMultiSource(long chartId) {
         Integer n = jdbc.queryForObject("SELECT count(*) FROM mc_chart_datasource WHERE chart_id=?", Integer.class, chartId);
-        return n != null && n >= 2;
+        return composition.requiresSnapshot(n == null ? 0 : n);
     }
 
     /** 저장 검증에서 이미 계산한 결과를 재조회 없이 현재 정의 버전의 캐시로 시드한다. */

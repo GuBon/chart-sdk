@@ -13,6 +13,8 @@ import com.chartsdk.datasource.DatasourceRuntimeVersions;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.SqlLiterals;
+import com.chartsdk.query.engine.DistinctCountCompositionPolicy;
+import com.chartsdk.query.engine.SourceCompositionPolicy;
 import com.chartsdk.web.ApiException;
 import com.chartsdk.web.dto.ChartSaveRequest;
 import org.springframework.http.HttpStatus;
@@ -39,6 +41,7 @@ public class ChartService {
     private final ChartDefinitionWriter writer;
     private final ChartVersionPolicy versionPolicy;
     private final DatasourceRuntimeVersions runtimeVersions;
+    private final SourceCompositionPolicy composition;
 
     public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
                         ChartComputeService compute, ChartOptionConverter converter,
@@ -48,11 +51,20 @@ public class ChartService {
                 new DatasourceRuntimeVersions());
     }
 
-    @Autowired
     public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
                         ChartComputeService compute, ChartOptionConverter converter,
                         FederatedQueryRunner runner, ChartDefinitionWriter writer,
                         ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions) {
+        this(charts, currentUser, queries, compute, converter, runner, writer, versionPolicy,
+                runtimeVersions, new DistinctCountCompositionPolicy());
+    }
+
+    @Autowired
+    public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
+                        ChartComputeService compute, ChartOptionConverter converter,
+                        FederatedQueryRunner runner, ChartDefinitionWriter writer,
+                        ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions,
+                        SourceCompositionPolicy composition) {
         this.charts = charts;
         this.currentUser = currentUser;
         this.queries = queries;
@@ -62,6 +74,7 @@ public class ChartService {
         this.writer = writer;
         this.versionPolicy = versionPolicy;
         this.runtimeVersions = runtimeVersions;
+        this.composition = composition;
     }
 
     public Map<String, Object> list(ChartListQuery query) {
@@ -226,8 +239,9 @@ public class ChartService {
             String storedSql = SqlLiterals.inline(built.sql().text(), built.sql().params());
             // 참조 소스 집합은 runBuilder 가 이미 확정(primary 폴백 포함) — junction 에 그대로 재사용.
             Set<Long> datasources = built.datasourceIds();
-            // 다중 소스는 스냅샷 모델 → refresh_mode 를 manual 로 고정(임베드는 캐시-온리라 live 무의미, §7).
-            String refreshMode = datasources.size() >= 2 ? "manual" : input.refreshMode();
+            // 스냅샷 필수 구성은 refresh_mode 를 manual 로 고정(임베드는 캐시-온리라 live 무의미, §7).
+            // 판정 규칙은 SourceCompositionPolicy 가 단일 소유한다(설계 §4.4).
+            String refreshMode = composition.normalizeRefreshMode(datasources, input.refreshMode());
             return new Prepared(
                     copy(input, defineMode, storedSql, chartType, refreshMode),
                     datasources,
