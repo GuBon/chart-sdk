@@ -1,6 +1,7 @@
 package com.chartsdk.query;
 
 import com.chartsdk.cache.SamplingMetadata;
+import com.chartsdk.datasource.postgres.PostgresCatalogPort;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -144,28 +145,16 @@ public class SamplingPlanner {
         return keys;
     }
 
-    // ── 카탈로그 조사 쿼리 ─────────────────────────────────
+    // ── 카탈로그 조사 쿼리 — PG 카탈로그 규약 텍스트는 PostgresCatalogPort 상수로 격리 ──
     private RelationStats relationStats(long datasourceId, Table t) {
-        List<List<Object>> rows = queries.execute(datasourceId, """
-                SELECT c.relkind::text, GREATEST(c.reltuples, 0)::bigint
-                  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                 WHERE n.nspname = ? AND c.relname = ?
-                """, List.of(t.schema(), t.table())).rows();
+        List<List<Object>> rows = queries.execute(datasourceId,
+                PostgresCatalogPort.RELATION_STATS_SQL, List.of(t.schema(), t.table())).rows();
         return rows.isEmpty() ? null : new RelationStats(String.valueOf(rows.get(0).get(0)), toLong(rows.get(0).get(1)));
     }
 
     private Pk primaryKey(long datasourceId, Table t) {
-        List<List<Object>> rows = queries.execute(datasourceId, """
-                SELECT a.attname
-                  FROM pg_catalog.pg_index i
-                  JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
-                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = i.indkey[0]
-                  JOIN pg_catalog.pg_type ty ON ty.oid = a.atttypid
-                 WHERE i.indisprimary AND i.indnkeyatts = 1
-                   AND n.nspname = ? AND c.relname = ?
-                   AND ty.typname IN ('int2', 'int4', 'int8')
-                """, List.of(t.schema(), t.table())).rows();
+        List<List<Object>> rows = queries.execute(datasourceId,
+                PostgresCatalogPort.SINGLE_INTEGER_PK_SQL, List.of(t.schema(), t.table())).rows();
         return rows.isEmpty() ? null : new Pk(String.valueOf(rows.get(0).get(0)));
     }
 

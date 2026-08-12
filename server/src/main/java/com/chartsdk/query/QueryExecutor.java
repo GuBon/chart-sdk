@@ -1,6 +1,7 @@
 package com.chartsdk.query;
 
 import com.chartsdk.datasource.DatasourcePoolRegistry;
+import com.chartsdk.datasource.postgres.PostgresCatalogPort;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,17 +13,18 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLTimeoutException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 모든 고객 DB 조회의 단일 실행 경로. 읽기 전용·타임아웃·행 제한 정책·에러코드 매핑을 한 곳에서 강제한다
  * (노코드 빌더·raw SQL·스키마 미리보기가 공유 — 별도 실행 경로를 만들지 않는다, 노코드 SQL생성규칙 §1.1).
  * 데이터 미리보기·원본 탐색은 기본 1,000행으로 제한한다. 실제 차트 계산은 제품 행 상한 없이
  * JDBC cursor fetch를 사용하며, 동시성은 {@link QueryExecutionCoordinator}가 제한한다.
+ *
+ * <p>카탈로그 로딩·TTL 캐시는 {@link CatalogService}(+{@link PostgresCatalogPort})로 분리했다.
+ * {@link #catalog}·{@link #invalidateCatalog}·{@link #estimatedRowCounts}는 기존 호출부·테스트
+ * 호환용 위임 파사드다 — 새 코드는 {@code CatalogService}를 직접 주입받는다.
  */
 @Service
 public class QueryExecutor {
@@ -32,18 +34,11 @@ public class QueryExecutor {
     public static final int UNBOUNDED_CHART_ROWS = 0;
     /** Bernoulli realizations vary around the requested target; this is a non-truncating guard. */
     public static final int MAX_CACHED_SAMPLE_ROWS = 75_000;
-    private static final long CATALOG_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private final DatasourcePoolRegistry pools;
     private final AdmissionController coordinator;
     private final QueryTimeoutPolicy timeouts;
-    private final ConcurrentHashMap<Long, CachedCatalog> catalogs = new ConcurrentHashMap<>();
-
-    private record CachedCatalog(SchemaCatalog value, long expiresAtNanos) {
-        boolean valid(long now) {
-            return now < expiresAtNanos;
-        }
-    }
+    private final CatalogService catalogs;
 
     public QueryExecutor(DatasourcePoolRegistry pools) {
         this(pools, null, QueryTimeoutPolicy.defaults());
@@ -53,12 +48,19 @@ public class QueryExecutor {
         this(pools, coordinator, QueryTimeoutPolicy.defaults());
     }
 
-    @Autowired
     public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator,
                          QueryTimeoutPolicy timeouts) {
+        this(pools, coordinator, timeouts,
+                new CatalogService(new PostgresCatalogPort(pools, coordinator, timeouts)));
+    }
+
+    @Autowired
+    public QueryExecutor(DatasourcePoolRegistry pools, AdmissionController coordinator,
+                         QueryTimeoutPolicy timeouts, CatalogService catalogs) {
         this.pools = pools;
         this.coordinator = coordinator;
         this.timeouts = timeouts;
+        this.catalogs = catalogs;
     }
 
     public QueryRows execute(long datasourceId, String sql) {
@@ -195,119 +197,18 @@ public class QueryExecutor {
         }
     }
 
-    /**
-     * 데이터소스 카탈로그 로딩 — 식별자 화이트리스트 검증용. 시스템 스키마와 mc_ 내부 테이블은 제외한다
-     * (노코드 SQL생성규칙 §9). 고객 DB가 public 외 사용자 스키마(예: tandanji)에 업무 테이블을 두어도
-     * 모두 노출한다 — search_path 가정 없이 스키마를 식별자로 한정한다(§1.2).
-     */
+    /** 카탈로그 조회 위임 파사드 — 로딩·TTL 캐시의 권위는 {@link CatalogService}다. */
     public SchemaCatalog catalog(long datasourceId) {
-        long now = System.nanoTime();
-        CachedCatalog cached = catalogs.get(datasourceId);
-        if (cached != null && cached.valid(now)) return cached.value();
-        return catalogs.compute(datasourceId, (id, current) -> {
-            long checkedAt = System.nanoTime();
-            if (current != null && current.valid(checkedAt)) return current;
-            return new CachedCatalog(loadCatalog(id), checkedAt + CATALOG_TTL_NANOS);
-        }).value();
+        return catalogs.catalog(datasourceId);
     }
 
     /** Allows datasource-management flows to make metadata changes visible immediately. */
     public void invalidateCatalog(long datasourceId) {
-        catalogs.remove(datasourceId);
+        catalogs.invalidate(datasourceId);
     }
 
-    private SchemaCatalog loadCatalog(long datasourceId) {
-        if (coordinator == null) return loadCatalogAdmitted(datasourceId);
-        try {
-            return coordinator.execute(datasourceId, AdmissionController.Kind.CATALOG,
-                    () -> loadCatalogAdmitted(datasourceId));
-        } catch (SQLTimeoutException e) {
-            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Catalog query timed out.");
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
-        }
-    }
-
-    private SchemaCatalog loadCatalogAdmitted(long datasourceId) {
-        Map<SchemaCatalog.Key, Map<String, String>> tables = new LinkedHashMap<>();
-        Map<SchemaCatalog.Key, RelationType> relationTypes = new LinkedHashMap<>();
-        Map<SchemaCatalog.Key, Long> estimates = new LinkedHashMap<>();
-        Map<SchemaCatalog.Key, Boolean> populated = new LinkedHashMap<>();
-        Map<SchemaCatalog.Key, String> relationDisplayNames = new LinkedHashMap<>();
-        Map<SchemaCatalog.Key, Map<String, String>> columnDisplayNames = new LinkedHashMap<>();
-        try (Connection conn = pools.connection(datasourceId)) {
-            try (PreparedStatement ps = conn.prepareStatement("""
-                     SELECT n.nspname AS table_schema,
-                            c.relname AS table_name,
-                            c.relkind::text AS relkind,
-                            CASE WHEN c.relkind IN ('r', 'p', 'm')
-                                 THEN GREATEST(c.reltuples, 0)::bigint END AS estimated_rows,
-                            c.relispopulated,
-                            a.attname AS column_name,
-                            pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-                            NULLIF(btrim(pg_catalog.obj_description(c.oid, 'pg_class')), '') AS relation_display_name,
-                            NULLIF(btrim(pg_catalog.col_description(c.oid, a.attnum)), '') AS column_display_name
-                       FROM pg_catalog.pg_class c
-                       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
-                      WHERE c.relkind IN ('r', 'p', 'v', 'm')
-                        AND a.attnum > 0
-                        AND NOT a.attisdropped
-                        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-                        AND n.nspname NOT LIKE 'pg_temp%'
-                        AND n.nspname NOT LIKE 'pg_toast_temp%'
-                        AND c.relname NOT LIKE 'mc\\_%' ESCAPE '\\'
-                        AND (has_table_privilege(c.oid, 'SELECT')
-                             OR has_column_privilege(c.oid, a.attname, 'SELECT'))
-                      ORDER BY n.nspname, c.relname, a.attnum
-                     """)) {
-                ps.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.CATALOG));
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        SchemaCatalog.Key key = new SchemaCatalog.Key(
-                                rs.getString("table_schema"), rs.getString("table_name"));
-                        tables.computeIfAbsent(key, k -> new LinkedHashMap<>())
-                                .put(rs.getString("column_name"), rs.getString("data_type"));
-                        relationTypes.putIfAbsent(key, RelationType.fromRelkind(rs.getString("relkind")));
-                        Object estimatedRows = rs.getObject("estimated_rows");
-                        if (estimatedRows instanceof Number n) estimates.putIfAbsent(key, n.longValue());
-                        populated.putIfAbsent(key, rs.getBoolean("relispopulated"));
-                        String relationDisplayName = rs.getString("relation_display_name");
-                        if (relationDisplayName != null) {
-                            relationDisplayNames.putIfAbsent(key, relationDisplayName);
-                        }
-                        String columnDisplayName = rs.getString("column_display_name");
-                        if (columnDisplayName != null) {
-                            columnDisplayNames.computeIfAbsent(key, ignored -> new LinkedHashMap<>())
-                                    .put(rs.getString("column_name"), columnDisplayName);
-                        }
-                    }
-                }
-            }
-        } catch (SQLTimeoutException e) {
-            throw new ApiException(HttpStatus.REQUEST_TIMEOUT, "QUERY_TIMEOUT", "Catalog query timed out.");
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
-        }
-        return new SchemaCatalog(
-                tables,
-                relationTypes,
-                estimates,
-                populated,
-                relationDisplayNames,
-                columnDisplayNames
-        );
-    }
-
-    /**
-     * PostgreSQL planner 통계(pg_class.reltuples) 기반 테이블 행 수 추정치.
-     * 정확한 COUNT(*)를 실행하지 않아 스키마 탐색·표본 계획·UI 안내가 대용량 테이블을 다시 스캔하지 않는다.
-     */
+    /** {@link CatalogService#estimatedRowCounts} 위임 파사드. */
     public Map<SchemaCatalog.Key, Long> estimatedRowCounts(long datasourceId) {
-        return catalog(datasourceId).estimatedRowCounts();
+        return catalogs.estimatedRowCounts(datasourceId);
     }
 }
