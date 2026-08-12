@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ApiError, tokensApi } from '@/lib/api';
+import { apiErrorMessage, tokensApi } from '@/lib/api';
 import type { User, UserToken } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -19,7 +19,7 @@ export function RevokeTokenModal({ token, users, onClose, onRevoked }: { token: 
       await tokensApi.revoke(token.tokenId);
       onRevoked();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : '회수에 실패했습니다.');
+      setError(apiErrorMessage(e, '회수에 실패했습니다.'));
       setRevoking(false);
     }
   };

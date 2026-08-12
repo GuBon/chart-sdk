@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
-import { ApiError, tokensApi, usersApi } from '@/lib/api';
+import { apiErrorMessage, apiFieldError, tokensApi, usersApi } from '@/lib/api';
 import type { User } from '@/lib/api';
+import { parseBoundedInteger } from '@/lib/numericValidation';
 import { Modal } from '@/components/ui/Modal';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
@@ -19,13 +20,22 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
   const [newDisplay, setNewDisplay] = useState('');
   const [issuing, setIssuing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [serverFieldErrors, setServerFieldErrors] = useState<Record<string, string>>({});
 
-  const expiry = new Date(Date.now() + (Number(days) || 0) * 86400000).toISOString().slice(0, 10);
-  const canIssue = creating ? !!newName.trim() && !!newDisplay.trim() : userId != null;
+  const parsedDays = parseBoundedInteger(days, 1, 3650);
+  const localDaysError = parsedDays == null ? '만료 기간은 1~3650 사이의 정수여야 합니다.' : null;
+  const daysError = localDaysError ?? serverFieldErrors.expiresInDays ?? null;
+  const expiry = parsedDays == null
+    ? null
+    : new Date(Date.now() + parsedDays * 86400000).toISOString().slice(0, 10);
+  const hasTarget = creating ? !!newName.trim() && !!newDisplay.trim() : userId != null;
+  const canIssue = hasTarget && parsedDays != null;
 
   const issue = async () => {
+    if (!canIssue || parsedDays == null) return;
     setIssuing(true);
     setError(null);
+    setServerFieldErrors({});
     try {
       let targetId = userId;
       if (creating) {
@@ -33,10 +43,16 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
         targetId = u.id;
       }
       if (targetId == null) return;
-      await tokensApi.issue(targetId, Number(days) || 365);
+      await tokensApi.issue(targetId, parsedDays);
       onIssued();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : '발급에 실패했습니다.');
+      const fieldErrors = {
+        ...(apiFieldError(e, 'username') ? { username: apiFieldError(e, 'username')! } : {}),
+        ...(apiFieldError(e, 'displayName') ? { displayName: apiFieldError(e, 'displayName')! } : {}),
+        ...(apiFieldError(e, 'expiresInDays') ? { expiresInDays: apiFieldError(e, 'expiresInDays')! } : {}),
+      };
+      setServerFieldErrors(fieldErrors);
+      setError(Object.keys(fieldErrors).length === 0 ? apiErrorMessage(e, '발급에 실패했습니다.') : null);
       setIssuing(false);
     }
   };
@@ -61,8 +77,24 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
         <Field label="사용자">
           {creating ? (
             <div className="flex gap-2">
-              <Input size="md" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="username" />
-              <Input size="md" value={newDisplay} onChange={(e) => setNewDisplay(e.target.value)} placeholder="표시명" />
+              <Input
+                size="md"
+                value={newName}
+                onChange={(e) => {
+                  setNewName(e.target.value);
+                  setServerFieldErrors((current) => withoutField(current, 'username'));
+                }}
+                placeholder="username"
+              />
+              <Input
+                size="md"
+                value={newDisplay}
+                onChange={(e) => {
+                  setNewDisplay(e.target.value);
+                  setServerFieldErrors((current) => withoutField(current, 'displayName'));
+                }}
+                placeholder="표시명"
+              />
             </div>
           ) : (
             <Select
@@ -72,7 +104,16 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
               options={users.map((u) => ({ value: u.id, label: `${u.username} (${u.displayName})` }))}
             />
           )}
-          <button type="button" onClick={() => setCreating((v) => !v)} className="mt-1.5 flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary">
+          {creating && serverFieldErrors.username && <p className="text-xs text-danger">username: {serverFieldErrors.username}</p>}
+          {creating && serverFieldErrors.displayName && <p className="text-xs text-danger">표시명: {serverFieldErrors.displayName}</p>}
+          <button
+            type="button"
+            onClick={() => {
+              setCreating((value) => !value);
+              setServerFieldErrors({});
+            }}
+            className="mt-1.5 flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
+          >
             <Plus className="size-3" />
             {creating ? '기존 사용자 선택' : '새 사용자 만들기 — username · 표시명 입력 후 즉시 발급 가능'}
           </button>
@@ -81,10 +122,20 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
         <Field label="만료 기간">
           <div className="flex items-center gap-2">
             <div className="w-[120px]">
-              <Input value={days} onChange={(e) => setDays(e.target.value)} inputMode="numeric" />
+              <Input
+                value={days}
+                onChange={(e) => {
+                  setDays(e.target.value);
+                  setServerFieldErrors((current) => withoutField(current, 'expiresInDays'));
+                }}
+                inputMode="numeric"
+                aria-invalid={daysError != null}
+                aria-describedby={daysError ? 'token-expiry-error' : undefined}
+              />
             </div>
-            <span className="text-[13px] text-text-secondary">일 (만료: {expiry})</span>
+            <span className="text-[13px] text-text-secondary">일{expiry ? ` (만료: ${expiry})` : ''}</span>
           </div>
+          {daysError && <p id="token-expiry-error" className="text-xs text-danger">{daysError}</p>}
         </Field>
 
         <p className="rounded-md bg-info/10 px-3 py-2.5 text-xs text-info">
@@ -94,4 +145,10 @@ export function IssueTokenModal({ users, onClose, onIssued }: { users: User[]; o
       </div>
     </Modal>
   );
+}
+
+function withoutField(fields: Record<string, string>, field: string): Record<string, string> {
+  const next = { ...fields };
+  delete next[field];
+  return next;
 }

@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
-import { ApiError, datasourcesApi } from '@/lib/api';
+import { apiErrorMessage, datasourcesApi } from '@/lib/api';
 import type { Datasource, DatasourceInput } from '@/lib/api';
+import { parseBoundedInteger } from '@/lib/numericValidation';
 import { Modal } from '@/components/ui/Modal';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
@@ -35,15 +36,26 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
   const [error, setError] = useState<string | null>(null);
 
   const reservedName = name.trim().toLocaleLowerCase('en-US') === 'new';
-  const valid = !reservedName && name.trim() && host.trim() && databaseName.trim() && dbUser.trim() && (mode === 'edit' || dbPassword.trim());
+  const parsedPort = parseBoundedInteger(port, 1, 65535);
+  const parsedMaxPoolSize = parseBoundedInteger(maxPoolSize, 1, 50);
+  const portError = parsedPort == null ? '포트는 1~65535 사이의 정수여야 합니다.' : null;
+  const maxPoolSizeError = parsedMaxPoolSize == null ? '커넥션 상한은 1~50 사이의 정수여야 합니다.' : null;
+  const valid = !reservedName
+    && !!name.trim()
+    && !!host.trim()
+    && !!databaseName.trim()
+    && !!dbUser.trim()
+    && (mode === 'edit' || !!dbPassword.trim())
+    && parsedPort != null
+    && parsedMaxPoolSize != null;
 
   const buildInput = (): DatasourceInput => ({
     name: name.trim(),
     host: host.trim(),
-    port: Number(port) || 5432,
+    port: parsedPort!,
     databaseName: databaseName.trim(),
     dbUser: dbUser.trim(),
-    maxPoolSize: Number(maxPoolSize) || 5,
+    maxPoolSize: parsedMaxPoolSize!,
     ...(dbPassword ? { dbPassword } : {}),
   });
 
@@ -54,7 +66,7 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
       const { name: _drop, ...creds } = buildInput();
       setTestResult(await datasourcesApi.test(creds));
     } catch (e) {
-      setTestResult({ ok: false, message: e instanceof ApiError ? e.message : '연결 실패' });
+      setTestResult({ ok: false, message: apiErrorMessage(e, '연결 실패') });
     } finally {
       setTesting(false);
     }
@@ -69,7 +81,7 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
       else await datasourcesApi.update(initial!.id, buildInput());
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : '저장에 실패했습니다.');
+      setError(apiErrorMessage(e, '저장에 실패했습니다.'));
       setSaving(false);
     }
   };
@@ -100,7 +112,15 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
             <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="db.internal" />
           </Field>
           <Field label="포트" className="w-32">
-            <Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" placeholder="5432" />
+            <Input
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              inputMode="numeric"
+              placeholder="5432"
+              aria-invalid={portError != null}
+              aria-describedby={portError ? 'datasource-port-error' : undefined}
+            />
+            {portError && <p id="datasource-port-error" className="text-xs text-danger">{portError}</p>}
           </Field>
         </div>
 
@@ -133,12 +153,19 @@ export function DatasourceFormModal({ mode, initial, onClose, onSaved }: Props) 
         </button>
         {advanced && (
           <Field label="커넥션 상한 (max_pool_size)" className="w-40">
-            <Input value={maxPoolSize} onChange={(e) => setMaxPoolSize(e.target.value)} inputMode="numeric" />
+            <Input
+              value={maxPoolSize}
+              onChange={(e) => setMaxPoolSize(e.target.value)}
+              inputMode="numeric"
+              aria-invalid={maxPoolSizeError != null}
+              aria-describedby={maxPoolSizeError ? 'datasource-pool-error' : undefined}
+            />
+            {maxPoolSizeError && <p id="datasource-pool-error" className="text-xs text-danger">{maxPoolSizeError}</p>}
           </Field>
         )}
 
         <div className="flex items-center gap-2.5">
-          <Button variant="secondary" size="sm" className="h-[34px]" disabled={testing} onClick={handleTest}>
+          <Button variant="secondary" size="sm" className="h-[34px]" disabled={!valid || testing} onClick={handleTest}>
             {testing ? '테스트 중…' : '연결 테스트'}
           </Button>
           {testResult && (

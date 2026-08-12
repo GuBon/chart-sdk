@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Copy } from 'lucide-react';
 import { tokensApi, usersApi } from '@/lib/api';
@@ -36,6 +36,8 @@ export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>
   const [users, setUsers] = useState<User[]>([]);
   const [tokenId, setTokenId] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const codeRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
     void Promise.all([tokensApi.list(), usersApi.list()]).then(([t, u]) => {
@@ -53,8 +55,25 @@ export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>
 
   const copy = async () => {
     if (!code) return;
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
+    setCopyFailed(false);
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+    } catch {
+      // 클립보드 접근이 거부되는 환경(엄격한 브라우저 정책 등)에서 조용히 실패하지 않도록,
+      // 코드 블록 전체를 선택해 사용자가 바로 Ctrl+C 할 수 있게 하고 안내를 띄운다(설계 L2).
+      selectCode();
+      setCopyFailed(true);
+    }
+  };
+  const selectCode = () => {
+    const pre = codeRef.current;
+    const selection = window.getSelection();
+    if (!pre || !selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    selection.removeAllRanges();
+    selection.addRange(range);
   };
   useEffect(() => {
     if (!copied) return;
@@ -82,7 +101,12 @@ export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>
             />
           </Field>
           <p className="text-sm text-text-secondary">선택한 토큰이 포함된 코드를 페이지에 붙여넣으세요</p>
-          <pre className="overflow-x-auto rounded-md bg-muted px-3.5 py-3 font-mono text-[13px] leading-[22px] text-text-primary">{code}</pre>
+          <pre ref={codeRef} className="overflow-x-auto rounded-md bg-muted px-3.5 py-3 font-mono text-[13px] leading-[22px] text-text-primary">{code}</pre>
+          {copyFailed && (
+            <p className="text-xs text-danger" role="alert">
+              클립보드 접근이 차단되어 자동 복사에 실패했습니다. 위 코드가 선택되어 있으니 Ctrl+C로 복사하세요.
+            </p>
+          )}
           <div className="flex justify-end">
             <Button variant="secondary" size="sm" className="h-8" icon={<Copy className="size-3.5" />} onClick={copy}>
               {copied ? '복사되었습니다' : '복사'}

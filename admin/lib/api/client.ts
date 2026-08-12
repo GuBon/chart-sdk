@@ -3,17 +3,32 @@
 
 const BASE = `${process.env.NEXT_PUBLIC_E2E_MSW === 'true' ? '' : (process.env.NEXT_PUBLIC_API_BASE ?? '')}/api/v1`;
 
-/** 서버 공통 에러 형식 {error:{code,message,detail?}} 을 표현 */
+/** 서버 공통 에러 형식 {error:{code,message,fields?,requestId?}} 을 표현 */
 export class ApiError extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
-    readonly detail?: string,
+    /** 필드 검증 오류일 때만: {필드명: 메시지} — 폼이 해당 칸을 콕 집어 표시한다 */
+    readonly fields?: Record<string, string>,
+    /** 서버 요청 ID — 5xx일 때 사용자에게 노출해 지원팀이 로그를 상관 지을 수 있게 한다 */
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/** API 오류 메시지에 운영 로그를 찾을 수 있는 5xx 요청 ID를 보존한다. */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback;
+  if (error.status >= 500 && error.requestId) return `${error.message} (요청 ID: ${error.requestId})`;
+  return error.message;
+}
+
+/** Bean Validation의 필드별 메시지를 폼 컨트롤 가까이에 표시하기 위한 단일 접근점. */
+export function apiFieldError(error: unknown, field: string): string | undefined {
+  return error instanceof ApiError ? error.fields?.[field] : undefined;
 }
 
 interface RequestInitJson extends Omit<RequestInit, 'body'> {
@@ -53,14 +68,15 @@ async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
   if (!res.ok) {
     let code = 'INTERNAL_ERROR';
     let message = res.statusText || '요청에 실패했습니다.';
-    let detail: string | undefined;
+    let fields: Record<string, string> | undefined;
+    let requestId: string | undefined;
     try {
       const data = await res.json();
-      if (data?.error) ({ code, message, detail } = data.error);
+      if (data?.error) ({ code, message, fields, requestId } = data.error);
     } catch {
       /* 비-JSON 응답은 statusText 로 둔다 */
     }
-    throw new ApiError(code, message, res.status, detail);
+    throw new ApiError(code, message, res.status, fields, requestId);
   }
 
   if (res.status === 204) return undefined as T;

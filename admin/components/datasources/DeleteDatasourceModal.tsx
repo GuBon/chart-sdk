@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
-import { ApiError, datasourcesApi } from '@/lib/api';
+import { apiErrorMessage, datasourcesApi } from '@/lib/api';
 import type { Datasource } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -19,7 +19,7 @@ export function DeleteDatasourceModal({ datasource, onClose, onDeleted }: { data
       await datasourcesApi.remove(datasource.id);
       onDeleted();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : '삭제에 실패했습니다.');
+      setError(apiErrorMessage(e, '삭제에 실패했습니다.'));
       setDeleting(false);
     }
   };

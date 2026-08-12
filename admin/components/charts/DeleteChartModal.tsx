@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ApiError, chartsApi } from '@/lib/api';
+import { apiErrorMessage, chartsApi } from '@/lib/api';
 import type { ChartSummary } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -18,7 +18,7 @@ export function DeleteChartModal({ chart, onClose, onDeleted }: { chart: ChartSu
       await chartsApi.remove(chart.id);
       onDeleted();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : '삭제에 실패했습니다.');
+      setError(apiErrorMessage(e, '삭제에 실패했습니다.'));
       setDeleting(false);
     }
   };

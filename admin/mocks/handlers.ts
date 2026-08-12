@@ -212,6 +212,29 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
+  http.post('/api/v1/charts/:id/duplicate', ({ params }) => {
+    const sourceId = Number(params.id);
+    const sourceSummary = chartList.find((chart) => chart.id === sourceId);
+    if (!sourceSummary) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+
+    const source = savedCharts[sourceId] ?? chartDetail(sourceSummary);
+    const id = nextChartId++;
+    const now = new Date().toISOString();
+    const name = `${String(source.name).slice(0, 195)} (복사)`;
+    const copy = {
+      ...source,
+      id,
+      version: 0,
+      name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    savedCharts[id] = copy;
+    computedAtByChart[id] = computedAtFor(sourceId);
+    chartList = [{ ...sourceSummary, id, name, updatedAt: now }, ...chartList];
+    return HttpResponse.json(copy, { status: 201 });
+  }),
+
   // 저장(생성/수정) — 서버는 1회 실행해 캐시 시드(PRD 7.3). 목은 입력 에코 + id 부여.
   http.post('/api/v1/charts', async ({ request }) => {
     const body = (await request.json()) as Record<string, unknown>;

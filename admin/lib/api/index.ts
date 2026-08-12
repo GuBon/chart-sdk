@@ -19,7 +19,7 @@ import type {
   UserToken,
 } from './types';
 
-export { ApiError } from './client';
+export { ApiError, apiErrorMessage, apiFieldError } from './client';
 export type * from './types';
 
 const qs = (params: Record<string, string | number | undefined>) => {
@@ -51,6 +51,8 @@ export const chartsApi = {
   create: (input: ChartInput) => request<Chart>('/charts', { method: 'POST', body: input }),
   update: (id: number, input: ChartInput) => request<Chart>(`/charts/${id}`, { method: 'PUT', body: input }),
   remove: (id: number) => request<void>(`/charts/${id}`, { method: 'DELETE' }),
+  /** 같은 구성의 사본을 '원래이름 (복사)'로 만든다. 서버가 캐시 스냅샷까지 복제해 즉시 렌더된다. */
+  duplicate: (id: number) => request<Chart>(`/charts/${id}/duplicate`, { method: 'POST' }),
 };
 
 function normalizeChartList(res: ChartListResponse | ChartListResponse['charts'], params: ChartListParams): ChartListResponse {
