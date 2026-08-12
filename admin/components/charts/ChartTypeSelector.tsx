@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import {
   getVariants,
   MAJOR_TYPE_CHOICES,
@@ -11,7 +11,8 @@ import { cn } from '@/lib/cn';
 import { CHART_TYPE_META, chartTypeLabel } from '@/lib/chartTypes';
 
 interface Props {
-  chartType: MajorType;
+  /** null이면 아직 아무 종류도 선택하지 않은 상태 — 어떤 버튼도 활성 표시하지 않는다. */
+  chartType: MajorType | null;
   variant: string;
   onChangeChartType: (chartType: MajorType) => void;
   onChangeVariant: (variant: string) => void;
@@ -24,35 +25,18 @@ export function ChartTypeSelector({
   onChangeChartType,
   onChangeVariant,
 }: Props) {
-  const variants = getVariants(chartType);
+  const variants = chartType ? getVariants(chartType) : [];
   const selectedVariant = variants.find((choice) => choice.value === variant) ?? variants[0];
   const effectiveVariant = selectedVariant?.value ?? '';
-  const ungrouped = MAJOR_TYPE_CHOICES.filter((choice) => !choice.group);
-  const groups = [...new Set(MAJOR_TYPE_CHOICES.flatMap((choice) => choice.group ? [choice.group] : []))];
 
   return (
     <div className="flex flex-col gap-4 p-4">
       <SelectorRow label="대분류">
-        <div className="flex min-w-0 flex-1 flex-col gap-3" role="group" aria-label="차트 대분류">
-          <TypeGrid
-            choices={ungrouped}
-            value={chartType}
-            onChange={onChangeChartType}
-          />
-          {groups.map((group) => (
-            <div key={group} className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">{group}</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-              <TypeGrid
-                choices={MAJOR_TYPE_CHOICES.filter((choice) => choice.group === group)}
-                value={chartType}
-                onChange={onChangeChartType}
-              />
-            </div>
-          ))}
-        </div>
+        <TypeGrid
+          choices={MAJOR_TYPE_CHOICES}
+          value={chartType}
+          onChange={onChangeChartType}
+        />
       </SelectorRow>
 
       {variants.length > 1 && (
@@ -87,31 +71,36 @@ function TypeGrid({
   onChange,
 }: {
   choices: typeof MAJOR_TYPE_CHOICES;
-  value: MajorType;
+  value: MajorType | null;
   onChange: (value: MajorType) => void;
 }) {
+  // 지리 계열 포함 전체를 한 줄로 배치하고, 폭이 부족하면 자동 줄바꿈한다.
+  // 그룹(GEO 등)이 바뀌는 지점에는 그룹명 없이 세로 구분선만 둔다.
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-2">
-      {choices.map((choice) => {
+    <div className="flex min-w-0 flex-1 flex-wrap gap-2" role="group" aria-label="차트 대분류">
+      {choices.map((choice, index) => {
         const { Icon } = CHART_TYPE_META[choice.value];
         const active = choice.value === value;
+        const startsNewGroup = index > 0 && choice.group !== choices[index - 1].group;
         return (
-          <button
-            key={choice.value}
-            type="button"
-            aria-pressed={active}
-            data-testid={`builder-chart-type-${choice.value}`}
-            onClick={() => onChange(choice.value)}
-            className={cn(
-              'flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md border px-2 py-2 text-xs transition-colors',
-              active
-                ? 'border-primary bg-muted font-medium text-text-primary'
-                : 'border-border text-text-secondary hover:bg-muted hover:text-text-primary',
-            )}
-          >
-            <Icon className="size-4 shrink-0" />
-            <span className="truncate">{choice.label}</span>
-          </button>
+          <Fragment key={choice.value}>
+            {startsNewGroup && <span aria-hidden="true" className="my-1 w-px self-stretch bg-border" />}
+            <button
+              type="button"
+              aria-pressed={active}
+              data-testid={`builder-chart-type-${choice.value}`}
+              onClick={() => onChange(choice.value)}
+              className={cn(
+                'flex min-h-10 items-center gap-2 whitespace-nowrap rounded-md border px-3 py-2 text-xs transition-colors',
+                active
+                  ? 'border-primary bg-muted font-medium text-text-primary'
+                  : 'border-border text-text-secondary hover:bg-muted hover:text-text-primary',
+              )}
+            >
+              <Icon className="size-4 shrink-0" />
+              {choice.label}
+            </button>
+          </Fragment>
         );
       })}
     </div>

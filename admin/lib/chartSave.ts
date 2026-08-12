@@ -9,6 +9,7 @@ export interface ChartSaveReadiness {
 }
 
 const BUILDER_SAVE_MESSAGES: Record<string, string> = {
+  '차트 종류를 선택하세요.': '차트 종류를 선택해야 저장할 수 있습니다.',
   '테이블을 선택하세요.': '테이블을 선택해야 저장할 수 있습니다.',
   'X축 컬럼을 선택하세요.': 'X축 컬럼을 선택해야 저장할 수 있습니다.',
   'Y축을 1개 이상 추가하세요.': 'Y축을 1개 이상 추가해야 저장할 수 있습니다.',

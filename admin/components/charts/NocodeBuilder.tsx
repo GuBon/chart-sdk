@@ -13,6 +13,7 @@ import {
   aggChoicesForChart,
   builderExecutionIssue,
   builderWarning,
+  CHART_TYPE_REQUIRED_MESSAGE,
   columnDisplayName,
   columnsForBuilder,
   createSampleConfig,
@@ -54,6 +55,8 @@ function sampleTotalHint(estimatedRowCount?: number): string {
 interface Props {
   config: BuilderConfig;
   chartType: ChartType;
+  /** false면 아직 차트 종류를 고르지 않은 상태 — chartType은 내부 계산용 자리표시자다. */
+  chartTypeSelected: boolean;
   chartVariant: string;
   tables: SchemaTable[]; // 모든 데이터소스의 테이블 풀(각 datasourceId 태깅) — 컬럼 해석·다중 소스 조인용
   datasources: Datasource[];
@@ -72,6 +75,7 @@ interface Props {
 export function NocodeBuilder({
   config,
   chartType,
+  chartTypeSelected,
   chartVariant,
   tables,
   datasources,
@@ -117,7 +121,10 @@ export function NocodeBuilder({
   const xLabel = areaInput ? '지역' : isBoxplot ? '카테고리' : pointInput ? '경도' : 'X축';
   const yLabel = areaInput ? '값' : isBoxplot || isPie ? '값' : pointInput ? '위도' : 'Y축 값';
   const yAggChoices = aggChoicesForChart(chartType);
-  const executionIssue = builderExecutionIssue(config, chartType, tables);
+  // 차트 종류 미선택 안내가 테이블 선택 안내보다 먼저 보인다.
+  const executionIssue = chartTypeSelected
+    ? builderExecutionIssue(config, chartType, tables)
+    : CHART_TYPE_REQUIRED_MESSAGE;
   const warning = builderWarning(config);
   const canRun = !executionIssue;
   const firstCol = (pointInput ? numericOptions[0] : colOptions[0])?.value ?? '';
@@ -132,7 +139,7 @@ export function NocodeBuilder({
   const baseSchemaTable = config.table ? findByKey(tableRefKey(config.table)) : undefined;
   const baseTableLabel = config.table
     ? [config.table.schema, config.table.name].filter(Boolean).join('.')
-    : '원본 테이블을 선택하세요';
+    : '원본 테이블이 비어 있습니다';
 
   const clearXAxis = () => {
     patch({
@@ -261,7 +268,7 @@ export function NocodeBuilder({
       {/* 구성 헤더 + 내부 정의 모드 탭 */}
       <div className="border-b border-border">
         <div className="flex h-12 items-center gap-3 px-4">
-          <span className={cn('min-w-0 truncate text-sm text-text-primary', config.table ? 'font-bold' : 'font-medium')} title={baseTableLabel}>
+          <span className={cn('min-w-0 truncate text-sm', config.table ? 'font-bold text-text-primary' : 'font-medium text-text-tertiary')} title={baseTableLabel}>
             {baseTableLabel}
           </span>
           <div className="flex-1" />
@@ -323,10 +330,10 @@ export function NocodeBuilder({
       <BuilderAccordionGroup
         id="builder-chart-type"
         title="차트 종류"
-        summary={chartTypeSelectionLabel(chartType, chartVariant)}
+        summary={chartTypeSelected ? chartTypeSelectionLabel(chartType, chartVariant) : '차트 종류를 선택하세요'}
       >
         <ChartTypeSelector
-          chartType={chartType}
+          chartType={chartTypeSelected ? chartType : null}
           variant={chartVariant}
           onChangeChartType={onChangeChartType}
           onChangeVariant={onChangeChartVariant}

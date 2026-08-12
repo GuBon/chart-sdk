@@ -196,7 +196,7 @@ export const OPTION_REGISTRY: OptionDef[] = [
     control: 'iconGrid', appliesTo: ['bar', 'line', 'pie', 'scatter', 'boxplot', 'heatmap', 'map', 'geoscatter'],
     storage: 'column', column: 'chart_type', default: 'bar', echarts: '@series.type',
     choices: MAJOR_TYPE_CHOICES,
-    help: '지리 계열은 GEO 그룹으로 표시(화면설계 S2 차트 종류 그룹). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
+    help: '지리 계열 포함 전체 대분류를 한 줄로 표시하고 GEO 그룹 앞은 세로 구분선으로만 구분(화면설계 S2 차트 종류). 후속 geo 차트(경로 등)는 GEO 그룹에 추가',
   },
   {
     key: 'variant', zone: 'common', section: '기본', label: '중분류',

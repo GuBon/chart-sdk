@@ -579,6 +579,9 @@ function builderCommonValidationIssue(cfg: BuilderConfig, tables: SchemaTable[])
   return null;
 }
 
+/** 차트 종류 미선택 안내 — 테이블 선택보다 먼저 보여준다(신규 차트는 기본 선택이 없다). */
+export const CHART_TYPE_REQUIRED_MESSAGE = '차트 종류를 선택하세요.';
+
 /** 실행 버튼 검증. 차트별 필수 축 또는 공간 전용 컬럼 구성이 완성된 경우만 허용한다. */
 export function builderExecutionIssue(cfg: BuilderConfig, chartType: ChartType, tables: SchemaTable[]): string | null {
   return builderValidationIssue(cfg, chartType, tables);

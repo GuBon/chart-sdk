@@ -6,13 +6,14 @@ import { ChevronLeft, ChevronsRight, LockKeyhole, Plus, RotateCcw } from 'lucide
 import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
 import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import { normalizeMapViewport, type MapViewport, type MapViewportMode } from '@chartsdk/chart-options/geo';
-import { ApiError, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
+import { apiErrorMessage, chartsApi, datasourcesApi, queryApi, schemaApi } from '@/lib/api';
 import type { BuilderConfig, ChartDataResponse, ChartInput, Datasource, GeoSeriesType, QueryResult, RefreshMode, SchemaTable, TableRef } from '@/lib/api';
 import {
   activeTables,
   assignDataPanelColumn,
   builderExecutionIssue,
   builderValidationIssue,
+  CHART_TYPE_REQUIRED_MESSAGE,
   dataPanelColumnSelectionIssue,
   emptyBuilder,
   emptyJoin,
@@ -242,6 +243,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const [datasourceId, setDatasourceId] = useState<number | null>(null);
   const [builder, setBuilder] = useState<BuilderConfig>(emptyBuilder());
   const [chartType, setChartType] = useState<MajorType>('bar');
+  // 신규 차트는 차트 종류 기본 선택이 없다. 선택 전까지 chartType('bar')은 내부 계산용 자리표시자다.
+  const [chartTypeChosen, setChartTypeChosen] = useState(chartId != null);
   const [options, setOptions] = useState<Options>(() => defaultsFor('bar'));
 
   const [datasources, setDatasources] = useState<Datasource[]>([]);
@@ -366,6 +369,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     if (chartId == null) {
       chartTypeDraftsRef.current = createChartTypeDraftStore();
       setSavedVersion(null);
+      setChartTypeChosen(false);
       return;
     }
     let cancelled = false;
@@ -421,6 +425,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           setDatasourceId(c.datasourceId);
           setBuilder(restoredBuilder);
           setChartType(c.chartType);
+          setChartTypeChosen(true);
           setOptions(restoredOptions);
           dispatchMapViewport({
             type: 'restoreGlobal',
@@ -780,7 +785,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     } catch (e) {
       if (requestId !== rawRequestId.current) return;
       setRaw(null);
-      setRawError(e instanceof ApiError ? e.message : '원본 데이터를 불러오지 못했습니다.');
+      setRawError(apiErrorMessage(e, '원본 데이터를 불러오지 못했습니다.'));
     } finally {
       if (requestId === rawRequestId.current) setRawRunning(false);
     }
@@ -872,7 +877,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   };
 
   const runBuilder = async () => {
-    const issue = builderExecutionIssue(builder, chartType, tables);
+    const issue = chartTypeChosen
+      ? builderExecutionIssue(builder, chartType, tables)
+      : CHART_TYPE_REQUIRED_MESSAGE;
     if (issue || primaryDatasourceId == null) {
       if (issue) setRunError(issue);
       return;
@@ -903,7 +910,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setResultTab('result');
     } catch (e) {
       if (requestId !== runRequestId.current) return;
-      setRunError(e instanceof ApiError ? e.message : '실행에 실패했습니다.');
+      setRunError(apiErrorMessage(e, '실행에 실패했습니다.'));
     } finally {
       if (requestId === runRequestId.current) setRunning(false);
     }
@@ -928,7 +935,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       setRaw(rows);
     } catch (error) {
       if (requestId !== rawRequestId.current) return;
-      setRawError(error instanceof ApiError ? error.message : '원본 데이터를 불러오지 못했습니다.');
+      setRawError(apiErrorMessage(error, '원본 데이터를 불러오지 못했습니다.'));
     } finally {
       if (requestId === rawRequestId.current) setRawRunning(false);
     }
@@ -961,7 +968,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 실제 저장은 현재 구성으로 실행 성공한 차트 결과가 있을 때만 진행해 stale SQL 저장을 막는다.
   const saveIssue = chartSaveIssue({
     name,
-    builderIssue: builderValidationIssue(builder, chartType, tables),
+    builderIssue: chartTypeChosen
+      ? builderValidationIssue(builder, chartType, tables)
+      : CHART_TYPE_REQUIRED_MESSAGE,
     hasDatasource: primaryDatasourceId != null,
     hasResult: result != null,
     resultKind,
@@ -1038,7 +1047,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       }
       return true;
     } catch (e) {
-      setToast(e instanceof ApiError ? e.message : '저장에 실패했습니다.');
+      setToast(apiErrorMessage(e, '저장에 실패했습니다.'));
       return false;
     } finally {
       setSaving(false);
@@ -1078,12 +1087,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           : current);
         setToast('데이터를 갱신했습니다');
       } catch (error) {
-        setRefreshError(error instanceof ApiError
-          ? `갱신은 완료됐지만 미리보기를 다시 불러오지 못했습니다. ${error.message}`
+        const detail = apiErrorMessage(error, '');
+        setRefreshError(detail
+          ? `갱신은 완료됐지만 미리보기를 다시 불러오지 못했습니다. ${detail}`
           : '갱신은 완료됐지만 미리보기를 다시 불러오지 못했습니다.');
       }
     } catch (error) {
-      setRefreshError(error instanceof ApiError ? error.message : '데이터 갱신에 실패했습니다.');
+      setRefreshError(apiErrorMessage(error, '데이터 갱신에 실패했습니다.'));
     } finally {
       setRefreshing(false);
     }
@@ -1098,7 +1108,14 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const createChart = () => navigateFromEditor('/charts/new');
 
   const changeChartType = (nextType: MajorType) => {
-    if (nextType === chartType) return;
+    if (!chartTypeChosen) {
+      // 첫 선택 — 자리표시자(chartType)와 같은 유형이면 상태 전환 없이 선택만 확정한다.
+      setChartTypeChosen(true);
+      if (nextType === chartType) {
+        setDirty(true);
+        return;
+      }
+    } else if (nextType === chartType) return;
     const currentOptions = optionsWithMapViewport(
       options,
       chartType,
@@ -1201,6 +1218,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setDatasourceId(restored.definition.datasourceId);
     setBuilder(restored.definition.builder);
     setChartType(restored.definition.chartType);
+    setChartTypeChosen(true);
     setOptions(restored.definition.options);
     setResult(restored.preview.result);
     setResultKind(restored.preview.resultKind);
@@ -1448,6 +1466,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
                 <NocodeBuilder
                   config={builder}
                   chartType={chartType}
+                  chartTypeSelected={chartTypeChosen}
                   chartVariant={String(options.variant ?? '')}
                   tables={tables}
                   datasources={datasources}
