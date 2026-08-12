@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { ChartDesignViewport } from './ChartDesignViewport';
 import { ChartFocusDialog } from './ChartFocusDialog';
-import { supportsPreviewDataZoom, type MapBoundsChangeSource } from './ChartPreview';
+import type { MapBoundsChangeSource } from './ChartPreview';
 import { PreviewFitControls } from './PreviewFitControls';
 import { mapViewportStatus } from './MapViewportControl';
 
@@ -150,14 +150,6 @@ export function ChartPreviewPanel({
           {(chartType === 'map' || chartType === 'geoscatter') && (
             <span className="max-w-44 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary" title={`표시 영역: ${mapViewportStatus(mapViewport)}`}>
               표시 영역: {mapViewportEditing ? '지도 조정 중' : mapViewportStatus(mapViewport)}
-            </span>
-          )}
-          {option && supportsPreviewDataZoom(chartType) && (
-            <span
-              className="max-w-48 truncate rounded bg-muted px-2 py-1 text-[11px] text-text-secondary"
-              title="저장되지 않는 미리보기 탐색입니다. 차트 위에서 휠로 확대·축소하고, 드래그로 이동하며, 더블클릭하면 초기화됩니다."
-            >
-              미리보기 전용 · 휠 줌
             </span>
           )}
           {colorPicking && (

@@ -7,7 +7,7 @@ import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
 import type { ChartDesignSize, PreviewFitMode } from '@chartsdk/chart-options/display';
 import type { MapBounds, MapViewport } from '@chartsdk/chart-options/geo';
 import { ChartDesignViewport } from './ChartDesignViewport';
-import { supportsPreviewDataZoom, type MapBoundsChangeSource } from './ChartPreview';
+import type { MapBoundsChangeSource } from './ChartPreview';
 import { PreviewFitControls } from './PreviewFitControls';
 
 interface Props {
@@ -100,14 +100,6 @@ export function ChartFocusDialog({
           <h2 className="text-sm font-semibold text-text-primary">집중 미리보기</h2>
           <p className="text-[11px] text-text-tertiary">{designSize.label}</p>
         </div>
-        {supportsPreviewDataZoom(chartType) && (
-          <span
-            className="rounded bg-muted px-2 py-1 text-[11px] text-text-secondary"
-            title="저장되지 않는 미리보기 탐색입니다."
-          >
-            휠 줌 · 드래그 이동 · 더블클릭 초기화
-          </span>
-        )}
         <div className="flex-1" />
         <PreviewFitControls fitMode={fitMode} zoom={zoom} onFitMode={setFitMode} onZoom={setZoom} />
         <button
