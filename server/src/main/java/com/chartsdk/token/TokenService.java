@@ -35,14 +35,19 @@ public class TokenService {
 
     @Transactional
     public Map<String, Object> issue(long userId, int days) {
-        int expiresInDays = Math.max(1, days);
+        // 존재하지 않는 사용자는 FK 위반(400)이 아니라 404로 먼저 응답한다(설계 M2, Tier 1 존재 검증).
+        Integer exists = jdbc.queryForObject(
+                "SELECT count(*) FROM mc_user WHERE id=? AND is_active=true", Integer.class, userId);
+        if (exists == null || exists == 0) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다.");
+        }
         jdbc.update("""
                 UPDATE mc_user_token
                    SET is_active=false, revoked_at=now(), revoked_reason='ROTATED'
                  WHERE user_id=? AND is_active=true
                 """, userId);
         Instant now = Instant.now();
-        Instant expiresAt = now.plus(expiresInDays, ChronoUnit.DAYS);
+        Instant expiresAt = now.plus(days, ChronoUnit.DAYS);
         Long id = jdbc.queryForObject("""
                 INSERT INTO mc_user_token(user_id, token, expires_at, is_active)
                 VALUES (?, ?, ?, true)

@@ -201,6 +201,17 @@ public class DatasourceService {
         if ("new".equalsIgnoreCase(input.name().trim())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_NAME_RESERVED", "Datasource name 'new' is reserved.");
         }
+        // 포트 범위는 순수 값 검사(경쟁 없음)라 앱에서 먼저 거른다 — DB CHECK 위반의 뭉뚱그린 메시지 대신
+        // 구체적 사유를 준다(설계 M1, Tier 1). null 포트는 resolvedPort()가 5432로 해석하므로 통과한다.
+        int port = input.resolvedPort();
+        if (port < 1 || port > 65535) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "PORT_OUT_OF_RANGE", "포트는 1~65535 범위여야 합니다.");
+        }
+        int maxPoolSize = input.resolvedMaxPoolSize();
+        if (maxPoolSize < 1 || maxPoolSize > 50) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "MAX_POOL_SIZE_OUT_OF_RANGE",
+                    "커넥션 상한은 1~50 범위여야 합니다.");
+        }
         if (requirePassword && blank(input.dbPassword())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Password is required.");
         }

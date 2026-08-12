@@ -72,6 +72,28 @@ class DatasourceServiceTest {
     }
 
     @Test
+    void createRejectsPortOutsideDatabaseBoundaryBeforeDatabaseAccess() {
+        DatasourceInput input = new DatasourceInput("analytics", "localhost", 0, "analytics", "reader", "secret", 5);
+
+        assertThatThrownBy(() -> service.create(input))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("PORT_OUT_OF_RANGE");
+        verifyNoInteractions(jdbc, passwords);
+    }
+
+    @Test
+    void createRejectsPoolSizeOutsideDatabaseBoundaryBeforeDatabaseAccess() {
+        DatasourceInput input = new DatasourceInput("analytics", "localhost", 5432, "analytics", "reader", "secret", 51);
+
+        assertThatThrownBy(() -> service.create(input))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("MAX_POOL_SIZE_OUT_OF_RANGE");
+        verifyNoInteractions(jdbc, passwords);
+    }
+
+    @Test
     void deleteReportsHowManyChartsReferenceDatasource() {
         when(jdbc.queryForObject(anyString(), eq(Integer.class), eq(7L))).thenReturn(3);
 

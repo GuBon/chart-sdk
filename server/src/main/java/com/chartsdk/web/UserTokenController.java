@@ -69,7 +69,8 @@ public class UserTokenController {
     }
 
     @PostMapping("/users/{userId}/tokens")
-    public Map<String, Object> issue(@PathVariable long userId, @RequestBody(required = false) IssueTokenRequest body) {
+    public Map<String, Object> issue(@PathVariable long userId,
+                                     @Valid @RequestBody(required = false) IssueTokenRequest body) {
         int days = body != null && body.expiresInDays() != null ? body.expiresInDays() : 365;
         return tokens.issue(userId, days);
     }
