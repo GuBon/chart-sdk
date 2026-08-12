@@ -1,5 +1,7 @@
 package com.chartsdk.datasource;
 
+import com.chartsdk.datasource.postgres.PostgresJdbc;
+
 public record DatasourceCredentials(
         String host,
         int port,
@@ -8,7 +10,8 @@ public record DatasourceCredentials(
         String dbPassword,
         int maxPoolSize
 ) {
+    /** PostgreSQL 드라이버 URL — 규약 문자열은 {@link PostgresJdbc}에만 둔다. */
     public String jdbcUrl() {
-        return "jdbc:postgresql://" + host + ":" + port + "/" + databaseName;
+        return PostgresJdbc.url(host, port, databaseName);
     }
 }

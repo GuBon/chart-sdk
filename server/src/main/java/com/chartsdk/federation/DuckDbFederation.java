@@ -2,6 +2,8 @@ package com.chartsdk.federation;
 
 import com.chartsdk.datasource.DatasourceCredentials;
 import com.chartsdk.datasource.DatasourceService;
+import com.chartsdk.datasource.postgres.PostgresDuckDbBinding;
+import com.chartsdk.datasource.spi.DuckDbBinding;
 import com.chartsdk.query.FederatedCatalog;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
@@ -10,10 +12,8 @@ import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.QueryTimeoutPolicy;
 import com.chartsdk.query.PointCollectionResult;
 import com.chartsdk.query.ReservoirPointCollector;
-import com.chartsdk.query.RefRenderer;
 import com.chartsdk.query.SchemaCatalog;
 import com.chartsdk.query.SamplingSeed;
-import com.chartsdk.query.SqlIdentifier;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,8 +41,9 @@ import java.util.function.LongFunction;
  * read-only ATTACH 하고 페더레이션 SQL 을 1회 실행한 뒤 닫는다. 계산 경로(저장/새로고침/미리보기)에서만 호출된다.
  *
  * <p>가드: read-only ATTACH · 쿼리 타임아웃 · 메모리 상한. 미리보기는 행 수를 제한하고 실제 차트는 전체 결과를 반환한다.
- * 지도 포인트 빌더는 WHERE 범위의 좌표를 전량 반환하므로 최종 LIMIT만 적용하지 않는다. 자격증명은
- * libpq+SQL 이중 이스케이프로 안전 삽입하고, 로그에는 {@link #maskedAttachSql}(비밀번호 마스킹)만 남긴다(§10).
+ * 지도 포인트 빌더는 WHERE 범위의 좌표를 전량 반환하므로 최종 LIMIT만 적용하지 않는다. 소스별 접속
+ * 규약(확장 로드·ATTACH 문·자격증명 이스케이프)은 {@link DuckDbBinding}이 조립하고 이 엔진은
+ * 실행만 한다(설계 §4.2). 로그에는 바인딩이 준 마스킹 문장만 남긴다(§10).
  */
 @Component
 public class DuckDbFederation {
@@ -53,10 +54,10 @@ public class DuckDbFederation {
     static final String MEMORY_LIMIT = "1GB";
     static final int THREADS = 4;
 
-    private final DatasourceService datasources;
     private final QueryExecutor queryExecutor;
     private final AdmissionController coordinator;
     private final QueryTimeoutPolicy timeouts;
+    private final DuckDbBinding binding;
 
     /** SQL produced after the population estimate and executed on that same attached connection. */
     public record PlannedBernoulli(QueryRows rows, BuilderSqlBuilder.Sql sql, long populationEstimate) {
@@ -75,13 +76,19 @@ public class DuckDbFederation {
         this(datasources, queryExecutor, coordinator, QueryTimeoutPolicy.defaults());
     }
 
-    @Autowired
+    /** 레거시/테스트 호환 — PostgreSQL 바인딩을 기본 조립한다. */
     public DuckDbFederation(DatasourceService datasources, QueryExecutor queryExecutor,
                             AdmissionController coordinator, QueryTimeoutPolicy timeouts) {
-        this.datasources = datasources;
+        this(queryExecutor, coordinator, timeouts, new PostgresDuckDbBinding(datasources));
+    }
+
+    @Autowired
+    public DuckDbFederation(QueryExecutor queryExecutor, AdmissionController coordinator,
+                            QueryTimeoutPolicy timeouts, DuckDbBinding binding) {
         this.queryExecutor = queryExecutor;
         this.coordinator = coordinator;
         this.timeouts = timeouts;
+        this.binding = binding;
     }
 
     /** 참조 소스들의 카탈로그를 union 해 식별자 화이트리스트를 만든다(각 소스 mc_·시스템 스키마 제외 유지). */
@@ -339,14 +346,13 @@ public class DuckDbFederation {
                            boolean deterministicBernoulli) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.setQueryTimeout(timeouts.seconds(AdmissionController.Kind.FEDERATION));
-            statement.execute("INSTALL postgres"); // 번들 시 로컬 no-op, 미번들 dev 는 최초 1회만 캐시 다운로드
-            statement.execute("LOAD postgres");
+            for (String init : binding.sessionInitSql()) statement.execute(init);
             for (Long id : datasourceIds) {
-                DatasourceCredentials credentials = datasources.credentials(id);
+                DuckDbBinding.AttachStatement attach = binding.attach(id);
                 if (log.isDebugEnabled()) {
-                    log.debug("federation ATTACH: {}", maskedAttachSql(id, credentials));
+                    log.debug("federation ATTACH: {}", attach.maskedSql());
                 }
-                statement.execute(attachSql(id, credentials));
+                statement.execute(attach.sql());
             }
             statement.execute("SET memory_limit='" + MEMORY_LIMIT + "'");
             // seeded random()의 행 소비 순서를 고정해야 같은 seed가 같은 Bernoulli 표본을 재생한다.
@@ -361,37 +367,15 @@ public class DuckDbFederation {
         }
     }
 
-    // ── ATTACH SQL (자격증명 이스케이프) ──────────────────────
-    /** read-only ATTACH SQL. 별칭 규약은 {@link RefRenderer#attachAlias}(ds{id})와 일치한다. */
+    // ── ATTACH SQL — 조립 권위는 PostgresDuckDbBinding, 여기는 기존 호출·테스트 호환 위임 ──
+    /** {@link PostgresDuckDbBinding#attachSql} 위임 파사드. */
     static String attachSql(long datasourceId, DatasourceCredentials c) {
-        String alias = RefRenderer.attachAlias(datasourceId);
-        return "ATTACH " + sqlLiteral(connString(c)) + " AS " + SqlIdentifier.quote(alias) + " (TYPE postgres, READ_ONLY)";
+        return PostgresDuckDbBinding.attachSql(datasourceId, c);
     }
 
-    /** 로깅용 — 비밀번호를 마스킹한 ATTACH SQL(§10). */
+    /** {@link PostgresDuckDbBinding#maskedAttachSql} 위임 파사드. */
     static String maskedAttachSql(long datasourceId, DatasourceCredentials c) {
-        DatasourceCredentials masked = new DatasourceCredentials(
-                c.host(), c.port(), c.databaseName(), c.dbUser(), "****", c.maxPoolSize());
-        return attachSql(datasourceId, masked);
-    }
-
-    private static String connString(DatasourceCredentials c) {
-        return "dbname=" + libpq(c.databaseName())
-                + " host=" + libpq(c.host())
-                + " port=" + c.port()
-                + " user=" + libpq(c.dbUser())
-                + " password=" + libpq(c.dbPassword());
-    }
-
-    /** libpq 값 — 단일따옴표로 감싸고 백슬래시·단일따옴표를 이스케이프(공백·특수문자 안전). */
-    private static String libpq(String v) {
-        String s = v == null ? "" : v;
-        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
-    }
-
-    /** DuckDB SQL 문자열 리터럴 — 단일따옴표를 '' 로 이스케이프. */
-    private static String sqlLiteral(String s) {
-        return "'" + s.replace("'", "''") + "'";
+        return PostgresDuckDbBinding.maskedAttachSql(datasourceId, c);
     }
 
     private static String firstLine(String s) {
