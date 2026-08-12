@@ -95,6 +95,11 @@ async function useSumValue(page: Page, column = 'amount') {
   await page.getByRole('combobox', { name: 'Y축 1 값 방식' }).selectOption('sum');
 }
 
+// 신규 차트는 차트 종류 기본 선택이 없다 — 실행 전에 명시적으로 고른다.
+async function selectChartType(page: Page, type: string) {
+  await page.getByTestId(`builder-chart-type-${type}`).click();
+}
+
 // S2-a 레이아웃 골격 + S2-b 스키마 탐색기 동작 검증.
 test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
   test('신규 진입 시 편집 헤더와 차트 구성 내부의 정의모드 탭이 보인다', async ({ page }) => {
@@ -124,7 +129,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     // 테이블 목록과 차트 미리보기·옵션 패널의 기본 폭
     const sidePanels = page.locator('aside');
     await expect(sidePanels.first()).toHaveCSS('width', '320px');
-    await expect(sidePanels.last()).toHaveCSS('width', '440px');
+    await expect(sidePanels.last()).toHaveCSS('width', '360px');
   });
 
   test('차트 종류와 데이터 구성 그룹을 독립적으로 접고 실행 전에 중분류를 선택한다', async ({ page }) => {
@@ -137,7 +142,13 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     await expect(chartTypeToggle).toHaveAttribute('aria-expanded', 'true');
     await expect(dataConfigToggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(chartTypeContent.getByRole('button', { name: '막대', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    // 기본 선택이 없다 — 종류를 고르기 전에는 어떤 버튼도 눌려 있지 않고 중분류도 숨긴다.
+    await expect(chartTypeToggle).toContainText('차트 종류를 선택하세요');
+    const barTypeButton = chartTypeContent.getByRole('button', { name: '막대', exact: true });
+    await expect(barTypeButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(chartTypeContent.getByRole('button', { name: '누적', exact: true })).toHaveCount(0);
+    await barTypeButton.click();
+    await expect(barTypeButton).toHaveAttribute('aria-pressed', 'true');
     await chartTypeContent.getByRole('button', { name: '누적', exact: true }).click();
     await expect(chartTypeToggle).toContainText('막대 · 누적');
 
@@ -313,6 +324,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
 
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await expect(page.getByRole('button', { name: '원본 데이터', exact: true })).toHaveClass(/bg-bg-panel/);
     await expect(page.getByRole('columnheader', { name: 'category' })).toBeVisible();
     await useXAxis(page, 'category');
@@ -338,6 +350,11 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await expect(page.getByTestId('visual-workspace-lock')).toBeVisible();
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+
+    // 차트 종류 안내가 테이블 안내보다 먼저 뜬다. 종류를 고르면 다음 안내로 넘어간다.
+    await expect(page.getByText('차트 종류를 선택하세요.', { exact: true })).toBeVisible();
+    await selectChartType(page, 'bar');
+    await expect(page.getByText('테이블을 선택하세요.', { exact: true })).toBeVisible();
 
     // 탐색기에서 테이블 선택 → 원본 데이터 자동 로드
     await selectBase(page, 'sales public');
@@ -375,6 +392,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 탐색기에서 analytics.events 선택 (스키마 배지 표시)
     await selectBase(page, /events/);
+    await selectChartType(page, 'bar');
     await expect(page.locator('aside').first().getByRole('button', { name: 'events analytics' })).toBeVisible();
 
     await expect(page.getByText('analytics.events', { exact: true })).toBeVisible();
@@ -392,6 +410,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -651,6 +670,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -703,6 +723,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -810,6 +831,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -853,6 +875,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'id');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -881,6 +904,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -912,6 +936,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -928,6 +953,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -944,6 +970,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -980,6 +1007,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -1001,6 +1029,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, /sales_summary/);
+    await selectChartType(page, 'bar');
     await expect(page.locator('aside').first().getByText('View', { exact: true })).toBeVisible();
 
     await expect(page.getByText('analytics.sales_summary', { exact: true })).toBeVisible();
@@ -1037,6 +1066,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
 
     // 조인 추가 → orders, ON sales.id = orders.sale_id
     await selectNewJoin(page, 'orders public');
@@ -1057,6 +1087,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
 
     // 사이드바를 sales-db 로 전환(구성 유지, 모달 없음) → 조인 대상은 그 소스에서 고른다
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
@@ -1083,6 +1114,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     // base = ds1.public.users
     await selectBase(page, /users/);
+    await selectChartType(page, 'bar');
 
     // 사이드바를 sales-db 로 전환 → 조인 대상은 다른 소스(sales-db)의 동명 users. 핸들 users_2 부여.
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'sales-db' });
@@ -1106,6 +1138,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -1120,6 +1153,11 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByText('차트 이름을 입력해야 저장할 수 있습니다.')).toBeVisible();
 
     await page.getByPlaceholder('차트 이름').fill('미완성 차트');
+    await save.click();
+    // 차트 종류 안내가 테이블 안내보다 먼저다.
+    await expect(page.getByText('차트 종류를 선택해야 저장할 수 있습니다.')).toBeVisible();
+
+    await selectChartType(page, 'bar');
     await save.click();
     await expect(page.getByText('테이블을 선택해야 저장할 수 있습니다.')).toBeVisible();
   });
@@ -1233,6 +1271,7 @@ async function newSalesBase(page: import('@playwright/test').Page) {
   await page.goto('/charts/new');
   await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
   await selectBase(page, 'sales public');
+  await selectChartType(page, 'bar');
 }
 
 test.describe('S2 노코드 구성 — 날짜 묶기·조건·정렬·실행', () => {
@@ -1621,6 +1660,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -1699,6 +1739,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -1792,6 +1833,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await useSumValue(page);
@@ -1934,6 +1976,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
@@ -1951,6 +1994,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await page.getByRole('button', { name: '포인트 지도', exact: true }).click();
 
     await page.getByRole('combobox', { name: '좌표 방식' }).selectOption('spatial');
@@ -2011,19 +2055,22 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
-    // 지리 계열은 GEO 그룹 헤더 아래에 노출 (화면설계 S2 옵션 패널)
-    await expect(page.getByText('GEO', { exact: true })).toBeVisible();
+    // 지리 계열도 대분류 한 줄 그리드에 함께 노출 (화면설계 S2 옵션 패널)
+    await expect(page.getByTestId('builder-chart-type-map')).toBeVisible();
+    await expect(page.getByTestId('builder-chart-type-geoscatter')).toBeVisible();
     await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
     await openOptionTab(page, '영역');
     await openOptionSection(page, '표시 영역');
-    const boundaryRow = page.getByText('행정 경계', { exact: true }).locator('..');
+    // '행정 경계'는 아코디언 섹션 헤더라 부모에 컨트롤이 없다 — 실제 세그먼트가 있는 '경계 수준' 행을 기준으로 찾는다.
+    const boundaryRow = page.getByText('경계 수준', { exact: true }).locator('..');
     await expect(boundaryRow.getByRole('button', { name: '시·도', exact: true })).toBeVisible();
     await expect(boundaryRow.getByRole('button', { name: '시·군·구', exact: true })).toBeVisible();
 
@@ -2040,6 +2087,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
+    await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();

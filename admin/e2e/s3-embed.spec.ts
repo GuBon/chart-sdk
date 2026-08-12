@@ -64,4 +64,22 @@ test.describe('S3 임베드 코드', () => {
     const afterZoom = await canvas.screenshot();
     expect(afterZoom.equals(beforeZoom)).toBe(false);
   });
+
+  test('클립보드 접근이 거부되면 코드를 선택하고 수동 복사 안내를 표시한다', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: '임베드' }).first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.locator('pre')).not.toBeEmpty();
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new Error('clipboard blocked')) },
+      });
+    });
+
+    await dialog.getByRole('button', { name: '복사' }).click();
+    await expect(dialog.getByRole('alert')).toContainText('자동 복사에 실패했습니다');
+    const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+    expect(selected).toContain('data-chart-id=');
+  });
 });

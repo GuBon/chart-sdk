@@ -91,6 +91,28 @@ test.describe('S5 데이터소스 관리', () => {
     await expect(dialog.getByRole('button', { name: '저장' })).toBeDisabled();
   });
 
+  test('포트와 커넥션 상한의 범위 밖 값은 기본값으로 바꾸지 않고 저장을 막는다', async ({ page }) => {
+    await page.goto('/datasources');
+    await page.getByRole('button', { name: '데이터소스 추가' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByPlaceholder('analytics-db').fill('boundary-db');
+    await dialog.getByPlaceholder('db.internal').fill('db.internal');
+    await dialog.getByRole('textbox', { name: 'analytics', exact: true }).fill('analytics');
+    await dialog.getByPlaceholder('reader').fill('reader');
+    await dialog.locator('input[type="password"]').fill('secret');
+    await expect(dialog.getByRole('button', { name: '저장' })).toBeEnabled();
+
+    await dialog.getByPlaceholder('5432').fill('0');
+    await expect(dialog.getByText('포트는 1~65535 사이의 정수여야 합니다.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '저장' })).toBeDisabled();
+
+    await dialog.getByPlaceholder('5432').fill('5432');
+    await dialog.getByRole('button', { name: '고급 설정' }).click();
+    await dialog.locator('input[inputmode="numeric"]').last().fill('51');
+    await expect(dialog.getByText('커넥션 상한은 1~50 사이의 정수여야 합니다.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '저장' })).toBeDisabled();
+  });
+
   test('사용 중인 데이터소스 삭제는 409 경고를 인라인으로 보여준다', async ({ page }) => {
     await page.goto('/datasources');
 

@@ -19,6 +19,22 @@ test.describe('S7 토큰 관리', () => {
     await expect(page.getByText('토큰을 발급했습니다')).toBeVisible();
   });
 
+  test('만료 기간 범위 밖 값은 날짜 계산이나 기본값 대체 없이 발급을 막는다', async ({ page }) => {
+    await page.goto('/tokens');
+    await page.getByRole('button', { name: '토큰 발급' }).click();
+    const dialog = page.getByRole('dialog');
+    const expiryInput = dialog.locator('input[inputmode="numeric"]');
+
+    await expiryInput.fill('0');
+    await expect(dialog.getByText('만료 기간은 1~3650 사이의 정수여야 합니다.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '발급', exact: true })).toBeDisabled();
+    await expect(dialog.getByText(/만료:/)).toHaveCount(0);
+
+    await expiryInput.fill('999999999999999999999');
+    await expect(dialog.getByText('만료 기간은 1~3650 사이의 정수여야 합니다.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '발급', exact: true })).toBeDisabled();
+  });
+
   test('토큰 회수 → 확인 모달 → 회수 토스트', async ({ page }) => {
     await page.goto('/tokens');
     await page.getByRole('button', { name: '회수' }).first().click();

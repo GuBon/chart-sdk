@@ -40,6 +40,22 @@ test.describe('S1 차트 목록', () => {
     await dialog.getByRole('button', { name: '삭제', exact: true }).click();
     await expect(page.getByText('월별 매출', { exact: true })).toBeHidden();
   });
+
+  test('현재 페이지에 복제 카드가 보이지 않아도 실제 복제 이름으로 성공을 알린다', async ({ page }) => {
+    await page.goto('/?page=2');
+    const sourceName = await page.locator('[data-testid="chart-card-name"]').first().innerText();
+    await page.locator('article').first().hover();
+    await page.getByRole('button', { name: `${sourceName} 복제` }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: '복사', exact: true }).click();
+
+    const notice = page.getByRole('status');
+    await expect(notice).toHaveText(`‘${sourceName} (복사)’ 차트를 복제했습니다.`);
+    await expect(notice).toHaveAttribute('aria-live', 'polite');
+    await expect(page).toHaveURL('/?page=2');
+  });
 });
 
 // 시드 13개(막대·선·원형·분포 혼합, ds1/ds2) 기준 — 필터·정렬·페이지네이션.
