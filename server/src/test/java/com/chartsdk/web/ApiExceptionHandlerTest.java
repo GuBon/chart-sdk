@@ -109,6 +109,25 @@ class ApiExceptionHandlerTest {
                 .containsEntry("requestId", "req-test-500");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void apiExceptionWithCauseMasksInternalDetailAndKeepsSafeMessage() {
+        // 업스트림 DB 원문(스키마·컬럼명 등)은 cause 로만 담기고, 사용자 메시지는 일반화된 안전 문구다.
+        Throwable dbDetail = new RuntimeException("ERROR: column \"secret_col\" does not exist");
+        ApiException e = new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR",
+                "쿼리 실행 중 오류가 발생했습니다.", dbDetail);
+
+        ResponseEntity<Map<String, Object>> response = handler.handle(e);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        Map<String, Object> error = (Map<String, Object>) response.getBody().get("error");
+        assertThat(error)
+                .containsEntry("code", "SQL_ERROR")
+                .containsEntry("message", "쿼리 실행 중 오류가 발생했습니다.");
+        // cause 의 원문(스키마·컬럼명)은 응답 어디에도 실리지 않는다.
+        assertThat(error.toString()).doesNotContain("secret_col", "does not exist");
+    }
+
     @RestController
     static class ProbeController {
         @GetMapping(value = "/probe", produces = MediaType.APPLICATION_JSON_VALUE)

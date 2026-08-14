@@ -64,7 +64,7 @@ public class CachedSampleExecutor {
             throw e;
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "SAMPLE_AGGREGATION_ERROR", firstLine(e.getMessage()));
+                    "SAMPLE_AGGREGATION_ERROR", "표본 집계 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -209,9 +209,5 @@ public class CachedSampleExecutor {
         } catch (RuntimeException ignored) {
             return LocalDateTime.parse(raw).atOffset(ZoneOffset.UTC);
         }
-    }
-
-    private static String firstLine(String message) {
-        return message == null ? "Cached sample aggregation failed." : message.split("\\R", 2)[0];
     }
 }

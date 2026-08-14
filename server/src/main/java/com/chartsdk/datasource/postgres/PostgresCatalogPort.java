@@ -80,7 +80,8 @@ public class PostgresCatalogPort implements CatalogPort {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
+            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED",
+                    "데이터소스 스키마를 조회하지 못했습니다.", e);
         }
     }
 
@@ -145,7 +146,8 @@ public class PostgresCatalogPort implements CatalogPort {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED", e.getMessage());
+            throw new ApiException(HttpStatus.BAD_REQUEST, "DATASOURCE_QUERY_FAILED",
+                    "데이터소스 스키마를 조회하지 못했습니다.", e);
         }
         return new SchemaCatalog(
                 tables,

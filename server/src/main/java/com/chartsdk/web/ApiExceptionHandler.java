@@ -19,7 +19,6 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
-import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -37,9 +36,17 @@ import java.util.Map;
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    /** 도메인 예외(Tier 2) — 서비스가 의도적으로 던진 상태/code/message를 그대로 통과시킨다. */
+    /**
+     * 도메인 예외(Tier 2) — 서비스가 의도적으로 던진 상태/code/message를 그대로 통과시킨다.
+     * 내부 원인(cause)이 있으면 업스트림 DB/페더레이션 오류 등 상세이므로 로그로만 남기고
+     * 응답에는 노출하지 않는다. requestId 는 MDC(RequestIdFilter)에서 로그 패턴으로 붙는다.
+     */
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, Object>> handle(ApiException e) {
+        if (e.getCause() != null) {
+            // wrapper의 throw 지점과 원인 체인을 함께 남긴다. 응답에는 계속 안전한 메시지만 사용한다.
+            log.warn("Handled {} ({})", e.code(), e.status(), e);
+        }
         return ResponseEntity.status(e.status()).body(envelope(e.code(), e.getMessage(), null));
     }
 
@@ -55,8 +62,8 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleIntegrity(DataIntegrityViolationException e) {
-        String detail = rootMessage(e);
-        boolean uniqueViolation = SQLSTATE_UNIQUE_VIOLATION.equals(sqlState(e));
+        String detail = ThrowableCauseWalker.rootMessage(e);
+        boolean uniqueViolation = SQLSTATE_UNIQUE_VIOLATION.equals(ThrowableCauseWalker.firstSqlState(e));
         if (uniqueViolation && mentions(detail, "mc_datasource") && mentions(detail, "name")) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(envelope("DATASOURCE_NAME_DUPLICATE", "이미 같은 이름의 데이터소스가 있습니다.", null));
@@ -171,21 +178,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         }
         if (type == boolean.class || type == Boolean.class) return "true/false";
         return type.getSimpleName();
-    }
-
-    private static String rootMessage(Throwable e) {
-        Throwable root = e;
-        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
-        String message = root.getMessage();
-        return message == null ? "" : message;
-    }
-
-    /** 원인 체인에서 첫 {@link SQLException}의 SQLSTATE를 찾는다(표준 JDBC — 드라이버 클래스 불필요). */
-    private static String sqlState(Throwable e) {
-        for (Throwable t = e; t != null && t.getCause() != t; t = t.getCause()) {
-            if (t instanceof SQLException sql && sql.getSQLState() != null) return sql.getSQLState();
-        }
-        return null;
     }
 
     private static boolean mentions(String haystack, String needle) {

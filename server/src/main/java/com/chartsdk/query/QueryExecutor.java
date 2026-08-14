@@ -143,7 +143,8 @@ public class QueryExecutor {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR", e.getMessage());
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR",
+                    "쿼리 실행 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -181,7 +182,8 @@ public class QueryExecutor {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR", e.getMessage());
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "SQL_ERROR",
+                    "쿼리 실행 중 오류가 발생했습니다.", e);
         }
     }
 

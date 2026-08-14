@@ -147,7 +147,7 @@ public class DuckDbFederation {
             throw failure;
         } catch (SQLException failure) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "FEDERATION_ERROR", firstLine(failure.getMessage()));
+                    "FEDERATION_ERROR", "다중 소스 조회 중 오류가 발생했습니다.", failure);
         }
     }
 
@@ -215,9 +215,11 @@ public class DuckDbFederation {
         } catch (ApiException e) {
             throw e;
         } catch (SQLException e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -269,9 +271,11 @@ public class DuckDbFederation {
         } catch (ApiException e) {
             throw e;
         } catch (SQLException e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -292,7 +296,8 @@ public class DuckDbFederation {
         } catch (ApiException e) {
             throw e;
         } catch (SQLException e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -304,7 +309,8 @@ public class DuckDbFederation {
             } catch (RuntimeException e) {
                 throw e;
             } catch (Exception e) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
             }
         }
         try {
@@ -312,7 +318,8 @@ public class DuckDbFederation {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR", firstLine(e.getMessage()));
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "FEDERATION_ERROR",
+                    "다중 소스 조회 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -376,9 +383,5 @@ public class DuckDbFederation {
     /** {@link PostgresDuckDbBinding#maskedAttachSql} 위임 파사드. */
     static String maskedAttachSql(long datasourceId, DatasourceCredentials c) {
         return PostgresDuckDbBinding.maskedAttachSql(datasourceId, c);
-    }
-
-    private static String firstLine(String s) {
-        return s == null ? "" : s.split("\n", 2)[0];
     }
 }

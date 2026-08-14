@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +37,25 @@ class DatasourceServiceTest {
         assertThat(input.resolvedPort()).isEqualTo(5432);
         assertThat(input.resolvedMaxPoolSize()).isEqualTo(5);
         assertThat(testInput.resolvedPort()).isEqualTo(5432);
+    }
+
+    @Test
+    void connectionTestErrorIsCategorizedBySqlStateWithoutLeakingRawDetail() {
+        // 원문(호스트·DB·사용자명 등)이 담긴 예외라도 사용자 문구엔 원인 카테고리만 남고 원문은 제외된다.
+        assertThat(DatasourceService.friendlyConnectionError(
+                new SQLException("FATAL: password authentication failed for user \"reader\"", "28P01")))
+                .contains("자격 증명")
+                .doesNotContain("reader", "password authentication");
+        assertThat(DatasourceService.friendlyConnectionError(new SQLException("no such db", "3D000")))
+                .contains("데이터베이스가 존재하지 않");
+        assertThat(DatasourceService.friendlyConnectionError(
+                new SQLException("Connection to secret.internal:5432 refused", "08006")))
+                .contains("연결할 수 없")
+                .doesNotContain("secret.internal");
+        // SQLSTATE 없는 알 수 없는 원인은 일반 안내로 폴백한다.
+        assertThat(DatasourceService.friendlyConnectionError(new RuntimeException("weird internal detail")))
+                .contains("연결에 실패")
+                .doesNotContain("weird internal detail");
     }
 
     @Test

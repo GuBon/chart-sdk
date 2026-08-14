@@ -1,6 +1,9 @@
 package com.chartsdk.datasource;
 
 import com.chartsdk.web.ApiException;
+import com.chartsdk.web.ThrowableCauseWalker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -23,6 +26,7 @@ import java.util.Objects;
  */
 @Service
 public class DatasourceService {
+    private static final Logger log = LoggerFactory.getLogger(DatasourceService.class);
     private final JdbcTemplate jdbc;
     private final DatasourcePasswordResolver passwords;
     private final ApplicationEventPublisher events;
@@ -118,12 +122,28 @@ public class DatasourceService {
             ok = true;
             message = "연결 성공 (" + elapsedMs + "ms)";
         } catch (Exception e) {
-            message = "연결 실패: " + e.getMessage();
+            // 원문(JDBC/libpq 상세 — 호스트·DB·SQLSTATE)은 로그로만 남기고, 사용자에겐 원인 카테고리만 안내한다.
+            log.warn("Datasource connection test failed (id={})", input.id(), e);
+            message = friendlyConnectionError(e);
         }
         if (input.id() != null) {
             jdbc.update("UPDATE mc_datasource SET last_tested_at=now(), last_test_ok=? WHERE id=?", ok, input.id());
         }
         return new ConnectionTestResult(ok, message);
+    }
+
+    /**
+     * 연결 실패 원인을 SQLSTATE 기준으로 안전한 카테고리 문구로 번역한다. 원문(호스트·DB·드라이버 상세)을
+     * 그대로 노출하지 않으면서도 관리자가 무엇을 고쳐야 할지 알 수 있게 한다(28=자격증명, 3D000=DB 부재, 08=연결).
+     */
+    static String friendlyConnectionError(Exception e) {
+        String sqlState = ThrowableCauseWalker.firstSqlState(e);
+        if (sqlState != null) {
+            if (sqlState.startsWith("28")) return "자격 증명(사용자/비밀번호)이 올바르지 않습니다.";
+            if (sqlState.equals("3D000")) return "지정한 데이터베이스가 존재하지 않습니다.";
+            if (sqlState.startsWith("08")) return "데이터베이스에 연결할 수 없습니다. 호스트·포트·방화벽을 확인하세요.";
+        }
+        return "연결에 실패했습니다. 호스트·포트·자격 증명을 확인하세요.";
     }
 
     public DatasourceCredentials credentials(long id) {
