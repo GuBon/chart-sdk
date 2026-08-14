@@ -5,7 +5,7 @@ import com.chartsdk.cache.ChartComputeService;
 import com.chartsdk.cache.SamplingMetadata;
 import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.converter.SeriesPivot;
-import com.chartsdk.token.EmbedPrincipal;
+import com.chartsdk.token.EmbedKeyPrincipal;
 import com.chartsdk.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,8 +33,9 @@ public class EmbedChartService {
         this.converter = converter;
     }
 
-    public Map<String, Object> data(long chartId, EmbedPrincipal principal) {
-        ChartDefinition chart = findChart(chartId, principal.userId());
+    /** 서빙 대상 차트는 임베드 키 바인딩(principal.chartId())에서만 나온다 — 클라이언트는 chartId 를 보낼 수 없다. */
+    public Map<String, Object> data(EmbedKeyPrincipal principal) {
+        ChartDefinition chart = findChart(principal.chartId(), principal.userId());
         // 서빙 불변식(설계 §8)은 ChartComputeService.serve 에 단일화 — 다중 소스는 캐시 스냅샷만.
         CachedChartRows rows = compute.serve(
                 chart.id(), chart.refreshMode(), chart.version(), chart.sampling());
@@ -55,6 +56,8 @@ public class EmbedChartService {
         return response;
     }
 
+    // owner_id IS NULL 은 로그인 도입 전 레거시 차트 호환 — chartId 가 키 바인딩에서만 오므로
+    // 임의 chartId 를 대입한 열거(IDOR)는 성립하지 않는다. 소유권 마이그레이션 후 strict 일치로 좁힌다.
     private ChartDefinition findChart(long chartId, long userId) {
         return jdbc.query("""
                 SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,

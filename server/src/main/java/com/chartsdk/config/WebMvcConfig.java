@@ -1,20 +1,20 @@
 package com.chartsdk.config;
 
-import com.chartsdk.web.EmbedTokenInterceptor;
+import com.chartsdk.web.EmbedKeyInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
-    private final EmbedTokenInterceptor embedTokenInterceptor;
+    private final EmbedKeyInterceptor embedKeyInterceptor;
 
-    public WebMvcConfig(EmbedTokenInterceptor embedTokenInterceptor) {
-        this.embedTokenInterceptor = embedTokenInterceptor;
+    public WebMvcConfig(EmbedKeyInterceptor embedKeyInterceptor) {
+        this.embedKeyInterceptor = embedKeyInterceptor;
     }
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(embedTokenInterceptor).addPathPatterns("/api/v1/charts/data");
+        registry.addInterceptor(embedKeyInterceptor).addPathPatterns("/api/v1/charts/data");
     }
 }

@@ -81,6 +81,9 @@ chartsdk:
     invalidation-retry-ms: ${DATASOURCE_CACHE_INVALIDATION_RETRY_MS:30000}
   embed:
     jwt-secret: ${CHARTSDK_EMBED_JWT_SECRET:dev-chartsol-embed-secret-change-me}
+    # 임베드 키(cek1_*) HMAC 비밀키. 미설정 시 jwt-secret 을 따른다(도메인 분리 문자열로 용도 격리).
+    # 운영에서는 CHARTSDK_EMBED_KEY_SECRET 으로 독립 회전을 권장 — 회전 시 기존 키가 전부 무효화되므로 재발급 공지가 필요하다.
+    key-secret: ${CHARTSDK_EMBED_KEY_SECRET:${chartsdk.embed.jwt-secret}}
   datasource:
     # 데이터소스 DB 비밀번호 AES-GCM 키 (.env DATASOURCE_ENC_KEY). 운영에서는 반드시 교체.
     enc-key: ${DATASOURCE_ENC_KEY:dev-chartsol-datasource-enc-change-me}
