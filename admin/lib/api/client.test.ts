@@ -8,7 +8,7 @@ describe('Admin API client cache policy', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ charts: [] }),
+      text: async () => JSON.stringify({ charts: [] }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -18,6 +18,16 @@ describe('Admin API client cache policy', () => {
       expect.stringContaining('/api/v1/charts'),
       expect.objectContaining({ cache: 'no-store' }),
     );
+  });
+
+  it.each([204, 205, 200])('상태 %s의 빈 성공 본문을 undefined로 처리한다', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      text: async () => '',
+    }));
+
+    await expect(request<void>('/empty', { method: 'DELETE' })).resolves.toBeUndefined();
   });
 });
 

@@ -65,13 +65,17 @@ async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
+  // 성공·실패 모두 본문을 한 번만 읽는다. 200 + 빈 본문 같은 서버 계약 실수도 UI의
+  // JSON SyntaxError로 번지지 않게 하되, 계약 테스트는 올바른 204를 별도로 검증한다.
+  const responseText = await res.text();
+
   if (!res.ok) {
     let code = 'INTERNAL_ERROR';
     let message = res.statusText || '요청에 실패했습니다.';
     let fields: Record<string, string> | undefined;
     let requestId: string | undefined;
     try {
-      const data = await res.json();
+      const data = responseText ? JSON.parse(responseText) : null;
       if (data?.error) ({ code, message, fields, requestId } = data.error);
     } catch {
       /* 비-JSON 응답은 statusText 로 둔다 */
@@ -79,6 +83,6 @@ async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
     throw new ApiError(code, message, res.status, fields, requestId);
   }
 
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  if (res.status === 204 || res.status === 205 || responseText.trim() === '') return undefined as T;
+  return JSON.parse(responseText) as T;
 }
