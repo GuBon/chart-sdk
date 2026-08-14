@@ -222,10 +222,16 @@ public class ChartRepository {
     /** 차트가 참조하는 데이터소스 집합을 junction 에 반영(교체). 저장 시 호출(설계 §12.1). */
     public void setChartDatasources(long chartId, java.util.Set<Long> datasourceIds) {
         jdbc.update("DELETE FROM mc_chart_datasource WHERE chart_id=?", chartId);
+        if (datasourceIds.isEmpty()) return;
+        // 소스 수만큼 INSERT 를 반복하지 않고 다중 VALUES 한 문으로 넣는다 — 저장 1회당 왕복 2회 고정.
+        String values = String.join(", ", java.util.Collections.nCopies(datasourceIds.size(), "(?, ?)"));
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>(datasourceIds.size() * 2);
         for (Long ds : datasourceIds) {
-            jdbc.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                    chartId, ds);
+            params.add(chartId);
+            params.add(ds);
         }
+        jdbc.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES " + values
+                + " ON CONFLICT DO NOTHING", params.toArray());
     }
 
     /** 차트가 참조하는 데이터소스 집합. stored SQL 실행 라우팅(단일 vs 페더레이션)에 쓴다. */
