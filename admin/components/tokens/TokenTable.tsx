@@ -8,13 +8,17 @@ interface Props {
   users: User[];
   onRevoke: (t: UserToken) => void;
   onReissue: (t: UserToken) => void;
+  /** 재발급 진행 중인 토큰 id — 해당 버튼을 비활성화해 더블클릭 중복 발급을 막는다. */
+  reissuingId?: number | null;
 }
 
 const TH = 'px-0 text-left text-xs font-medium text-text-secondary';
 const preview = (token?: string) => (token ? `${token.slice(0, 20)}…${token.slice(-4)}` : '—');
 
-export function TokenTable({ tokens, users, onRevoke, onReissue }: Props) {
+export function TokenTable({ tokens, users, onRevoke, onReissue, reissuingId }: Props) {
   const nameOf = (uid: number) => users.find((u) => u.id === uid)?.username ?? `user#${uid}`;
+  // 재발급이 하나라도 진행 중이면 모든 행의 재발급·회수 버튼을 비활성화한다(진행 중 행만 "재발급 중…").
+  const busy = reissuingId != null;
   return (
     <div className="w-full overflow-hidden rounded-[10px] border border-border bg-bg-panel">
       <table className="w-full table-fixed border-collapse">
@@ -53,11 +57,11 @@ export function TokenTable({ tokens, users, onRevoke, onReissue }: Props) {
                 <td className="pr-5">
                   {status === 'active' ? (
                     <div className="flex gap-1.5">
-                      <Button variant="secondary" size="sm" className="h-7 rounded-[7px] border-danger/40 text-xs text-danger" onClick={() => onRevoke(t)}>
+                      <Button variant="secondary" size="sm" className="h-7 rounded-[7px] border-danger/40 text-xs text-danger" disabled={busy} onClick={() => onRevoke(t)}>
                         회수
                       </Button>
-                      <Button variant="secondary" size="sm" className="h-7 rounded-[7px] text-xs" onClick={() => onReissue(t)}>
-                        재발급
+                      <Button variant="secondary" size="sm" className="h-7 rounded-[7px] text-xs" disabled={busy} onClick={() => onReissue(t)}>
+                        {reissuingId === t.tokenId ? '재발급 중…' : '재발급'}
                       </Button>
                     </div>
                   ) : (
