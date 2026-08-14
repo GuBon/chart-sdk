@@ -1,7 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ChevronLeft, ChevronsRight, LockKeyhole, Plus, RotateCcw } from 'lucide-react';
 import { defaultsFor, optionsWithDefaults, type MajorType, type Options } from '@chartsdk/chart-options';
 import type { ColorSelection } from '@chartsdk/chart-options/colorOverrides';
@@ -38,15 +37,6 @@ import {
   type ChartTypeDraftStore,
 } from '@/lib/chartTypeDrafts';
 import {
-  EDITOR_PANEL_LAYOUT,
-  maximumVisualWorkspaceWidth,
-  normalizeBuilderMinimumWidth,
-  projectedBuilderWidth,
-  resolveBuilderExpansion,
-  shouldCollapseBuilder,
-} from '@/lib/chartEditorLayout';
-import { optionDockThresholds, resolveAutoOptionDock } from '@/lib/chartPreviewLayout';
-import {
   cloneEditorSnapshot,
   createEditorSnapshot,
   editorDefinitionEquals,
@@ -55,6 +45,14 @@ import {
   type EditorPreviewSnapshot,
   type SavedEditorSnapshot,
 } from '@/lib/editorSnapshot';
+import {
+  EDITOR_DRAFT_SCHEMA_VERSION,
+  editorDraftChartKey,
+  readEditorSessionDraft,
+  removeEditorSessionDraft,
+  writeEditorSessionDraft,
+  type EditorSessionDraft,
+} from '@/lib/editorSessionDraft';
 import {
   createMapViewportSession,
   isCompleteMapViewport,
@@ -66,18 +64,20 @@ import { tableSelectionLabel, type TableSelectionTarget } from '@/lib/tableSelec
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { ResizeHandle, useResizable } from '@/components/ui/Resizable';
+import { ResizeHandle } from '@/components/ui/Resizable';
+import { Toast, useToast } from '@/components/ui/Toast';
 import { SchemaExplorer } from './SchemaExplorer';
 import { NocodeBuilder } from './NocodeBuilder';
 import { GeneratedSqlDisclosure } from './GeneratedSqlDisclosure';
 import { ResultsPanel, type ResultTab } from './ResultsPanel';
 import { ChartPreviewPanel } from './ChartPreviewPanel';
-import { OptionPanel, type OptionDock, type OptionDockPreference } from './OptionPanel';
+import { OptionPanel } from './OptionPanel';
 import { EmbedModal } from './EmbedModal';
+import { useChartEditorLayout } from './useChartEditorLayout';
+import { useLeaveGuard } from './useLeaveGuard';
 
 // optionRegistry storage='column' 키 (chartType 은 별도 state). 저장 시 options JSONB 에서 분리.
 const COLUMN_OPTION_KEYS = ['description', 'refreshMode'] as const;
-const OPTION_DOCK_MANUAL_MIN_WIDTH = 640;
 
 /** mode=rows SQL에 실제로 참여하는 구성만 비교한다. 축·계열·표본 변경은 원본 미리보기를 무효화하지 않는다. */
 function rawPreviewSignature(config: BuilderConfig): string {
@@ -113,46 +113,6 @@ function configuredNoCodeSettings(config: BuilderConfig): string[] {
     || config.geoSeriesType === 'effectScatter'
   ) settings.push('지도 데이터');
   return settings;
-}
-
-function useStoredBoolean(key: string, initial: boolean, storageEnabled = true) {
-  const [value, setValue] = useState(initial);
-  const [restored, setRestored] = useState(false);
-  useEffect(() => {
-    if (!storageEnabled) {
-      setValue(initial);
-      setRestored(true);
-      return;
-    }
-    const stored = window.localStorage.getItem(key);
-    if (stored === 'true' || stored === 'false') setValue(stored === 'true');
-    setRestored(true);
-  }, [initial, key, storageEnabled]);
-  useEffect(() => {
-    if (restored && storageEnabled) window.localStorage.setItem(key, String(value));
-  }, [key, restored, storageEnabled, value]);
-  return [value, setValue] as const;
-}
-
-function useStoredOptionDockPreference(key: string, storageEnabled = true) {
-  const [value, setValue] = useState<OptionDockPreference>('auto');
-  const [restored, setRestored] = useState(false);
-  useEffect(() => {
-    if (!storageEnabled) {
-      setValue('auto');
-      setRestored(true);
-      return;
-    }
-    const stored = window.localStorage.getItem(key);
-    // 오른쪽 옵션 패널을 사용하던 기존 설정은 새 왼쪽 배치로 자연스럽게 이전한다.
-    const normalized = stored === 'right' ? 'left' : stored;
-    if (normalized === 'auto' || normalized === 'left' || normalized === 'bottom') setValue(normalized);
-    setRestored(true);
-  }, [key, storageEnabled]);
-  useEffect(() => {
-    if (restored && storageEnabled) window.localStorage.setItem(key, value);
-  }, [key, restored, storageEnabled, value]);
-  return [value, setValue, restored] as const;
 }
 
 function CollapsedPanelRail({
@@ -238,10 +198,14 @@ function queryResultFromPreview(preview: ChartDataResponse): QueryResult | null 
 // S2 차트 편집 셸 — 좌(스키마)·중(빌더+결과)·우(미리보기+옵션)의 상태 허브. (S2-a~f)
 export function ChartEditor({ chartId }: { chartId?: number }) {
   const restoreEditorPanelState = chartId != null;
-  const router = useRouter();
   const [name, setName] = useState('');
   const [datasourceId, setDatasourceId] = useState<number | null>(null);
   const [builder, setBuilder] = useState<BuilderConfig>(emptyBuilder());
+  const [builderRevision, setBuilderRevision] = useState(0);
+  const replaceBuilderSnapshot = useCallback((next: BuilderConfig) => {
+    setBuilder(next);
+    setBuilderRevision((revision) => revision + 1);
+  }, []);
   const [chartType, setChartType] = useState<MajorType>('bar');
   // 신규 차트는 차트 종류 기본 선택이 없다. 선택 전까지 chartType('bar')은 내부 계산용 자리표시자다.
   const [chartTypeChosen, setChartTypeChosen] = useState(chartId != null);
@@ -272,36 +236,36 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   const optionPreviewRequestId = useRef(0);
   const chartTypeDraftsRef = useRef<ChartTypeDraftStore>(createChartTypeDraftStore());
   const requestedCatalogIds = useRef(new Set<number>());
-  const editorBodyRef = useRef<HTMLDivElement>(null);
-  const builderWorkspaceRef = useRef<HTMLElement>(null);
-  const visualWorkspaceRef = useRef<HTMLElement>(null);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notice: toast, show: setToast } = useToast();
   const [pendingBaseTable, setPendingBaseTable] = useState<SchemaTable | null>(null);
   const [tableSelectionTarget, setTableSelectionTarget] = useState<TableSelectionTarget | null>(null);
   const [axisColumnSelectionTarget, setAxisColumnSelectionTarget] = useState<DataPanelColumnTarget | null>(null);
   const [tableSelectionFocusKey, setTableSelectionFocusKey] = useState(0);
-  const [leavePath, setLeavePath] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<number | null>(chartId ?? null);
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
   const [embedOpen, setEmbedOpen] = useState(false);
   const [visualWorkspaceActivated, setVisualWorkspaceActivated] = useState(chartId != null);
-  const [leftCollapsed, setLeftCollapsed] = useStoredBoolean('chartsdk.editor.leftCollapsed', false, restoreEditorPanelState);
-  const [builderCollapsed, setBuilderCollapsed] = useStoredBoolean('chartsdk.editor.builderCollapsed', false, restoreEditorPanelState);
-  const [optionDockPreference, setOptionDockPreference, optionDockPreferenceRestored] = useStoredOptionDockPreference(
-    'chartsdk.editor.optionDock',
-    restoreEditorPanelState,
-  );
-  const [autoOptionDock, setAutoOptionDock] = useState<OptionDock>('bottom');
-  const [builderMinimumWidth, setBuilderMinimumWidth] = useState<number>(EDITOR_PANEL_LAYOUT.builder.minExpandedWidth);
+  // 3분할 패널 레이아웃(크기·접힘·옵션 도크)은 도메인과 독립된 축이라 훅으로 분리했다.
+  // 기존과 같은 이름으로 구조분해해 아래 본문·JSX 의 참조를 그대로 유지한다.
+  const {
+    editorBodyRef, builderWorkspaceRef, visualWorkspaceRef,
+    leftPanel, rightPanel, resultsPanel, optionEditor, optionEditorWidth,
+    leftCollapsed, setLeftCollapsed, builderCollapsed, setBuilderCollapsed,
+    optionDockPreference, setOptionDockPreference, actualOptionDock,
+    builderMinimumWidth, updateBuilderMinimumWidth, expandBuilderPanel,
+  } = useChartEditorLayout(restoreEditorPanelState);
   const [mapViewportSession, dispatchMapViewport] = useReducer(
     mapViewportSessionReducer,
     undefined,
     () => createMapViewportSession(defaultsFor('bar').map?.viewport),
   );
   const [savedSnapshot, setSavedSnapshot] = useState<SavedEditorSnapshot | null>(null);
+  const [pendingSessionDraft, setPendingSessionDraft] = useState<EditorSessionDraft | null>(null);
+  const [sessionDraftReady, setSessionDraftReady] = useState(false);
+  const latestSessionDraftRef = useRef<EditorSessionDraft | null>(null);
   const [colorSelection, setColorSelection] = useState<ColorSelection | null>(null);
   const [colorPicking, setColorPicking] = useState(false);
 
@@ -319,7 +283,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
   useEffect(() => {
     void datasourcesApi.list().then(setDatasources).catch(() => setToast('데이터소스를 불러오지 못했습니다. 백엔드 연결을 확인하세요.'));
-  }, []);
+  }, [setToast]);
 
   // 다중 소스 조인 지원 — 모든 데이터소스의 테이블을 하나의 풀로 로드(각 datasourceId 태깅).
   useEffect(() => {
@@ -345,7 +309,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         })
         .catch(() => setToast(`ds${id} 스키마를 불러오지 못했습니다.`));
     });
-  }, [builder, datasourceId, datasources]);
+  }, [builder, datasourceId, datasources, setToast]);
 
   // Legacy definitions predate field-name snapshots. Adopt the current effective names once,
   // then include them in the saved baseline so later catalog edits cannot silently rename a chart.
@@ -368,12 +332,18 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   useEffect(() => {
     if (chartId == null) {
       chartTypeDraftsRef.current = createChartTypeDraftStore();
+      latestSessionDraftRef.current = null;
       setSavedVersion(null);
       setChartTypeChosen(false);
+      setPendingSessionDraft(readEditorSessionDraft(editorDraftChartKey(null)));
+      setSessionDraftReady(true);
       return;
     }
     let cancelled = false;
     chartTypeDraftsRef.current = createChartTypeDraftStore();
+    latestSessionDraftRef.current = null;
+    setPendingSessionDraft(null);
+    setSessionDraftReady(false);
     setSavedVersion(null);
     setTableSelectionTarget(null);
     setAxisColumnSelectionTarget(null);
@@ -423,7 +393,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           setName(c.name);
           setSavedVersion(c.version);
           setDatasourceId(c.datasourceId);
-          setBuilder(restoredBuilder);
+          replaceBuilderSnapshot(restoredBuilder);
           setChartType(c.chartType);
           setChartTypeChosen(true);
           setOptions(restoredOptions);
@@ -448,10 +418,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             },
           ));
           setDirty(false);
+          setPendingSessionDraft(readEditorSessionDraft(editorDraftChartKey(c.id)));
+          setSessionDraftReady(true);
           const canonicalPath = chartEditPath(c.id, c.mainTable);
           replaceEditorPath(canonicalPath);
         } else {
           setToast('차트를 불러오지 못했습니다.');
+          setSessionDraftReady(true);
         }
 
         if (previewResult.status === 'fulfilled') {
@@ -468,7 +441,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       })
       .finally(() => { if (!cancelled) setInitialPreviewLoading(false); });
     return () => { cancelled = true; };
-  }, [chartId]);
+  }, [chartId, replaceBuilderSnapshot, setToast]);
 
   // 옵션/대분류 변경 → SQL 재실행 없이 option 재조립(2B preview). 디바운스.
   useEffect(() => {
@@ -489,178 +462,6 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }, 200);
     return () => clearTimeout(t);
   }, [builder, chartType, options, result, resultKind]);
-
-  // S2 3분할 패널 크기 — 사용자가 경계를 드래그해 조절
-  const leftPanel = useResizable(
-    EDITOR_PANEL_LAYOUT.dataPanel.defaultWidth,
-    EDITOR_PANEL_LAYOUT.dataPanel.minWidth,
-    EDITOR_PANEL_LAYOUT.dataPanel.maxWidth,
-    'left',
-    'chartsdk.editor.leftWidth',
-    {
-      shouldCollapse: (nextSize) => nextSize <= EDITOR_PANEL_LAYOUT.collapseGestureWidth,
-      onCollapse: () => setLeftCollapsed(true),
-    },
-  );
-  const rightPanel = useResizable(
-    EDITOR_PANEL_LAYOUT.visualWorkspace.defaultWidth,
-    EDITOR_PANEL_LAYOUT.visualWorkspace.minWidth,
-    null,
-    'right',
-    'chartsdk.editor.rightWidth',
-    {
-      shouldCollapse: (_nextSize, event) => {
-        const bounds = builderWorkspaceRef.current?.getBoundingClientRect();
-        return bounds != null && shouldCollapseBuilder(
-          projectedBuilderWidth(bounds.left, event.clientX),
-          builderMinimumWidth,
-        );
-      },
-      onCollapse: () => setBuilderCollapsed(true),
-    },
-  );
-  const resultsPanel = useResizable(
-    EDITOR_PANEL_LAYOUT.resultsPanel.defaultHeight,
-    EDITOR_PANEL_LAYOUT.resultsPanel.minHeight,
-    EDITOR_PANEL_LAYOUT.resultsPanel.maxHeight,
-    'up',
-    'chartsdk.editor.resultsHeight',
-  );
-  const optionEditor = useResizable(
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.defaultHeight,
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.minHeight,
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.maxHeight,
-    'up',
-    'chartsdk.editor.optionHeight',
-  );
-  const optionEditorWidth = useResizable(
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.defaultWidth,
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.minWidth,
-    EDITOR_PANEL_LAYOUT.visualOptionPanel.maxWidth,
-    'left',
-    'chartsdk.editor.optionWidth',
-  );
-  const leftPanelSize = leftPanel.size;
-  const setLeftPanelSize = leftPanel.setSize;
-  const rightPanelSize = rightPanel.size;
-  const setRightPanelSize = rightPanel.setSize;
-
-  useEffect(() => {
-    const workspace = visualWorkspaceRef.current;
-    if (!workspace) return;
-    const observer = new ResizeObserver(([entry]) => {
-      setAutoOptionDock((current) => resolveAutoOptionDock({
-        workspaceWidth: entry.contentRect.width,
-        optionPanelWidth: optionEditorWidth.size,
-        optionPanelCollapsed: false,
-        currentDock: current,
-      }));
-    });
-    observer.observe(workspace);
-    return () => observer.disconnect();
-  }, [optionEditorWidth.size]);
-
-  // 왼쪽 고정을 복원하거나 선택했을 때 미리보기가 찌그러지지 않도록 시각화 작업영역을 먼저 확보한다.
-  useEffect(() => {
-    if (!optionDockPreferenceRestored || optionDockPreference !== 'left' || builderCollapsed) return;
-    const editorWidth = editorBodyRef.current?.clientWidth;
-    if (editorWidth == null) return;
-    const availableWidth = maximumVisualWorkspaceWidth({
-      editorWidth,
-      dataPanelWidth: leftPanel.size,
-      dataPanelCollapsed: leftCollapsed,
-      builderMinimumWidth,
-    });
-    if (availableWidth >= OPTION_DOCK_MANUAL_MIN_WIDTH) {
-      const preferredWidth = optionDockThresholds({
-        optionPanelWidth: optionEditorWidth.size,
-        optionPanelCollapsed: false,
-      }).enterSideAt;
-      const targetWidth = Math.min(preferredWidth, availableWidth);
-      if (rightPanelSize < targetWidth) setRightPanelSize(targetWidth);
-    } else {
-      setBuilderCollapsed(true);
-    }
-  }, [
-    builderCollapsed,
-    builderMinimumWidth,
-    leftCollapsed,
-    leftPanel.size,
-    optionDockPreference,
-    optionDockPreferenceRestored,
-    optionEditorWidth.size,
-    rightPanelSize,
-    setRightPanelSize,
-    setBuilderCollapsed,
-  ]);
-
-  const actualOptionDock: OptionDock = optionDockPreference === 'auto' ? autoOptionDock : optionDockPreference;
-
-  useEffect(() => {
-    if (builderCollapsed) return;
-    const workspace = builderWorkspaceRef.current;
-    if (!workspace) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (shouldCollapseBuilder(entry.contentRect.width, builderMinimumWidth)) setBuilderCollapsed(true);
-    });
-    observer.observe(workspace);
-    return () => observer.disconnect();
-  }, [builderCollapsed, builderMinimumWidth, setBuilderCollapsed]);
-
-  const updateBuilderMinimumWidth = useCallback((width: number) => {
-    const normalized = normalizeBuilderMinimumWidth(width);
-    if (normalized === builderMinimumWidth) return;
-
-    if (!builderCollapsed && normalized > builderMinimumWidth) {
-      const editorWidth = editorBodyRef.current?.clientWidth;
-      const layout = editorWidth == null ? null : resolveBuilderExpansion({
-        editorWidth,
-        dataPanelWidth: leftPanelSize,
-        dataPanelCollapsed: leftCollapsed,
-        builderMinimumWidth: normalized,
-        visualWorkspaceWidth: rightPanelSize,
-      });
-
-      if (layout) {
-        if (layout.dataPanelWidth !== leftPanelSize) setLeftPanelSize(layout.dataPanelWidth);
-        if (layout.dataPanelCollapsed !== leftCollapsed) setLeftCollapsed(layout.dataPanelCollapsed);
-        if (layout.visualWorkspaceWidth !== rightPanelSize) setRightPanelSize(layout.visualWorkspaceWidth);
-      } else {
-        setBuilderCollapsed(true);
-      }
-    }
-
-    setBuilderMinimumWidth(normalized);
-  }, [
-    builderCollapsed,
-    builderMinimumWidth,
-    leftCollapsed,
-    leftPanelSize,
-    rightPanelSize,
-    setLeftPanelSize,
-    setRightPanelSize,
-    setBuilderCollapsed,
-    setLeftCollapsed,
-  ]);
-
-  const expandBuilderPanel = () => {
-    const editorWidth = editorBodyRef.current?.clientWidth;
-    if (editorWidth == null) return;
-
-    const layout = resolveBuilderExpansion({
-      editorWidth,
-      dataPanelWidth: leftPanel.size,
-      dataPanelCollapsed: leftCollapsed,
-      builderMinimumWidth,
-      visualWorkspaceWidth: rightPanel.size,
-    });
-    if (!layout) return;
-
-    if (layout.dataPanelWidth !== leftPanel.size) leftPanel.setSize(layout.dataPanelWidth);
-    if (layout.dataPanelCollapsed !== leftCollapsed) setLeftCollapsed(layout.dataPanelCollapsed);
-    if (layout.visualWorkspaceWidth !== rightPanel.size) rightPanel.setSize(layout.visualWorkspaceWidth);
-    setBuilderCollapsed(false);
-  };
 
   const invalidateRawPreview = () => {
     rawRequestId.current += 1;
@@ -794,7 +595,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 원본 테이블 확정(나머지 구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
     chartTypeDraftsRef.current = clearChartDataDrafts(chartTypeDraftsRef.current);
-    setBuilder({
+    replaceBuilderSnapshot({
       ...emptyBuilder(),
       table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name },
     });
@@ -946,23 +747,57 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     if (tab === 'raw' && !raw && !rawRunning) void loadBuilderRows();
   };
 
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2500);
-    return () => clearTimeout(t);
-  }, [toast]);
 
-  const optionsToPersist = optionsWithMapViewport(options, chartType, mapViewportSession.draft);
-  const currentDefinitionSnapshot: EditorDefinitionSnapshot = {
+  const optionsToPersist = useMemo(
+    () => optionsWithMapViewport(options, chartType, mapViewportSession.draft),
+    [chartType, mapViewportSession.draft, options],
+  );
+  const currentDefinitionSnapshot: EditorDefinitionSnapshot = useMemo(() => ({
     name,
     datasourceId: primaryDatasourceId,
     builder,
     chartType,
     options: optionsToPersist,
-  };
+  }), [builder, chartType, name, optionsToPersist, primaryDatasourceId]);
   const hasUnsavedChanges = savedSnapshot
     ? !editorDefinitionEquals(currentDefinitionSnapshot, savedSnapshot.definition)
     : dirty;
+
+  const draftChartKey = editorDraftChartKey(savedId ?? chartId ?? null);
+  useEffect(() => {
+    if (!sessionDraftReady || pendingSessionDraft) return;
+    if (!hasUnsavedChanges) {
+      latestSessionDraftRef.current = null;
+      removeEditorSessionDraft(draftChartKey);
+      return;
+    }
+    const draft: EditorSessionDraft = {
+      schemaVersion: EDITOR_DRAFT_SCHEMA_VERSION,
+      chartKey: draftChartKey,
+      baseVersion: savedVersion,
+      savedAt: new Date().toISOString(),
+      definition: structuredClone(currentDefinitionSnapshot),
+      chartTypeChosen,
+    };
+    latestSessionDraftRef.current = draft;
+    const timer = window.setTimeout(() => writeEditorSessionDraft(draft), 300);
+    return () => window.clearTimeout(timer);
+  }, [chartTypeChosen, currentDefinitionSnapshot, draftChartKey, hasUnsavedChanges,
+    pendingSessionDraft, savedVersion, sessionDraftReady]);
+
+  useEffect(() => () => {
+    // SPA Back/Forward로 컴포넌트가 300ms 전에 사라져도 가장 최근 정의를 남긴다.
+    if (latestSessionDraftRef.current) writeEditorSessionDraft(latestSessionDraftRef.current);
+  }, []);
+
+  // 제어 가능한 내부 이동은 확인 모달, 외부 이탈은 beforeunload로 보호한다. 브라우저 Back/Forward처럼
+  // 취소를 보장할 수 없는 이동은 위 세션 초안 복구가 데이터 보호를 담당한다.
+  const { leaveTarget, requestLeave, confirmLeave, cancelLeave } = useLeaveGuard(hasUnsavedChanges);
+  const discardAndLeave = () => {
+    latestSessionDraftRef.current = null;
+    removeEditorSessionDraft(draftChartKey);
+    confirmLeave();
+  };
 
   // 저장 = 실행 + 캐시 시드(PRD 7.3). 버튼은 누를 수 있게 두고, 미충족 조건을 문구로 안내한다.
   // 실제 저장은 현재 구성으로 실행 성공한 차트 결과가 있을 때만 진행해 stale SQL 저장을 막는다.
@@ -1045,6 +880,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           // 저장은 성공했다. 기준 시각 조회 실패가 저장 성공을 뒤집지는 않는다.
         }
       }
+      latestSessionDraftRef.current = null;
+      removeEditorSessionDraft(editorDraftChartKey(chartId ?? null));
+      if (persistedChartId != null) removeEditorSessionDraft(editorDraftChartKey(persistedChartId));
       return true;
     } catch (e) {
       setToast(apiErrorMessage(e, '저장에 실패했습니다.'));
@@ -1099,10 +937,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     }
   };
 
-  const navigateFromEditor = (path: string) => {
-    if (hasUnsavedChanges) setLeavePath(path);
-    else router.push(path);
-  };
+  const navigateFromEditor = requestLeave;
 
   const goList = () => navigateFromEditor('/');
   const createChart = () => navigateFromEditor('/charts/new');
@@ -1149,7 +984,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
 
     setChartType(nextType);
     setOptions(transition.options);
-    setBuilder(nextBuilder);
+    replaceBuilderSnapshot(nextBuilder);
     if (nextType === 'map' || nextType === 'geoscatter') {
       dispatchMapViewport({
         type: 'restoreGlobal',
@@ -1183,7 +1018,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
       const transition = resolveChartDataForOptions(captured, chartType, builder, nextOptions);
       const normalized = withFieldDisplayNameSnapshots(transition.builder, tables);
       const builderChanged = JSON.stringify(normalized) !== JSON.stringify(builder);
-      setBuilder(normalized);
+      replaceBuilderSnapshot(normalized);
       setAxisColumnSelectionTarget(null);
       setColorSelection(null);
       setColorPicking(false);
@@ -1216,7 +1051,7 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     const restored = cloneEditorSnapshot(savedSnapshot);
     setName(restored.definition.name);
     setDatasourceId(restored.definition.datasourceId);
-    setBuilder(restored.definition.builder);
+    replaceBuilderSnapshot(restored.definition.builder);
     setChartType(restored.definition.chartType);
     setChartTypeChosen(true);
     setOptions(restored.definition.options);
@@ -1244,6 +1079,32 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
     setColorPicking(false);
     setDirty(false);
     setToast('마지막 저장 상태로 복원했습니다');
+  };
+
+  const restoreSessionDraft = () => {
+    if (!pendingSessionDraft) return;
+    const restored = structuredClone(pendingSessionDraft.definition);
+    setName(restored.name);
+    setDatasourceId(restored.datasourceId);
+    replaceBuilderSnapshot(restored.builder);
+    setChartType(restored.chartType);
+    setChartTypeChosen(pendingSessionDraft.chartTypeChosen);
+    setOptions(restored.options);
+    dispatchMapViewport({
+      type: 'restoreGlobal',
+      viewport: normalizeMapViewport(restored.options.map?.viewport),
+    });
+    resetResults();
+    setPendingSessionDraft(null);
+    setDirty(true);
+    setToast('이전 편집 내용을 복원했습니다');
+  };
+
+  const discardSessionDraft = () => {
+    if (!pendingSessionDraft) return;
+    latestSessionDraftRef.current = null;
+    removeEditorSessionDraft(pendingSessionDraft.chartKey);
+    setPendingSessionDraft(null);
   };
 
   const canResetOptions = savedSnapshot != null && hasUnsavedChanges;
@@ -1464,7 +1325,9 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
             >
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <NocodeBuilder
+                  key={builderRevision}
                   config={builder}
+                  builderRevision={builderRevision}
                   chartType={chartType}
                   chartTypeSelected={chartTypeChosen}
                   chartVariant={String(options.variant ?? '')}
@@ -1581,6 +1444,34 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </aside>
       </div>
 
+      {pendingSessionDraft != null && (
+        <Modal
+          title="복구 가능한 편집 내용이 있습니다"
+          width={480}
+          divided={false}
+          onClose={discardSessionDraft}
+          footer={
+            <>
+              <Button variant="secondary" size="sm" className="h-[34px]" onClick={discardSessionDraft}>
+                초안 버리기
+              </Button>
+              <Button size="sm" className="h-[34px]" onClick={restoreSessionDraft}>
+                편집 내용 복원
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-2 text-[13px] text-text-secondary">
+            <p>{new Date(pendingSessionDraft.savedAt).toLocaleString()}에 저장된 이 브라우저 세션의 편집 내용입니다.</p>
+            {pendingSessionDraft.baseVersion !== savedVersion && (
+              <p className="text-amber-700">
+                서버의 차트 버전이 초안 작성 당시와 달라졌습니다. 복원하면 초안 내용을 현재 편집값으로 적용하며, 저장 전 다시 확인해야 합니다.
+              </p>
+            )}
+          </div>
+        </Modal>
+      )}
+
       {/* 원본 테이블 변경 확인 모달 */}
       {pendingBaseTable != null && (
         <Modal
@@ -1605,22 +1496,35 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </Modal>
       )}
 
-      {/* 이탈확인 모달 */}
-      {leavePath != null && (
+      {/* 임베드 코드 모달(S3) — 저장된 차트에서만. 내부 링크(/tokens)도 이탈 가드를 거치도록
+          onNavigate 를 주입한다(가드 없는 <Link> 는 미저장 변경을 경고 없이 유실시킨다). */}
+      {embedOpen && savedId != null && (
+        <EmbedModal
+          chart={{ id: savedId }}
+          onClose={() => setEmbedOpen(false)}
+          onNavigate={(path) => {
+            setEmbedOpen(false); // 이탈확인 모달이 임베드 모달에 가려지지 않도록 먼저 닫는다.
+            navigateFromEditor(path);
+          }}
+        />
+      )}
+
+      {/* 이탈확인 모달 — 임베드 모달보다 뒤에 렌더해 동시에 열려도 위에 쌓인다. */}
+      {leaveTarget != null && (
         <Modal
           title="저장되지 않은 변경이 있습니다"
           width={460}
           divided={false}
-          onClose={() => setLeavePath(null)}
+          onClose={cancelLeave}
           footer={
             <>
-              <Button variant="secondary" size="sm" className="h-[34px]" onClick={() => setLeavePath(null)}>
+              <Button variant="secondary" size="sm" className="h-[34px]" onClick={cancelLeave}>
                 계속 편집
               </Button>
-              <Button variant="ghost" size="sm" className="h-[34px]" onClick={() => router.push(leavePath)}>
+              <Button variant="ghost" size="sm" className="h-[34px]" onClick={discardAndLeave}>
                 저장 안 함
               </Button>
-              <Button size="sm" className="h-[34px]" disabled={saving} onClick={async () => { if (await save()) router.push(leavePath); }}>
+              <Button size="sm" className="h-[34px]" disabled={saving} onClick={async () => { if (await save()) confirmLeave(); }}>
                 저장 후 나가기
               </Button>
             </>
@@ -1630,24 +1534,8 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
         </Modal>
       )}
 
-      {/* 임베드 코드 모달(S3) — 저장된 차트에서만 */}
-      {embedOpen && savedId != null && (
-        <EmbedModal
-          chart={{ id: savedId }}
-          onClose={() => setEmbedOpen(false)}
-        />
-      )}
-
-      {/* 저장 토스트 */}
-      {toast && (
-        <div
-          className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg"
-          role="status"
-          aria-live="polite"
-        >
-          {toast}
-        </div>
-      )}
+      {/* 저장 토스트 — 에디터 자체 모달 위에 떠야 하므로 z-[60] */}
+      <Toast notice={toast} className="z-[60]" />
     </>
   );
 }

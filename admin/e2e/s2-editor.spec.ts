@@ -249,7 +249,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 테이블 트리의 펼침 화살표로 sales 컬럼 노출
     const tree = page.locator('aside').first();
-    await tree.getByRole('button', { name: 'sales public' }).locator('span').first().click();
+    await tree.getByRole('button', { name: tableButtonName('sales public') }).locator('span').first().click();
     await expect(tree.getByText('category', { exact: true })).toBeVisible();
     await expect(tree.getByText('amount', { exact: true })).toBeVisible();
     await expect(tree.getByText('numeric', { exact: true })).toBeVisible();
@@ -1502,6 +1502,20 @@ test.describe('S2 차트 유형 제약', () => {
 });
 
 test.describe('S2 이탈 모달·옵션 검색', () => {
+  test('브라우저 뒤로가기로 이동해도 세션 초안을 다시 복원할 수 있다', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('link', { name: '새 차트 만들기' }).click();
+    await page.getByPlaceholder('차트 이름').fill('뒤로가기 복구 초안');
+
+    await page.goBack();
+    await expect(page.getByText('새 차트 만들기')).toBeVisible();
+    await page.getByRole('link', { name: '새 차트 만들기' }).click();
+
+    await expect(page.getByRole('dialog', { name: '복구 가능한 편집 내용이 있습니다' })).toBeVisible();
+    await page.getByRole('button', { name: '편집 내용 복원' }).click();
+    await expect(page.getByPlaceholder('차트 이름')).toHaveValue('뒤로가기 복구 초안');
+  });
+
   test('이탈확인에서 저장 안 함을 누르면 목록으로 이동한다', async ({ page }) => {
     await newSalesBase(page);
     await useXAxis(page, 'category');

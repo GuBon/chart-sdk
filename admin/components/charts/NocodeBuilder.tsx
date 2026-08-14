@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronsLeft, Play, X } from 'lucide-react';
 import type { BuilderConfig, ChartType, Datasource, JoinSpec, SchemaTable, TableRef, WhereCond, YAxisField } from '@/lib/api';
@@ -54,6 +55,8 @@ function sampleTotalHint(estimatedRowCount?: number): string {
 // S2 중앙 차트 구성 폼(259:191). builderConfig를 편집하고 [실행]을 트리거한다.
 interface Props {
   config: BuilderConfig;
+  /** 전체 builder snapshot 교체 횟수. 같은 길이의 외부 교체도 WHERE 입력 인스턴스를 재생성한다. */
+  builderRevision: number;
   chartType: ChartType;
   /** false면 아직 차트 종류를 고르지 않은 상태 — chartType은 내부 계산용 자리표시자다. */
   chartTypeSelected: boolean;
@@ -74,6 +77,7 @@ interface Props {
 
 export function NocodeBuilder({
   config,
+  builderRevision,
   chartType,
   chartTypeSelected,
   chartVariant,
@@ -162,10 +166,25 @@ export function NocodeBuilder({
     yAxis: seriesBy ? config.yAxis.slice(0, 1) : config.yAxis,
   });
 
+  // where 행 안정 UI id — index 를 key 로 쓰면 행 삭제 시 뒷행이 앞행의 컴포넌트 인스턴스
+  // (WhereInInput 의 로컬 입력 문자열 등)를 물려받아, canonical 값이 같은 행에서는 미완성 입력이
+  // 다른 조건에 남는다. 추가·삭제는 아래 핸들러가 id 배열을 함께 갱신해 행 정체성을 보존하고,
+  // 외부 snapshot 교체는 부모가 builderRevision을 올려 이 컴포넌트 자체를 리마운트한다. 여기서는
+  // 렌더 중 ref/state를 변이하지 않고, 사용자 이벤트와 같은 커밋 단위에서만 id 배열을 갱신한다.
+  const [whereIds, setWhereIds] = useState(() =>
+    config.where.map(() => createWhereRowId(builderRevision)),
+  );
+
   const setW = (i: number, p: Partial<WhereCond>) =>
     patch({ where: config.where.map((w, idx) => (idx === i ? { ...w, ...p } : w)) });
-  const addW = () => patch({ where: [...config.where, { column: firstCol, op: 'eq', value: '' }] });
-  const removeW = (i: number) => patch({ where: config.where.filter((_, idx) => idx !== i) });
+  const addW = () => {
+    setWhereIds((current) => [...current, createWhereRowId(builderRevision)]);
+    patch({ where: [...config.where, { column: firstCol, op: 'eq', value: '' }] });
+  };
+  const removeW = (i: number) => {
+    setWhereIds((current) => current.filter((_, idx) => idx !== i));
+    patch({ where: config.where.filter((_, idx) => idx !== i) });
+  };
   const changeWhereOp = (i: number, op: WhereCond['op']) => {
     const current = config.where[i]?.value;
     setW(i, { op, value: defaultValueForOp(op, current) });
@@ -682,7 +701,7 @@ export function NocodeBuilder({
         <Row label="조건">
           <div className="flex flex-col gap-2">
             {config.where.map((w, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={whereIds[i]} className="flex items-center gap-2">
                 <div className="w-40">
                   <Select aria-label="조건 컬럼" value={w.column} onChange={(e) => setW(i, { column: e.target.value })} options={colOptions} placeholder="컬럼" />
                 </div>
@@ -789,6 +808,13 @@ export function NocodeBuilder({
 
     </div>
   );
+}
+
+let nextWhereRowId = 0;
+
+function createWhereRowId(revision: number): string {
+  const id = nextWhereRowId++;
+  return `${revision}:${id}`;
 }
 
 function ColumnSelectionField({
@@ -931,17 +957,38 @@ function WhereValueControl({ cond, onChange }: { cond: WhereCond; onChange: (val
   }
 
   if (cond.op === 'in') {
-    const value = Array.isArray(cond.value) ? cond.value.join(', ') : String(cond.value ?? '');
-    return (
-      <div className="w-48">
-        <Input size="sm" value={value} onChange={(e) => onChange(splitList(e.target.value))} placeholder="값1, 값2, 값3" />
-      </div>
-    );
+    return <WhereInInput cond={cond} onChange={onChange} />;
   }
 
   return (
     <div className="w-36">
       <Input size="sm" value={String(cond.value ?? '')} onChange={(e) => onChange(e.target.value)} placeholder="값" />
+    </div>
+  );
+}
+
+// IN 조건 값 입력 — 다중 값을 콤마로 구분해 배열로 저장한다. 표시는 로컬 문자열 state 로 유지해
+// 타이핑 중 배열→문자열 재조립(예: "서울," → splitList → "서울")으로 콤마가 즉시 사라져
+// 다중 값을 붙여넣기로만 넣을 수 있던 문제를 막는다. 외부에서 값이 바뀌면(연산자 전환·차트 로드)
+// canonical 비교로 표시를 재동기화한다.
+function WhereInInput({ cond, onChange }: { cond: WhereCond; onChange: (value: WhereCond['value']) => void }) {
+  const canonical = Array.isArray(cond.value) ? cond.value.join(', ') : String(cond.value ?? '');
+  const [raw, setRaw] = useState(canonical);
+  const [lastCanonical, setLastCanonical] = useState(canonical);
+  // 렌더 중 상태 조정(React 공식 패턴): 외부에서 값이 바뀌면 표시를 재동기화한다. 우리 자신의
+  // 타이핑으로 인한 변경은 splitList(raw) 정규화 결과와 일치하므로 표시를 덮어쓰지 않는다.
+  if (canonical !== lastCanonical) {
+    setLastCanonical(canonical);
+    if (canonical !== splitList(raw).join(', ')) setRaw(canonical);
+  }
+  return (
+    <div className="w-48">
+      <Input
+        size="sm"
+        value={raw}
+        onChange={(e) => { setRaw(e.target.value); onChange(splitList(e.target.value)); }}
+        placeholder="값1, 값2, 값3"
+      />
     </div>
   );
 }

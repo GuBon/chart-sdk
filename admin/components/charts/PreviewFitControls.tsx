@@ -1,5 +1,3 @@
-'use client';
-
 import { Minus, Plus } from 'lucide-react';
 import type { PreviewFitMode } from '@chartsdk/chart-options/display';
 import { cn } from '@/lib/cn';

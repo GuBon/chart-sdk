@@ -1,3 +1,5 @@
+'use client';
+
 import { useMemo, type ReactNode } from 'react';
 import { type MajorType, type OptionDef } from '@chartsdk/chart-options';
 import type { ChartTypography } from '@chartsdk/chart-options/display';
