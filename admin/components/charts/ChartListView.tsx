@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { BarChart3, Plus } from 'lucide-react';
+import { AlertTriangle, BarChart3, Plus } from 'lucide-react';
 import type { ChartSort, ChartSummary, ChartType, Datasource } from '@/lib/api';
 import { chartDatasourcePath } from '@/lib/chartRoutes';
 import { CHART_TYPE_FILTER_OPTIONS } from '@/lib/chartTypes';
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pagination } from '@/components/ui/Pagination';
 import { Select } from '@/components/ui/Select';
+import { Toast, useToast } from '@/components/ui/Toast';
 import { ChartCard } from './ChartCard';
 import { DeleteChartModal } from './DeleteChartModal';
 import { DuplicateChartModal } from './DuplicateChartModal';
@@ -50,17 +51,11 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
   const [toDelete, setToDelete] = useState<ChartSummary | null>(null);
   const [toEmbed, setToEmbed] = useState<ChartSummary | null>(null);
   const [toDuplicate, setToDuplicate] = useState<ChartSummary | null>(null);
-  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
+  const { notice: duplicateNotice, show: showDuplicateNotice } = useToast(3000);
 
   useEffect(() => {
     pendingParamsRef.current = paramsString;
   }, [paramsString]);
-
-  useEffect(() => {
-    if (!duplicateNotice) return;
-    const timer = setTimeout(() => setDuplicateNotice(null), 3000);
-    return () => clearTimeout(timer);
-  }, [duplicateNotice]);
 
   const navigate = useCallback((path: string, next: URLSearchParams) => {
     const query = next.toString();
@@ -75,7 +70,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
     navigate(pathname, next);
   }, [navigate, pathname]);
 
-  const { charts, previewOptions, totalPages, reload } = useChartPage(
+  const { charts, previewOptions, totalPages, error, reload } = useChartPage(
     {
       q,
       type,
@@ -145,7 +140,15 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
         <SearchBox />
       </div>
 
-      {charts && charts.length === 0 ? (
+      {error ? (
+        <EmptyState
+          className="py-24"
+          icon={<AlertTriangle className="size-9 text-danger" />}
+          title="차트 목록을 불러오지 못했습니다"
+          description="네트워크 또는 서버 상태를 확인한 뒤 다시 시도해 주세요."
+          action={<Button size="sm" variant="secondary" className="h-9" onClick={() => reload()}>다시 시도</Button>}
+        />
+      ) : charts && charts.length === 0 ? (
         <EmptyState
           className="py-24"
           icon={<BarChart3 className="size-9 text-text-tertiary" />}
@@ -184,7 +187,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
         </div>
       )}
 
-      {charts && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
+      {!error && charts && <Pagination page={page} totalPages={totalPages} onChange={setPage} />}
 
       {toDelete && <DeleteChartModal chart={toDelete} onClose={() => setToDelete(null)} onDeleted={() => { setToDelete(null); reload(); }} />}
       {toDuplicate && (
@@ -193,21 +196,13 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
           onClose={() => setToDuplicate(null)}
           onDuplicated={(copy) => {
             setToDuplicate(null);
-            setDuplicateNotice(`‘${copy.name}’ 차트를 복제했습니다.`);
+            showDuplicateNotice(`‘${copy.name}’ 차트를 복제했습니다.`);
             reload();
           }}
         />
       )}
       {toEmbed && <EmbedModal chart={toEmbed} onClose={() => setToEmbed(null)} />}
-      {duplicateNotice && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground shadow-lg"
-        >
-          {duplicateNotice}
-        </div>
-      )}
+      <Toast notice={duplicateNotice} />
     </>
   );
 }
