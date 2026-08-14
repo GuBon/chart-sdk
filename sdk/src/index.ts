@@ -1,11 +1,11 @@
-import { fetchChartOption } from './api';
-import { renderChart, renderError } from './chart';
+import { fetchChartOption, resolveEmbedMapTimeoutMs, resolveEmbedTimeoutMs } from './api';
+import { renderChart, renderError, renderEmpty, renderLoading } from './chart';
 import { ensureMapsRegistered } from './geo';
 import { normalizeSampling } from '@chartsdk/chart-options/sampling';
 import { ensureChartWebFonts } from '@chartsdk/chart-options/webFonts';
 
-const ATTR_ID = 'data-chart-id';
-const ATTR_TOKEN = 'data-auth-token';
+// 임베드 슬롯은 (사용자, 차트)에 묶인 불투명 임베드 키만 노출한다 — chartId 는 임베드 코드에 넣지 않는다.
+const ATTR_KEY = 'data-embed-key';
 const ATTR_DONE = 'data-chart-rendered';
 const activeCharts = new WeakMap<HTMLElement, () => void>();
 const renderVersions = new WeakMap<HTMLElement, symbol>();
@@ -13,6 +13,10 @@ const renderVersions = new WeakMap<HTMLElement, symbol>();
 declare global {
   interface Window {
     CHARTSDK_API_BASE?: string;
+    /** 요청 백스톱(ms) 재정의 — 서버 timeout 설정을 튜닝한 배포 환경용(resolveEmbedTimeoutMs). */
+    CHARTSDK_TIMEOUT_MS?: number;
+    /** 정적 GeoJSON 요청 백스톱(ms). 데이터 쿼리 timeout과 독립적이다. */
+    CHARTSDK_MAP_TIMEOUT_MS?: number;
   }
 }
 
@@ -35,6 +39,10 @@ function resolveAssetBase(): string {
 const apiBase = resolveApiBase();
 const assetBase = resolveAssetBase();
 
+// 렌더 시점마다 해석 — SPA 호스트가 스크립트 로드 이후에 전역 재정의를 설정해도 반영되도록.
+const requestTimeoutMs = () => resolveEmbedTimeoutMs(sdkScript, window.CHARTSDK_TIMEOUT_MS);
+const mapRequestTimeoutMs = () => resolveEmbedMapTimeoutMs(sdkScript, window.CHARTSDK_MAP_TIMEOUT_MS);
+
 function cleanupActiveChart(el: HTMLElement): void {
   const cleanup = activeCharts.get(el);
   if (!cleanup) return;
@@ -42,26 +50,36 @@ function cleanupActiveChart(el: HTMLElement): void {
   cleanup();
 }
 
-function clearError(el: HTMLElement): void {
-  if (!el.hasAttribute('data-chart-error')) return;
+function clearPlaceholders(el: HTMLElement): void {
+  if (!el.hasAttribute('data-chart-error') && !el.hasAttribute('data-chart-empty')
+    && !el.hasAttribute('data-chart-loading')) return;
   el.removeAttribute('data-chart-error');
+  el.removeAttribute('data-chart-empty');
+  el.removeAttribute('data-chart-loading');
   el.innerHTML = '';
 }
 
 /** 명령형 단일 렌더 — SPA 등 DOM 스캔 타이밍이 어긋나는 환경 대응 */
-export async function render(el: HTMLElement, opts: { chartId: string; token: string }): Promise<void> {
+export async function render(el: HTMLElement, opts: { embedKey: string }): Promise<void> {
   const version = Symbol();
   renderVersions.set(el, version);
   cleanupActiveChart(el);
-  clearError(el);
+  // 데이터 도착 전 로딩 상태를 즉시 표시 — 응답 지연/타임아웃 구간의 "빈 박스"를 없앤다.
+  renderLoading(el);
 
   try {
-    const response = await fetchChartOption(apiBase, opts.chartId, opts.token);
-    const { option, computedAt } = response;
+    const timeoutMs = requestTimeoutMs();
+    const response = await fetchChartOption(apiBase, opts.embedKey, timeoutMs);
+    const { option, computedAt, rowCount } = response;
     const sampling = normalizeSampling(response);
     if (renderVersions.get(el) !== version) return;
+    // 결과 0행은 오류가 아니라 "표시할 데이터 없음" — 빈 차트를 그리지 않고 안내 placeholder 로 끝낸다.
+    if (rowCount === 0) {
+      renderEmpty(el);
+      return;
+    }
     // 지도 차트면 GeoJSON 을 먼저 등록(1회 캐시). 비-지도 차트는 즉시 통과.
-    await ensureMapsRegistered(apiBase, option);
+    await ensureMapsRegistered(apiBase, option, mapRequestTimeoutMs());
     if (renderVersions.get(el) !== version) return;
     await ensureChartWebFonts(option, assetBase);
     if (renderVersions.get(el) !== version) return;
@@ -77,19 +95,18 @@ export async function render(el: HTMLElement, opts: { chartId: string; token: st
 export function dispose(el: HTMLElement): void {
   renderVersions.delete(el);
   cleanupActiveChart(el);
-  clearError(el);
+  clearPlaceholders(el);
   el.removeAttribute(ATTR_DONE);
 }
 
-/** 선언형 자동 스캔 — [data-chart-id] 를 찾아 렌더 (중복 렌더 방지) */
+/** 선언형 자동 스캔 — [data-embed-key] 를 찾아 렌더 (중복 렌더 방지) */
 export function scan(root: ParentNode = document): void {
-  for (const el of root.querySelectorAll<HTMLElement>(`[${ATTR_ID}]`)) {
+  for (const el of root.querySelectorAll<HTMLElement>(`[${ATTR_KEY}]`)) {
     if (el.hasAttribute(ATTR_DONE)) continue;
-    const chartId = el.getAttribute(ATTR_ID);
-    const token = el.getAttribute(ATTR_TOKEN);
-    if (!chartId || !token) continue;
+    const embedKey = el.getAttribute(ATTR_KEY);
+    if (!embedKey) continue;
     el.setAttribute(ATTR_DONE, '');
-    void render(el, { chartId, token });
+    void render(el, { embedKey });
   }
 }
 

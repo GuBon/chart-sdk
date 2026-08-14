@@ -40,8 +40,7 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
   let changedPosition = false;
   let changedMinHeight = false;
 
-  el.innerHTML = '';
-  el.removeAttribute('data-chart-error');
+  resetPlaceholder(el);
   // 클라이언트가 지정한 positioning 을 존중 — 인라인(빠른 경로) → 스타일시트(getComputedStyle) 순으로 확인하고
   // static/미지정일 때만 툴팁 기준점을 위해 relative 부여.
   const pos = el.style.position || getComputedStyle(el).position;
@@ -145,18 +144,50 @@ export function renderChart(el: HTMLElement, option: Record<string, unknown>, co
   };
 }
 
+// 상태 전환(로딩→차트/빈/에러)마다 이전 placeholder 의 DOM·마커 속성을 모두 정리해
+// 서로 다른 data-chart-* 상태 속성이 한 요소에 동시에 남지 않게 한다. 호스트의 인라인
+// width/height/position 등은 건드리지 않는다(상태 표시는 내부 래퍼 책임).
+function resetPlaceholder(el: HTMLElement): void {
+  el.innerHTML = '';
+  el.removeAttribute('data-chart-error');
+  el.removeAttribute('data-chart-loading');
+  el.removeAttribute('data-chart-empty');
+}
+
+// 공통 placeholder 래퍼 — 에러·로딩·빈 상태가 같은 레이아웃(중앙 정렬·최소 높이)과
+// 인라인 스타일 잠금을 공유한다. color 만 상태별로 달리해 톤을 구분한다.
+function appendPlaceholder(el: HTMLElement, className: string, message: string, color: string): void {
+  const box = document.createElement('div');
+  box.className = className;
+  box.textContent = message;
+  box.style.cssText =
+    'display:flex;align-items:center;justify-content:center;min-height:120px;box-sizing:border-box;' +
+    `padding:16px;font:13px/1.5 system-ui,sans-serif;color:${color};text-align:center;letter-spacing:normal;`;
+  el.appendChild(box);
+}
+
+// 데이터 도착 전 로딩 안내 — 요청이 지연/타임아웃되어도 방문자가 "빈 박스"가 아니라
+// 진행 중임을 알 수 있게 한다. .chartsdk-loading 을 공식 오버라이드 훅으로 연다.
+export function renderLoading(el: HTMLElement, message = '차트를 불러오는 중…'): void {
+  resetPlaceholder(el);
+  el.setAttribute('data-chart-loading', '');
+  appendPlaceholder(el, 'chartsdk-loading', message, '#aaa');
+}
+
+// 데이터 0행 — 오류가 아니라 "표시할 데이터 없음"을 구분해 안내한다. 빈 좌표축을 그린 뒤
+// "정확한 결과" 캡션이 붙는 오해를 피한다. .chartsdk-empty 를 공식 오버라이드 훅으로 연다.
+export function renderEmpty(el: HTMLElement, message = '표시할 데이터가 없습니다'): void {
+  resetPlaceholder(el);
+  el.setAttribute('data-chart-empty', '');
+  appendPlaceholder(el, 'chartsdk-empty', message, '#999');
+}
+
 // 임베드 실패는 호스트 페이지를 깨뜨리지 않고 컨테이너 안에서만 표시 (화면설계 S4-에러).
 // 원인(만료/회수/서명)은 구분 노출하지 않는다(정보 최소화).
 // 기본 스타일은 내부 래퍼에만 적용해 호스트의 width/height/position 등 인라인 스타일을 보존한다.
 // .chartsdk-error 클래스를 공식 오버라이드 훅으로 연다(의도적 변경은 `.chartsdk-error{...!important}`).
 export function renderError(el: HTMLElement, message = '차트를 표시할 수 없습니다'): void {
-  el.innerHTML = '';
+  resetPlaceholder(el);
   el.setAttribute('data-chart-error', '');
-  const error = document.createElement('div');
-  error.className = 'chartsdk-error';
-  error.textContent = message;
-  error.style.cssText =
-    'display:flex;align-items:center;justify-content:center;min-height:120px;box-sizing:border-box;' +
-    'padding:16px;font:13px/1.5 system-ui,sans-serif;color:#999;text-align:center;letter-spacing:normal;';
-  el.appendChild(error);
+  appendPlaceholder(el, 'chartsdk-error', message, '#999');
 }

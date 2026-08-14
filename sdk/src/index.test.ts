@@ -5,12 +5,25 @@ import { SAMPLING_CONTRACT_VERSION } from '@chartsdk/chart-options/sampling';
 // api·chart 는 mock — 네트워크·echarts 를 차단하고 index 의 분기 로직만 검증.
 const mocks = vi.hoisted(() => ({
   fetchChartOption: vi.fn(),
+  resolveEmbedTimeoutMs: vi.fn(() => 150_000),
+  resolveEmbedMapTimeoutMs: vi.fn(() => 15_000),
   renderChart: vi.fn(),
   renderError: vi.fn(),
+  renderEmpty: vi.fn(),
+  renderLoading: vi.fn(),
   ensureMapsRegistered: vi.fn(),
 }));
-vi.mock('./api', () => ({ fetchChartOption: mocks.fetchChartOption }));
-vi.mock('./chart', () => ({ renderChart: mocks.renderChart, renderError: mocks.renderError }));
+vi.mock('./api', () => ({
+  fetchChartOption: mocks.fetchChartOption,
+  resolveEmbedTimeoutMs: mocks.resolveEmbedTimeoutMs,
+  resolveEmbedMapTimeoutMs: mocks.resolveEmbedMapTimeoutMs,
+}));
+vi.mock('./chart', () => ({
+  renderChart: mocks.renderChart,
+  renderError: mocks.renderError,
+  renderEmpty: mocks.renderEmpty,
+  renderLoading: mocks.renderLoading,
+}));
 vi.mock('./geo', () => ({ ensureMapsRegistered: mocks.ensureMapsRegistered }));
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -21,23 +34,33 @@ beforeEach(() => {
   document.body.innerHTML = '';
   delete (window as unknown as { CHARTSDK_API_BASE?: string }).CHARTSDK_API_BASE;
   mocks.fetchChartOption.mockResolvedValue({ option: { a: 1 }, computedAt: '2026-07-06T12:00:00Z' });
+  mocks.resolveEmbedTimeoutMs.mockReturnValue(150_000);
+  mocks.resolveEmbedMapTimeoutMs.mockReturnValue(15_000);
   mocks.renderChart.mockReturnValue(vi.fn());
   mocks.ensureMapsRegistered.mockResolvedValue(undefined);
 });
 
 describe('scan', () => {
-  it('유효한 [data-chart-id] 를 렌더 마킹하고 데이터를 요청한다', async () => {
+  it('유효한 [data-embed-key] 를 렌더 마킹하고 데이터를 요청한다', async () => {
     const mod = await import('./index');
-    document.body.innerHTML = '<div data-chart-id="12" data-auth-token="TKN"></div>';
+    document.body.innerHTML = '<div data-embed-key="cek1_101_sig"></div>';
     mod.scan();
-    const el = document.querySelector('[data-chart-id]')!;
+    const el = document.querySelector('[data-embed-key]')!;
     expect(el.hasAttribute('data-chart-rendered')).toBe(true);
-    expect(mocks.fetchChartOption).toHaveBeenCalledWith(expect.any(String), '12', 'TKN');
+    expect(mocks.fetchChartOption).toHaveBeenCalledWith(expect.any(String), 'cek1_101_sig', expect.any(Number));
   });
 
-  it('토큰이 없으면 건너뛰고 마킹하지 않는다', async () => {
+  it('임베드 코드에는 chartId 가 없다 — 키가 비어 있으면 건너뛰고 마킹하지 않는다', async () => {
     const mod = await import('./index');
-    document.body.innerHTML = '<div data-chart-id="12"></div>';
+    document.body.innerHTML = '<div data-embed-key=""></div>';
+    mod.scan();
+    expect(document.querySelector('[data-embed-key]')!.hasAttribute('data-chart-rendered')).toBe(false);
+    expect(mocks.fetchChartOption).not.toHaveBeenCalled();
+  });
+
+  it('구 계약 [data-chart-id] 슬롯은 더 이상 스캔하지 않는다', async () => {
+    const mod = await import('./index');
+    document.body.innerHTML = '<div data-chart-id="12" data-auth-token="TKN"></div>';
     mod.scan();
     expect(document.querySelector('[data-chart-id]')!.hasAttribute('data-chart-rendered')).toBe(false);
     expect(mocks.fetchChartOption).not.toHaveBeenCalled();
@@ -45,7 +68,7 @@ describe('scan', () => {
 
   it('이미 렌더된 요소는 다시 요청하지 않는다(중복 방지)', async () => {
     const mod = await import('./index');
-    document.body.innerHTML = '<div data-chart-id="12" data-auth-token="T" data-chart-rendered></div>';
+    document.body.innerHTML = '<div data-embed-key="cek1_1_sig" data-chart-rendered></div>';
     mod.scan();
     expect(mocks.fetchChartOption).not.toHaveBeenCalled();
   });
@@ -53,9 +76,9 @@ describe('scan', () => {
   it('window.CHARTSDK_API_BASE 를 apiBase 로 사용한다', async () => {
     (window as unknown as { CHARTSDK_API_BASE?: string }).CHARTSDK_API_BASE = 'http://custom.test';
     const mod = await import('./index');
-    document.body.innerHTML = '<div data-chart-id="7" data-auth-token="T"></div>';
+    document.body.innerHTML = '<div data-embed-key="cek1_7_sig"></div>';
     mod.scan();
-    expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://custom.test', '7', 'T');
+    expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://custom.test', 'cek1_7_sig', expect.any(Number));
   });
 
   it('sdk script의 data-api-base를 API 출처로 사용한다', async () => {
@@ -66,25 +89,25 @@ describe('scan', () => {
     Object.defineProperty(document, 'currentScript', { configurable: true, value: script });
     try {
       const mod = await import('./index');
-      document.body.innerHTML = '<div data-chart-id="7" data-auth-token="T"></div>';
+      document.body.innerHTML = '<div data-embed-key="cek1_7_sig"></div>';
       mod.scan();
 
-      expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://api.test', '7', 'T');
+      expect(mocks.fetchChartOption).toHaveBeenCalledWith('http://api.test', 'cek1_7_sig', expect.any(Number));
     } finally {
       if (original) Object.defineProperty(document, 'currentScript', original);
       else delete (document as unknown as { currentScript?: HTMLScriptElement }).currentScript;
     }
   });
 
-  it('로드 시 기존 [data-chart-id] 를 자동 스캔한다', async () => {
-    document.body.innerHTML = '<div data-chart-id="99" data-auth-token="T"></div>';
+  it('로드 시 기존 [data-embed-key] 를 자동 스캔한다', async () => {
+    document.body.innerHTML = '<div data-embed-key="cek1_99_sig"></div>';
     await import('./index'); // 로드 부수효과로 scan
     if (!document.querySelector('[data-chart-rendered]')) {
       document.dispatchEvent(new Event('DOMContentLoaded')); // readyState==='loading' 대비
       await tick();
     }
-    expect(document.querySelector('[data-chart-id]')!.hasAttribute('data-chart-rendered')).toBe(true);
-    expect(mocks.fetchChartOption).toHaveBeenCalledWith(expect.any(String), '99', 'T');
+    expect(document.querySelector('[data-embed-key]')!.hasAttribute('data-chart-rendered')).toBe(true);
+    expect(mocks.fetchChartOption).toHaveBeenCalledWith(expect.any(String), 'cek1_99_sig', expect.any(Number));
   });
 });
 
@@ -93,9 +116,35 @@ describe('render', () => {
     mocks.fetchChartOption.mockResolvedValue({ option: { x: 1 }, computedAt: 'c' });
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
     expect(mocks.renderChart).toHaveBeenCalledWith(el, { x: 1 }, 'c', undefined);
     expect(mocks.renderError).not.toHaveBeenCalled();
+  });
+
+  it('데이터 도착 전에 로딩 placeholder 를 표시한다', async () => {
+    const mod = await import('./index');
+    const el = document.createElement('div');
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
+    expect(mocks.renderLoading).toHaveBeenCalledWith(el);
+  });
+
+  it('rowCount 0 이면 빈 상태를 표시하고 차트를 그리지 않는다', async () => {
+    mocks.fetchChartOption.mockResolvedValue({ option: { x: 1 }, computedAt: 'c', rowCount: 0 });
+    const mod = await import('./index');
+    const el = document.createElement('div');
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
+    expect(mocks.renderEmpty).toHaveBeenCalledWith(el);
+    expect(mocks.renderChart).not.toHaveBeenCalled();
+    expect(mocks.renderError).not.toHaveBeenCalled();
+  });
+
+  it('rowCount 가 0보다 크면 정상적으로 차트를 그린다', async () => {
+    mocks.fetchChartOption.mockResolvedValue({ option: { x: 1 }, computedAt: 'c', rowCount: 5 });
+    const mod = await import('./index');
+    const el = document.createElement('div');
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
+    expect(mocks.renderChart).toHaveBeenCalledWith(el, { x: 1 }, 'c', undefined);
+    expect(mocks.renderEmpty).not.toHaveBeenCalled();
   });
 
   it('표본 메타데이터를 정규화해 렌더러에 전달한다', async () => {
@@ -109,7 +158,7 @@ describe('render', () => {
     });
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
     expect(mocks.renderChart).toHaveBeenCalledWith(
       el,
       { x: 1 },
@@ -135,7 +184,7 @@ describe('render', () => {
     });
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
 
     const sampling = mocks.renderChart.mock.calls[0][3] as Record<string, unknown>;
     expect(sampling.rate).toBeUndefined();
@@ -157,7 +206,7 @@ describe('render', () => {
     });
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
 
     const sampling = mocks.renderChart.mock.calls[0][3] as Record<string, unknown>;
     expect(sampling.method).toBe('RESERVOIR_RANDOM');
@@ -168,7 +217,7 @@ describe('render', () => {
     mocks.fetchChartOption.mockResolvedValue({ option: {}, computedAt: 'c', approximate: true, sampleRate: 25 });
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
     expect(mocks.renderChart).toHaveBeenCalledWith(
       el,
       {},
@@ -184,7 +233,7 @@ describe('render', () => {
     mocks.fetchChartOption.mockRejectedValue(new Error('401'));
     const mod = await import('./index');
     const el = document.createElement('div');
-    await mod.render(el, { chartId: '3', token: 'bad' });
+    await mod.render(el, { embedKey: 'cek1_bad_sig' });
     expect(mocks.renderError).toHaveBeenCalledWith(el);
     expect(mocks.renderChart).not.toHaveBeenCalled();
   });
@@ -196,8 +245,8 @@ describe('render', () => {
     const mod = await import('./index');
     const el = document.createElement('div');
 
-    await mod.render(el, { chartId: '3', token: 'T' });
-    await mod.render(el, { chartId: '4', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
+    await mod.render(el, { embedKey: 'cek1_4_sig' });
 
     expect(firstCleanup).toHaveBeenCalledOnce();
     expect(secondCleanup).not.toHaveBeenCalled();
@@ -210,7 +259,7 @@ describe('render', () => {
     const el = document.createElement('div');
     el.setAttribute('data-chart-rendered', '');
 
-    await mod.render(el, { chartId: '3', token: 'T' });
+    await mod.render(el, { embedKey: 'cek1_3_sig' });
     mod.dispose(el);
 
     expect(cleanup).toHaveBeenCalledOnce();
@@ -225,8 +274,8 @@ describe('render', () => {
     const mod = await import('./index');
     const el = document.createElement('div');
 
-    const first = mod.render(el, { chartId: '3', token: 'T' });
-    await mod.render(el, { chartId: '4', token: 'T' });
+    const first = mod.render(el, { embedKey: 'cek1_3_sig' });
+    await mod.render(el, { embedKey: 'cek1_4_sig' });
     resolveFirst({ option: { stale: true }, computedAt: 'old' });
     await first;
 

@@ -28,7 +28,7 @@ vi.mock('echarts/components', () => ({
 vi.mock('echarts/features', () => ({ LabelLayout: {} }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
-import { renderChart, renderError } from './chart';
+import { renderChart, renderError, renderEmpty, renderLoading } from './chart';
 
 const roDisconnect = vi.fn();
 let roCallback: ResizeObserverCallback | undefined;
@@ -272,6 +272,45 @@ describe('renderChart', () => {
 
     cleanup();
     expect(ec.instance.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('renderEmpty', () => {
+  it('data-chart-empty 속성과 기본 안내를 표시한다', () => {
+    const el = document.createElement('div');
+    renderEmpty(el);
+    expect(el.hasAttribute('data-chart-empty')).toBe(true);
+    expect(el.textContent).toBe('표시할 데이터가 없습니다');
+    expect(el.querySelector('.chartsdk-empty')).not.toBeNull(); // 공식 오버라이드 훅
+  });
+
+  it('호스트의 인라인 크기·배치 스타일을 보존한다', () => {
+    const el = document.createElement('div');
+    el.style.cssText = 'width:600px;height:300px;position:absolute;';
+    const before = el.style.cssText;
+    renderEmpty(el);
+    expect(el.style.cssText).toBe(before);
+  });
+});
+
+describe('renderLoading', () => {
+  it('data-chart-loading 속성과 기본 안내를 표시한다', () => {
+    const el = document.createElement('div');
+    renderLoading(el);
+    expect(el.hasAttribute('data-chart-loading')).toBe(true);
+    expect(el.querySelector('.chartsdk-loading')?.textContent).toBe('차트를 불러오는 중…');
+  });
+
+  it('이전 상태를 대체하고 상태 속성이 중복 잔존하지 않는다', () => {
+    const el = document.createElement('div');
+    renderError(el);
+    renderLoading(el);
+    expect(el.hasAttribute('data-chart-error')).toBe(false);
+    expect(el.hasAttribute('data-chart-loading')).toBe(true);
+
+    renderEmpty(el);
+    expect(el.hasAttribute('data-chart-loading')).toBe(false);
+    expect(el.hasAttribute('data-chart-empty')).toBe(true);
   });
 });
 

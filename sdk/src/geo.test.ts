@@ -31,7 +31,7 @@ describe('ensureMapsRegistered', () => {
   it('map 시리즈의 GeoJSON 을 fetch 해 registerMap 한다', async () => {
     const { ensureMapsRegistered } = await import('./geo');
     await ensureMapsRegistered('http://api', { series: [{ type: 'map', map: 'kr-sido' }] });
-    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sido.json?v=v1');
+    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sido.json?v=v1', expect.objectContaining({ signal: expect.anything() }));
     expect(ec.registerMap).toHaveBeenCalledWith('kr-sido', GEO);
   });
 
@@ -41,7 +41,7 @@ describe('ensureMapsRegistered', () => {
       geo: { map: 'kr-sigungu' },
       series: [{ type: 'scatter', coordinateSystem: 'geo' }],
     });
-    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sigungu.json?v=v1');
+    expect(fetch).toHaveBeenCalledWith('http://api/maps/kr-sigungu.json?v=v1', expect.objectContaining({ signal: expect.anything() }));
     expect(ec.registerMap).toHaveBeenCalledWith('kr-sigungu', GEO);
   });
 
@@ -82,6 +82,30 @@ describe('ensureMapsRegistered', () => {
     await ensureMapsRegistered('http://api', opt); // 재시도 성공
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(ec.registerMap).toHaveBeenCalledTimes(1);
+  });
+
+  it('지도 서버가 응답하지 않으면 타임아웃 후 abort 해 무한 로딩을 막는다', async () => {
+    vi.useFakeTimers();
+    try {
+      let captured: AbortSignal | undefined;
+      // 응답하지 않는(hang) 지도 서버 — signal.abort 시에만 reject.
+      vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+        captured = init?.signal ?? undefined;
+        return new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      }));
+      const { ensureMapsRegistered } = await import('./geo');
+      // 렌더 경로가 해석한 timeout 이 지도 로드까지 전달되는 계약 — 명시값으로 경과를 고정한다.
+      const pending = ensureMapsRegistered('http://api', { series: [{ type: 'map', map: 'kr-sido' }] }, 5_000);
+      const assertion = expect(pending).rejects.toThrow();
+      expect(captured?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(captured?.aborted).toBe(true);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('현재 데이터의 Polygon 지역 경계를 boundingCoords로 적용하고 내부 설정을 제거한다', async () => {

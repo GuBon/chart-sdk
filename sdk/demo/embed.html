@@ -17,26 +17,23 @@
 </head>
 <body>
   <h1>ChartSDK 임베드 데모</h1>
-  <p>실행 중인 서버(<code>EmbedController</code>)와 발급된 임베드 토큰이 필요합니다.
+  <p>실행 중인 서버(<code>EmbedController</code>)와 차트별로 발급된 임베드 키가 필요합니다.
      아래 값을 채우고 <b>렌더</b>를 누르면 명령형 <code>ChartSDK.render()</code>로 그립니다.</p>
 
   <form id="cfg">
     <label for="api">API Base</label>
     <input id="api" placeholder="http://localhost:8080" />
-    <label for="chartId">Chart ID</label>
-    <input id="chartId" placeholder="12" />
-    <label for="token">Auth Token</label>
-    <input id="token" placeholder="eyJ... (S7에서 발급한 JWT)" />
+    <label for="embedKey">Embed Key</label>
+    <input id="embedKey" placeholder="cek1_... (차트 임베드 모달에서 발급)" />
     <button type="submit">렌더</button>
   </form>
 
   <div id="target" class="chart"></div>
 
   <h2 style="font-size:15px">실제 페이지에 붙여넣는 임베드 스니펫(선언형)</h2>
-  <pre>&lt;div data-chart-id="12"
-     data-auth-token="eyJ..."&gt;&lt;/div&gt;
-&lt;script src="https://your-host/sdk.js"&gt;&lt;/script&gt;</pre>
-  <p><code>sdk.js</code> 로드 시 <code>[data-chart-id]</code>를 자동 스캔해 렌더합니다(SPA는 <code>ChartSDK.scan()</code>/<code>ChartSDK.render()</code>).</p>
+  <pre>&lt;div data-embed-key="cek1_..."&gt;&lt;/div&gt;
+&lt;script src="https://your-host/sdk.js" data-api-base="https://your-api"&gt;&lt;/script&gt;</pre>
+  <p><code>sdk.js</code> 로드 시 <code>[data-embed-key]</code>를 자동 스캔해 렌더합니다(SPA는 <code>ChartSDK.scan()</code>/<code>ChartSDK.render()</code>).</p>
 
   <!--
     apiBase 는 sdk.js 로드 시점에 1회 확정된다(window.CHARTSDK_API_BASE > 스크립트 출처 > 페이지 출처).
@@ -48,14 +45,14 @@
     if (api) window.CHARTSDK_API_BASE = api;
     // 폼 초기값 복원
     document.addEventListener('DOMContentLoaded', () => {
-      for (const k of ['api', 'chartId', 'token']) {
+      for (const k of ['api', 'embedKey']) {
         const v = params.get(k);
         if (v) document.getElementById(k).value = v;
       }
       document.getElementById('cfg').addEventListener('submit', (e) => {
         e.preventDefault();
         const q = new URLSearchParams();
-        for (const k of ['api', 'chartId', 'token']) {
+        for (const k of ['api', 'embedKey']) {
           const v = document.getElementById(k).value.trim();
           if (v) q.set(k, v);
         }
@@ -65,11 +62,10 @@
   </script>
   <script src="../dist/sdk.js"></script>
   <script>
-    // sdk.js 로드 후: chartId·token 이 모두 있으면 명령형 렌더
-    const chartId = params.get('chartId');
-    const token = params.get('token');
-    if (chartId && token && window.ChartSDK) {
-      ChartSDK.render(document.getElementById('target'), { chartId, token });
+    // sdk.js 로드 후: embedKey가 있으면 명령형 렌더
+    const embedKey = params.get('embedKey');
+    if (embedKey && window.ChartSDK) {
+      ChartSDK.render(document.getElementById('target'), { embedKey });
     }
   </script>
 </body>

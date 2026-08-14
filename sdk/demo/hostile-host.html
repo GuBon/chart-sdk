@@ -53,16 +53,14 @@
 </head>
 <body>
   <h1>ChartSDK 적대적 호스트 CSS 스트레스 테스트</h1>
-  <p>실행 중인 서버와 발급된 임베드 토큰이 필요합니다. 값을 채우고 <b>렌더</b>를 누르면 각 패널의
+  <p>실행 중인 서버와 차트별 임베드 키가 필요합니다. 값을 채우고 <b>렌더</b>를 누르면 각 패널의
      적대적 CSS 안에서 같은 차트를 명령형으로 그립니다. 각 패널 설명의 <b>기대</b>대로 보이면 방어 성공입니다.</p>
 
   <form id="cfg">
     <label for="api">API Base</label>
     <input id="api" placeholder="http://localhost:8080" />
-    <label for="chartId">Chart ID</label>
-    <input id="chartId" placeholder="12" />
-    <label for="token">Auth Token</label>
-    <input id="token" placeholder="eyJ... (S7에서 발급한 JWT)" />
+    <label for="embedKey">Embed Key</label>
+    <input id="embedKey" placeholder="cek1_... (차트 임베드 모달에서 발급)" />
     <button type="submit">렌더</button>
   </form>
 
@@ -70,49 +68,49 @@
     <div class="panel case-reset">
       <h2>A. 전역 <code>div{...}</code> 리셋 (비-!important)</h2>
       <p>기대: 캡션은 인라인 방어로 회색·작은 글씨 유지(빨강·30px 아님). 차트 본체는 canvas 라 무관.</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-canvas">
       <h2>B. 전역 <code>canvas{max-width:50% !important}</code></h2>
       <p>기대: SDK 가 canvas 에 <code>max-width:none</code> 을 걸어 표시 크기·클릭 좌표가 정상.</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-overflow">
       <h2>C. 조상 <code>overflow:hidden</code> + 낮은 높이</h2>
       <p>기대: 툴팁이 <code>confine:true</code> 로 컨테이너 안에 머물러 잘리지 않음(막대 위 hover).</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-transform">
       <h2>D. 조상 <code>transform:scale(0.85)</code></h2>
       <p>기대: hover 시 툴팁이 커서/막대 위치에서 크게 어긋나지 않음.</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-dark">
       <h2>E. 다크 배경 <code>#111</code></h2>
       <p>기대: 차트에 불투명 흰 배경이 깔려 검정 축 라벨·텍스트가 보임(투명 아님).</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-height">
       <h2>F. 높이 미지정 컨테이너</h2>
       <p>기대: 컨테이너에 height 가 없어도 SDK 320px 폴백으로 차트가 보임(0px 붕괴 아님).</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-position">
       <h2>G. 클라이언트 <code>position:absolute</code></h2>
       <p>기대: SDK 가 relative 로 덮어쓰지 않고 클라이언트의 absolute 배치를 존중.</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
 
     <div class="panel case-hook">
       <h2>H. 공식 훅 <code>.chartsdk-caption{...!important}</code></h2>
       <p>기대: 의도적 오버라이드는 먹혀서 캡션이 초록·굵게. (클래스+!important 조합만 통과)</p>
-      <div class="chart" data-chart-id="" data-auth-token=""></div>
+      <div class="chart"></div>
     </div>
   </div>
 
@@ -125,14 +123,14 @@
     const api = params.get('api');
     if (api) window.CHARTSDK_API_BASE = api;
     document.addEventListener('DOMContentLoaded', () => {
-      for (const k of ['api', 'chartId', 'token']) {
+      for (const k of ['api', 'embedKey']) {
         const v = params.get(k);
         if (v) document.getElementById(k).value = v;
       }
       document.getElementById('cfg').addEventListener('submit', (e) => {
         e.preventDefault();
         const q = new URLSearchParams();
-        for (const k of ['api', 'chartId', 'token']) {
+        for (const k of ['api', 'embedKey']) {
           const v = document.getElementById(k).value.trim();
           if (v) q.set(k, v);
         }
@@ -142,12 +140,11 @@
   </script>
   <script src="../dist/sdk.js"></script>
   <script>
-    // sdk.js 로드 후: chartId·token 이 모두 있으면 각 패널 컨테이너에 명령형 렌더.
-    const chartId = params.get('chartId');
-    const token = params.get('token');
-    if (chartId && token && window.ChartSDK) {
+    // sdk.js 로드 후: embedKey가 있으면 각 패널 컨테이너에 명령형 렌더.
+    const embedKey = params.get('embedKey');
+    if (embedKey && window.ChartSDK) {
       for (const el of document.querySelectorAll('.chart')) {
-        ChartSDK.render(el, { chartId, token });
+        ChartSDK.render(el, { embedKey });
       }
     }
   </script>
