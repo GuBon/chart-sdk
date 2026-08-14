@@ -1,16 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Copy } from 'lucide-react';
-import { tokensApi, usersApi } from '@/lib/api';
-import type { ChartSummary, User, UserToken } from '@/lib/api';
+import { apiErrorMessage, embedKeysApi, usersApi } from '@/lib/api';
+import type { ChartSummary, EmbedKeySummary, IssuedEmbedKey, User } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Field } from '@/components/ui/Field';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 
-// S3 임베드 코드 모달(273:366). 코드 조립·복사만 담당(토큰 발급/회수는 S7).
+// S3 임베드 코드 모달(273:366). 임베드 키 발급·코드 조립·복사 담당.
+// 차트 ID는 임베드 코드에 넣지 않는다 — (사용자, 차트)에 묶인 불투명 임베드 키만 노출한다(계약 6.1).
 // SDK 배포 경로: NEXT_PUBLIC_SDK_SRC 우선, 없으면 현재 출처 기준(/sdk.js).
 function sdkSrc() {
   if (process.env.NEXT_PUBLIC_SDK_SRC) return process.env.NEXT_PUBLIC_SDK_SRC;
@@ -27,31 +28,116 @@ function apiBase() {
   return typeof window !== 'undefined' ? window.location.origin : '';
 }
 
-function snippet(chartId: number, token: string) {
-  return `<div data-chart-id="${chartId}"\n     data-auth-token="${token}"></div>\n<script src="${sdkSrc()}"\n        data-api-base="${apiBase()}"></script>`;
+function snippet(embedKey: string) {
+  return `<div data-embed-key="${embedKey}"></div>\n<script src="${sdkSrc()}"\n        data-api-base="${apiBase()}"></script>`;
 }
 
-export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>; onClose: () => void }) {
-  const [tokens, setTokens] = useState<UserToken[]>([]);
+function summaryFromIssued(issued: IssuedEmbedKey): EmbedKeySummary {
+  return {
+    id: issued.id,
+    chartId: issued.chartId,
+    userId: issued.userId,
+    expiresAt: issued.expiresAt,
+    status: issued.status,
+    createdAt: issued.createdAt,
+    revokedAt: issued.revokedAt,
+    revokedReason: issued.revokedReason,
+  };
+}
+
+export function EmbedModal({ chart, onClose, onNavigate }: {
+  chart: Pick<ChartSummary, 'id'>;
+  onClose: () => void;
+  /** 내부 이동 훅 — 차트 에디터처럼 미저장 이탈 가드가 필요한 호스트가 주입한다. 없으면 일반 링크. */
+  onNavigate?: (path: string) => void;
+}) {
+  const [summaries, setSummaries] = useState<EmbedKeySummary[]>([]);
+  // 원문 키는 발급한 이 모달 인스턴스의 메모리에만 둔다. 목록·스토리지에서는 복원하지 않는다.
+  const [revealed, setRevealed] = useState<IssuedEmbedKey | null>(null);
   const [users, setUsers] = useState<User[]>([]);
-  const [tokenId, setTokenId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [mutation, setMutation] = useState<'idle' | 'issuing' | 'revoking'>('idle');
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const codeRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    void Promise.all([tokensApi.list(), usersApi.list()]).then(([t, u]) => {
-      setTokens(t);
-      setUsers(u);
-      const active = t.find((x) => x.isActive);
-      if (active) setTokenId(active.tokenId);
-    });
+    let alive = true;
+    setLoading(true);
+    setLoadError(false);
+    void Promise.all([embedKeysApi.listForChart(chart.id), usersApi.list()])
+      .then(([k, u]) => {
+        if (!alive) return;
+        setSummaries(k);
+        setUsers(u);
+        // 기존 활성 키의 원문은 재표시하지 않지만, 해당 사용자를 기본 선택해 상태는 바로 알린다.
+        const active = k.find((x) => x.status === 'ACTIVE');
+        setUserId(active?.userId ?? u[0]?.id ?? null);
+      })
+      // 로딩/실패를 "키 없음"으로 오표시하지 않도록 상태를 분리한다.
+      .catch(() => { if (alive) setLoadError(true); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [chart.id]);
+
+  const activeKey = summaries.find((key) => key.userId === userId && key.status === 'ACTIVE');
+  const revealedKey = revealed?.userId === userId && revealed.status === 'ACTIVE' ? revealed : null;
+  const code = revealedKey ? snippet(revealedKey.embedKey) : '';
+
+  const optimisticIssue = useCallback((issued: IssuedEmbedKey) => {
+    setSummaries((current) => [
+      ...current.map((key) => key.chartId === issued.chartId && key.userId === issued.userId && key.status === 'ACTIVE'
+        ? { ...key, status: 'REVOKED' as const, revokedReason: 'ROTATED', revokedAt: new Date().toISOString() }
+        : key),
+      summaryFromIssued(issued),
+    ]);
   }, []);
 
-  const active = tokens.filter((t) => t.isActive);
-  const selected = tokens.find((t) => t.tokenId === tokenId);
-  const userName = (uid: number) => users.find((u) => u.id === uid)?.username ?? `user#${uid}`;
-  const code = selected?.token ? snippet(chart.id, selected.token) : '';
+  const issue = useCallback(async () => {
+    if (userId == null || mutation !== 'idle') return;
+    if (activeKey && !window.confirm('재발급하면 현재 배포된 임베드 키가 즉시 무효화됩니다. 새 키를 발급할까요?')) return;
+    setMutation('issuing');
+    setMutationError(null);
+    setRefreshWarning(null);
+    try {
+      const issued = await embedKeysApi.issue(chart.id, userId);
+      setRevealed(issued);
+      optimisticIssue(issued);
+      // 발급 성공과 후속 목록 동기화는 별개다. GET 실패가 이미 받은 원문 키를 지우면 안 된다.
+      try {
+        setSummaries(await embedKeysApi.listForChart(chart.id));
+      } catch {
+        setRefreshWarning('키는 발급됐지만 목록을 새로고침하지 못했습니다. 지금 표시된 코드는 복사할 수 있습니다.');
+      }
+    } catch (e) {
+      setMutationError(apiErrorMessage(e, '임베드 키 발급에 실패했습니다.'));
+    } finally {
+      setMutation('idle');
+    }
+  }, [activeKey, chart.id, mutation, optimisticIssue, userId]);
+
+  const revoke = useCallback(async () => {
+    if (!activeKey || mutation !== 'idle') return;
+    if (!window.confirm('이 키를 회수하면 현재 배포된 임베드가 즉시 중단됩니다. 계속할까요?')) return;
+    setMutation('revoking');
+    setMutationError(null);
+    setRefreshWarning(null);
+    try {
+      await embedKeysApi.revoke(activeKey.id);
+      setSummaries((current) => current.map((key) => key.id === activeKey.id
+        ? { ...key, status: 'REVOKED', revokedReason: 'MANUAL', revokedAt: new Date().toISOString() }
+        : key));
+      setRevealed((current) => current?.id === activeKey.id ? null : current);
+    } catch (error) {
+      setMutationError(apiErrorMessage(error, '임베드 키 회수에 실패했습니다.'));
+    } finally {
+      setMutation('idle');
+    }
+  }, [activeKey, mutation]);
 
   const copy = async () => {
     if (!code) return;
@@ -83,35 +169,92 @@ export function EmbedModal({ chart, onClose }: { chart: Pick<ChartSummary, 'id'>
 
   return (
     <Modal title="임베드 코드" width={520} onClose={onClose}>
-      {active.length === 0 ? (
+      {loading ? (
+        <p className="py-6 text-center text-[13px] text-text-secondary">임베드 키를 불러오는 중…</p>
+      ) : loadError ? (
+        <p className="py-6 text-center text-[13px] text-danger">임베드 키 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>
+      ) : users.length === 0 ? (
         <div className="flex flex-col items-start gap-3 py-2">
-          <p className="text-[13px] text-text-secondary">활성 토큰이 없습니다. 임베드하려면 먼저 토큰을 발급하세요.</p>
-          <Link href="/tokens">
-            <Button size="sm" className="h-8">토큰 관리로 이동</Button>
-          </Link>
+          <p className="text-[13px] text-text-secondary">사용자가 없습니다. 임베드하려면 먼저 사용자를 만드세요.</p>
+          {onNavigate ? (
+            // 가드가 필요한 호스트(에디터)에서는 <Link> 직행이 이탈확인을 우회하므로 콜백으로 이동한다.
+            <Button size="sm" className="h-8" onClick={() => onNavigate('/tokens')}>사용자 관리로 이동</Button>
+          ) : (
+            <Link href="/tokens">
+              <Button size="sm" className="h-8">사용자 관리로 이동</Button>
+            </Link>
+          )}
         </div>
       ) : (
         <div className="flex flex-col gap-3.5">
-          <Field label="사용자 토큰">
+          <Field label="사용자">
             <Select
-              aria-label="사용자 토큰"
-              value={tokenId ?? ''}
-              onChange={(e) => setTokenId(Number(e.target.value))}
-              options={active.map((t) => ({ value: t.tokenId, label: `${userName(t.userId)} — 만료 ${t.expiresAt.slice(0, 10)} · 활성` }))}
+              aria-label="사용자"
+              value={userId ?? ''}
+              onChange={(e) => {
+                setUserId(Number(e.target.value));
+                setRevealed(null);
+                setMutationError(null);
+                setRefreshWarning(null);
+              }}
+              options={users.map((u) => ({ value: u.id, label: u.username }))}
             />
           </Field>
-          <p className="text-sm text-text-secondary">선택한 토큰이 포함된 코드를 페이지에 붙여넣으세요</p>
-          <pre ref={codeRef} className="overflow-x-auto rounded-md bg-muted px-3.5 py-3 font-mono text-[13px] leading-[22px] text-text-primary">{code}</pre>
-          {copyFailed && (
-            <p className="text-xs text-danger" role="alert">
-              클립보드 접근이 차단되어 자동 복사에 실패했습니다. 위 코드가 선택되어 있으니 Ctrl+C로 복사하세요.
-            </p>
+          {revealedKey ? (
+            <>
+              <p className="text-sm text-text-secondary">
+                방금 발급한 키입니다. 이 창을 닫으면 원문을 다시 볼 수 없습니다 (만료 {revealedKey.expiresAt.slice(0, 10)}).
+              </p>
+              <pre ref={codeRef} className="overflow-x-auto rounded-md bg-muted px-3.5 py-3 font-mono text-[13px] leading-[22px] text-text-primary">{code}</pre>
+              {copyFailed && (
+                <p className="text-xs text-danger" role="alert">
+                  클립보드 접근이 차단되어 자동 복사에 실패했습니다. 위 코드가 선택되어 있으니 Ctrl+C로 복사하세요.
+                </p>
+              )}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={revoke}>
+                    {mutation === 'revoking' ? '회수 중…' : '키 회수'}
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={issue}>
+                    {mutation === 'issuing' ? '재발급 중…' : '재발급'}
+                  </Button>
+                </div>
+                <Button variant="secondary" size="sm" className="h-8" icon={<Copy className="size-3.5" />} onClick={copy}>
+                  {copied ? '복사되었습니다' : '복사'}
+                </Button>
+              </div>
+              <p className="text-xs text-text-secondary">재발급하면 이 사용자의 기존 키는 즉시 무효화됩니다.</p>
+            </>
+          ) : activeKey ? (
+            <div className="flex flex-col items-start gap-3 py-1">
+              <p className="text-[13px] text-text-secondary">
+                이 사용자의 임베드 키가 활성 상태입니다 (만료 {activeKey.expiresAt.slice(0, 10)}). 보안을 위해 기존 키 원문은 다시 표시하지 않습니다.
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={issue}>
+                  {mutation === 'issuing' ? '재발급 중…' : '새 키 발급'}
+                </Button>
+                <Button variant="secondary" size="sm" className="h-8 text-danger" disabled={mutation !== 'idle'} onClick={revoke}>
+                  {mutation === 'revoking' ? '회수 중…' : '키 회수'}
+                </Button>
+              </div>
+              <p className="text-xs text-text-secondary">새 키를 발급하면 기존 키는 즉시 무효화됩니다.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-start gap-3 py-1">
+              <p className="text-[13px] text-text-secondary">이 사용자에게 발급된 이 차트의 임베드 키가 없습니다.</p>
+              <Button size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={issue}>
+                {mutation === 'issuing' ? '발급 중…' : '임베드 키 발급'}
+              </Button>
+            </div>
           )}
-          <div className="flex justify-end">
-            <Button variant="secondary" size="sm" className="h-8" icon={<Copy className="size-3.5" />} onClick={copy}>
-              {copied ? '복사되었습니다' : '복사'}
-            </Button>
-          </div>
+          {mutationError && (
+            <p className="text-xs text-danger" role="alert">{mutationError}</p>
+          )}
+          {refreshWarning && (
+            <p className="text-xs text-amber-700" role="status">{refreshWarning}</p>
+          )}
         </div>
       )}
     </Modal>

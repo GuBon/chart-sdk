@@ -211,6 +211,26 @@ export interface IssuedToken extends UserToken {
   token: string;
 }
 
+export type EmbedKeyStatus = 'ACTIVE' | 'EXPIRED' | 'REVOKED';
+
+/** 목록에서 노출 가능한 임베드 키 메타데이터. Bearer 원문은 포함하지 않는다. */
+export interface EmbedKeySummary {
+  id: number;
+  chartId: number;
+  userId: number;
+  expiresAt: string;
+  status: EmbedKeyStatus;
+  createdAt: string;
+  revokedAt?: string | null;
+  revokedReason?: string | null;
+}
+
+/** 발급 성공 시 한 번만 반환되는 원문 키. 브라우저 영속 저장소에 보관하지 않는다. */
+export interface IssuedEmbedKey extends EmbedKeySummary {
+  status: 'ACTIVE';
+  embedKey: string;
+}
+
 export interface User {
   id: number;
   username: string;

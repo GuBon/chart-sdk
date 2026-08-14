@@ -84,15 +84,20 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
   await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   await page.locator('header').first().getByRole('button', { name: '임베드 코드', exact: true }).click();
   const embedDialog = page.getByRole('dialog', { name: '임베드 코드' });
+  // 새 차트에는 아직 임베드 키가 없다 — 모달에서 사용자를 고르고 키를 발급하면 스니펫이 나타난다.
+  await embedDialog.getByRole('combobox', { name: '사용자' }).selectOption({ label: 'real-e2e-user' });
+  await embedDialog.getByRole('button', { name: '임베드 키 발급', exact: true }).click();
   const snippet = await embedDialog.locator('pre').innerText();
-  expect(snippet).toContain(`data-chart-id="${chartId}"`);
+  expect(snippet).toContain('data-embed-key="cek1_');
   expect(snippet).toContain('data-api-base="http://localhost:8082"');
+  // 임베드 코드 노출 표면 계약: 차트 식별자가 코드에 없어야 한다.
+  expect(snippet).not.toContain('data-chart-id');
 
   const embedPage = await context.newPage();
   await embedPage.goto('http://localhost:3001/embed-host.html');
   const embedDataResponse = embedPage.waitForResponse((response) =>
     new URL(response.url()).pathname === '/api/v1/charts/data'
-    && new URL(response.url()).searchParams.get('chartId') === String(chartId));
+    && response.request().method() === 'GET');
   await embedPage.setContent(`
     <!doctype html>
     <html lang="ko">
@@ -104,7 +109,7 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
     </html>
   `);
   expect((await embedDataResponse).status()).toBe(200);
-  const embeddedChart = embedPage.locator(`[data-chart-id="${chartId}"]`);
+  const embeddedChart = embedPage.locator('[data-embed-key]');
   await expect(embeddedChart).toHaveAttribute('data-chart-rendered', '');
   await expect(embeddedChart.locator('canvas')).toBeVisible();
   await expect(embeddedChart.getByText(/데이터 기준/)).toBeVisible();

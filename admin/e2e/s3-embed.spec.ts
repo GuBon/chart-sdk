@@ -12,15 +12,22 @@ test.describe('S3 임베드 코드', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('임베드 코드')).toBeVisible();
 
-    // 토큰 선택 + 스니펫(첫 카드 = 월별 매출 #12)
-    await expect(dialog.getByRole('combobox', { name: '사용자 토큰' })).toBeVisible();
-    await expect(dialog.getByText(/data-chart-id="12"/)).toBeVisible();
+    // 기존 활성 키는 메타데이터만 보이고 Bearer 원문은 목록에서 재노출되지 않는다.
+    await expect(dialog.getByRole('combobox', { name: '사용자' })).toBeVisible();
+    await expect(dialog.getByText(/기존 키 원문은 다시 표시하지 않습니다/)).toBeVisible();
+    await expect(dialog.locator('pre')).toHaveCount(0);
+    page.once('dialog', (confirmation) => confirmation.accept());
+    await dialog.getByRole('button', { name: '새 키 발급', exact: true }).click();
+    await expect(dialog.getByText(/data-embed-key="cek1_102_/)).toBeVisible();
     await expect(dialog.getByText(/sdk\.js/)).toBeVisible();
     await expect(dialog.getByText(/data-api-base="http:\/\/localhost:3100"/)).toBeVisible();
 
     const code = await dialog.locator('pre').innerText();
     expect(code).toContain('<script src="http://localhost:3100/sdk.js"');
     expect(code).toContain('data-api-base="http://localhost:3100"');
+    // 임베드 코드 노출 표면 계약: 차트 식별자·사용자 토큰이 코드에 없어야 한다.
+    expect(code).not.toContain('data-chart-id');
+    expect(code).not.toContain('data-auth-token');
 
     // 복사 → 피드백
     await dialog.getByRole('button', { name: '복사' }).click();
@@ -49,7 +56,7 @@ test.describe('S3 임베드 코드', () => {
       filterMode: 'filter',
     }]);
 
-    const slot = page.locator('[data-chart-id="12"]');
+    const slot = page.locator('[data-embed-key]');
     await expect(slot).toHaveAttribute('data-chart-rendered', '');
     await expect(slot).not.toHaveAttribute('data-chart-error', '');
     const canvas = slot.locator('canvas');
@@ -69,6 +76,8 @@ test.describe('S3 임베드 코드', () => {
     await page.goto('/');
     await page.getByRole('button', { name: '임베드' }).first().click();
     const dialog = page.getByRole('dialog');
+    page.once('dialog', (confirmation) => confirmation.accept());
+    await dialog.getByRole('button', { name: '새 키 발급', exact: true }).click();
     await expect(dialog.locator('pre')).not.toBeEmpty();
     await page.evaluate(() => {
       Object.defineProperty(navigator, 'clipboard', {
@@ -80,6 +89,6 @@ test.describe('S3 임베드 코드', () => {
     await dialog.getByRole('button', { name: '복사' }).click();
     await expect(dialog.getByRole('alert')).toContainText('자동 복사에 실패했습니다');
     const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '');
-    expect(selected).toContain('data-chart-id=');
+    expect(selected).toContain('data-embed-key=');
   });
 });

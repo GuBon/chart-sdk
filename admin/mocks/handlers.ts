@@ -2,8 +2,8 @@
 // 경로·응답 형태는 API 계약서 v1.4 와 일치. 쓰기는 모듈 메모리에만 반영(새로고침 시 시드로 복원).
 import { http, HttpResponse } from 'msw';
 import type { Datasource } from '@/lib/api/types';
-import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
-import type { User, UserToken } from '@/lib/api';
+import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, embedKeys as seedEmbedKeys, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
+import type { EmbedKeySummary, User, UserToken } from '@/lib/api';
 import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql, buildTablePreview, withResultDisplayNames } from './mockTransform';
 import type { BuilderConfig, ChartMainTable, ChartType, TableRef } from '@/lib/api';
 import { builderExecutionIssue } from '@/lib/builder';
@@ -17,8 +17,24 @@ const savedCharts: Record<number, Record<string, unknown>> = {}; // 생성/수�
 const computedAtByChart: Record<number, string> = {};
 let tokenList: UserToken[] = seedTokens.map((t) => ({ ...t }));
 let userList: User[] = seedUsers.map((u) => ({ ...u }));
+type MockEmbedKey = EmbedKeySummary & { embedKey: string };
+let embedKeyList: MockEmbedKey[] = seedEmbedKeys.map((k) => ({ ...k }));
 let nextTokenId = Math.max(...tokenList.map((t) => t.tokenId)) + 1;
 let nextUserId = Math.max(...userList.map((u) => u.id)) + 1;
+let nextEmbedKeyId = Math.max(...embedKeyList.map((k) => k.id)) + 1;
+
+function publicEmbedKey(key: MockEmbedKey): EmbedKeySummary {
+  return {
+    id: key.id,
+    chartId: key.chartId,
+    userId: key.userId,
+    expiresAt: key.expiresAt,
+    status: key.status,
+    createdAt: key.createdAt,
+    revokedAt: key.revokedAt,
+    revokedReason: key.revokedReason,
+  };
+}
 
 const err = (status: number, code: string, message: string, extra?: Record<string, unknown>) =>
   HttpResponse.json({ error: { code, message, ...extra } }, { status });
@@ -133,13 +149,14 @@ export const handlers = [
   }),
   // 외부 페이지에 붙여 넣은 실제 sdk.js 선언형 스캔까지 E2E로 검증하기 위한 임베드 API 미러.
   // 동적 /charts/:id 보다 먼저 선언해야 "data"가 차트 id로 오인되지 않는다.
+  // 서버 계약과 동일하게 chartId 파라미터는 받지 않는다 — 서빙 차트는 임베드 키의 바인딩에서만 나온다.
   http.get('/api/v1/charts/data', ({ request }) => {
     const authorization = request.headers.get('Authorization');
-    const tokenValue = authorization?.match(/^Bearer\s+(.+)$/)?.[1];
-    const token = tokenList.find((item) => item.token === tokenValue && item.isActive && new Date(item.expiresAt).getTime() > Date.now());
-    if (!token) return err(401, 'TOKEN_INVALID', '유효하지 않은 임베드 토큰입니다.');
+    const keyValue = authorization?.match(/^Bearer\s+(.+)$/)?.[1];
+    const key = embedKeyList.find((item) => item.embedKey === keyValue && item.status === 'ACTIVE' && new Date(item.expiresAt).getTime() > Date.now());
+    if (!key) return err(401, 'TOKEN_INVALID', '유효하지 않은 임베드 키입니다.');
 
-    const chartId = Number(new URL(request.url).searchParams.get('chartId'));
+    const chartId = key.chartId;
     const saved = savedCharts[chartId] as
       | { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown }
       | undefined;
@@ -407,6 +424,64 @@ export const handlers = [
     return HttpResponse.json({
       option: assembleOption(result, body.chartType, body.options, body.builderConfig ?? null),
     });
+  }),
+
+  // ── 임베드 키(S3) ─────────────────────────────
+  http.get('/api/v1/charts/:chartId/embed-keys', ({ params }) => {
+    const chartId = Number(params.chartId);
+    if (!chartList.some((c) => c.id === chartId) && !savedCharts[chartId]) {
+      return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+    }
+    const now = Date.now();
+    return HttpResponse.json({
+      embedKeys: embedKeyList
+        .filter((key) => key.chartId === chartId)
+        .map((key) => ({
+          ...publicEmbedKey(key),
+          status: key.status === 'REVOKED' || new Date(key.expiresAt).getTime() > now ? key.status : 'EXPIRED',
+        })),
+    });
+  }),
+
+  // 발급 — (사용자, 차트) 쌍당 활성 1개: 기존 활성 회수(ROTATED) 후 새 키 INSERT. 키 원문은 활성 행에만 담긴다.
+  http.post('/api/v1/charts/:chartId/embed-keys', async ({ params, request }) => {
+    const chartId = Number(params.chartId);
+    const body = (await request.json().catch(() => ({}))) as { userId?: number; expiresInDays?: number };
+    const userId = Number(body.userId);
+    if (!userList.some((u) => u.id === userId)) return err(404, 'USER_NOT_FOUND', '사용자를 찾을 수 없습니다.');
+    if (!chartList.some((c) => c.id === chartId) && !savedCharts[chartId]) {
+      return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+    }
+    const days = body.expiresInDays ?? 365;
+    embedKeyList = embedKeyList.map((k) => (
+      k.chartId === chartId && k.userId === userId && k.status === 'ACTIVE'
+        ? { ...k, status: 'REVOKED', revokedAt: new Date().toISOString(), revokedReason: 'ROTATED' }
+        : k
+    ));
+    const now = new Date();
+    const id = nextEmbedKeyId++;
+    const key: MockEmbedKey = {
+      id,
+      chartId,
+      userId,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + days * 86400000).toISOString(),
+      status: 'ACTIVE',
+      embedKey: `cek1_${id}_msw${String(id).padStart(8, '0')}`,
+    };
+    embedKeyList = [...embedKeyList, key];
+    return HttpResponse.json(key);
+  }),
+
+  // 회수
+  http.delete('/api/v1/embed-keys/:keyId', ({ params }) => {
+    const id = Number(params.keyId);
+    const active = embedKeyList.find((key) => key.id === id && key.status === 'ACTIVE');
+    if (!active) return err(404, 'EMBED_KEY_NOT_FOUND', '임베드 키를 찾을 수 없습니다.');
+    embedKeyList = embedKeyList.map((key) => key.id === id
+      ? { ...key, status: 'REVOKED', revokedAt: new Date().toISOString(), revokedReason: 'MANUAL' }
+      : key);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   // ── 토큰 · 사용자(S7) ─────────────────────────────

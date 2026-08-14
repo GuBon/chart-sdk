@@ -12,6 +12,8 @@ import type {
   ConnectionTestResult,
   Datasource,
   DatasourceInput,
+  EmbedKeySummary,
+  IssuedEmbedKey,
   IssuedToken,
   QueryResult,
   SchemaTable,
@@ -120,6 +122,15 @@ export const tokensApi = {
   issue: (userId: number, expiresInDays?: number) =>
     request<IssuedToken>(`/users/${userId}/tokens`, { method: 'POST', body: { expiresInDays } }),
   revoke: (tokenId: number) => request<void>(`/tokens/${tokenId}`, { method: 'DELETE' }),
+};
+
+/** S3 임베드 코드 모달 — 차트별 임베드 키. 발급은 같은 (사용자, 차트)의 기존 활성 키를 회수(ROTATED)하고 교체한다. */
+export const embedKeysApi = {
+  listForChart: (chartId: number) =>
+    request<{ embedKeys: EmbedKeySummary[] }>(`/charts/${chartId}/embed-keys`).then((r) => r.embedKeys),
+  issue: (chartId: number, userId: number, expiresInDays?: number) =>
+    request<IssuedEmbedKey>(`/charts/${chartId}/embed-keys`, { method: 'POST', body: { userId, expiresInDays } }),
+  revoke: (keyId: number) => request<void>(`/embed-keys/${keyId}`, { method: 'DELETE' }),
 };
 
 export const usersApi = {
