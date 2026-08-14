@@ -9,7 +9,7 @@
 |---|---|---|
 | [`chart-options/`](chart-options) | TypeScript | **옵션 SSOT** — 패널·서버 변환기·`options` JSONB가 공유하는 단일 레지스트리. `defaults.json` 산출 |
 | [`admin/`](admin) | Next.js | 관리 콘솔 (S1·S2·S3·S5·S7 + S6 골격). API만 호출, DB 직접 접근 없음 |
-| [`sdk/`](sdk) | Vanilla TS + ECharts | 임베드 런타임 `sdk.js` — `[data-chart-id]` 스캔 → 데이터 요청 → `setOption` |
+| [`sdk/`](sdk) | Vanilla TS + ECharts | 임베드 런타임 `sdk.js` — `[data-embed-key]` 스캔 → 데이터 요청 → `setOption` |
 | [`server/`](server) | Spring Boot + JPA + Flyway | 메타 DB 소유, SQL 실행 엔진, **ECharts option 단일 변환기(Java)**, 토큰 검증 |
 
 ## 경계 원칙
@@ -64,7 +64,7 @@ npm run test:unit             # 워크스페이스 단위 테스트(admin + sdk)
 cd server && ./gradlew test   # 서버 단위(DB 불요)
 cd .. && npm run test:parity  # Java/TS 8종 전체 option snapshot을 새로 생성해 비교
 npm run test:e2e              # 프론트 E2E (Playwright + MSW, 자체 dev 서버 :3100)
-npm run test:e2e:real         # Admin→Spring→PostGIS→JWT→SDK 실백엔드 E2E
+npm run test:e2e:real         # Admin→Spring→PostGIS→임베드 키→SDK 실백엔드 E2E
 cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 ```
 
@@ -114,6 +114,7 @@ DATABASE_URL=jdbc:postgresql://localhost:5433/chartsol
 DATABASE_USER=postgres
 DATABASE_PASSWORD=0218
 CHARTSDK_EMBED_JWT_SECRET=dev-chartsol-embed-secret-change-me
+CHARTSDK_EMBED_KEY_SECRET=dev-chartsol-embed-key-secret-change-me
 NEXT_PUBLIC_API_BASE=http://localhost:8080
 NEXT_PUBLIC_ENABLE_MSW=false
 ```
@@ -132,7 +133,7 @@ SPRING_FLYWAY_URL=jdbc:postgresql://db.internal:5432/chartsol
 
 운영 적용 순서와 평문 datasource 비밀번호 전환은 [`docs/운영_데이터베이스_권한과_비밀번호전환.md`](docs/운영_데이터베이스_권한과_비밀번호전환.md)를 따른다.
 
-S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK가 호출하는 데이터 API는 `GET /api/v1/charts/data?chartId={id}`이다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_JWT_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK는 chartId 없이 `GET /api/v1/charts/data`를 호출하며, Bearer 임베드 키의 서버측 바인딩으로 차트를 결정한다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_KEY_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
 
 ### 임베드 코드를 직접 붙여 확인하기
 
