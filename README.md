@@ -8,9 +8,9 @@
 | 패키지 | 스택 | 역할 |
 |---|---|---|
 | [`chart-options/`](chart-options) | TypeScript | **옵션 SSOT** — 패널·서버 변환기·`options` JSONB가 공유하는 단일 레지스트리. `defaults.json` 산출 |
-| [`admin/`](admin) | Next.js | 관리 콘솔 (S1·S2·S3·S5·S7 + S6 골격). API만 호출, DB 직접 접근 없음 |
+| [`admin/`](admin) | Next.js | 사용자 콘솔 + 관리자 사용자·전체 차트 화면. API만 호출, DB 직접 접근 없음 |
 | [`sdk/`](sdk) | Vanilla TS + ECharts | 임베드 런타임 `sdk.js` — `[data-embed-key]` 스캔 → 데이터 요청 → `setOption` |
-| [`server/`](server) | Spring Boot + JPA + Flyway | 메타 DB 소유, SQL 실행 엔진, **ECharts option 단일 변환기(Java)**, 토큰 검증 |
+| [`server/`](server) | Spring Boot + JPA + Flyway | 메타 DB 소유, 세션 인증, SQL 실행 엔진, **ECharts option 단일 변환기(Java)**, 임베드 키 검증 |
 
 ## 경계 원칙
 
@@ -24,7 +24,7 @@
 ## 현재 구현 상태
 
 - 백엔드는 `web` 컨트롤러, `chart` 서비스/저장소, `query` SQL 생성/실행, `converter` 옵션 변환으로 분리되어 있다.
-- 공통 에러 envelope은 `ApiExceptionHandler`, 임베드 JWT 검증은 `EmbedTokenInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
+- 공통 에러 envelope은 `ApiExceptionHandler`, 차트별 `cek1_*` 검증은 `EmbedKeyInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
 - 검증 기준은 [`docs/제품요구사항.md`](docs/제품요구사항.md), [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md), [`docs/노코드_질의생성_규칙.md`](docs/노코드_질의생성_규칙.md), [`docs/화면설계서.md`](docs/화면설계서.md)의 최신 문서 버전을 따른다.
 - 100개 독립 데이터소스·대용량 point 운영 경계와 배포 절차는 [`docs/대용량_운영_설계.md`](docs/대용량_운영_설계.md), 15/30/100 실행법은 [`load-tests/README.md`](load-tests/README.md)를 따른다.
 
@@ -87,7 +87,7 @@ docker compose up -d
 
 | DB | 용도 |
 |---|---|
-| `chartsol` | `mc_` 메타 테이블, 차트/토큰/데이터소스 저장 |
+| `chartsol` | `mc_` 메타 테이블, 사용자/세션/차트/임베드 키/데이터소스 저장 |
 | `chartsol_user` | 노코드 빌더가 조회할 샘플 업무 데이터 |
 
 서버 로컬 실행 기본값은 Docker DB 기준이다.
