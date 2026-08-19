@@ -14,8 +14,8 @@ import java.util.Base64;
  * 임베드 키 문자열 `cek1_<id>_<sig>` 의 파생·검증.
  *
  * sig = base64url(HMAC-SHA256(key-secret, "chartsdk:embed-key:v1:" + id)) — 키 원문/해시를 DB 에
- * 저장하지 않고 id 에서 언제든 재파생한다(S3 모달 재표시). 도메인 접두사로 jwt-secret 공용 시에도
- * JWT 서명과 입력 공간이 겹치지 않는다. 검증은 DB 를 거치지 않으므로 위조 키는 조회 비용을 만들지 않는다.
+ * 저장하지 않고 id 에서 언제든 재파생한다. 도메인 접두사로 다른 HMAC 용도와 입력 공간을 분리한다.
+ * 검증은 DB 를 거치지 않으므로 위조 키는 조회 비용을 만들지 않는다.
  */
 @Component
 public class EmbedKeyCodec {
