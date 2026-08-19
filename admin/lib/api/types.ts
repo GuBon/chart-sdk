@@ -197,20 +197,6 @@ export interface ConnectionTestResult {
   message: string;
 }
 
-export interface UserToken {
-  tokenId: number;
-  userId: number;
-  expiresAt: string;
-  isActive: boolean;
-  createdAt?: string;
-  token?: string; // 원문 JWT (PRD 8.2 트레이드오프 — 임베드 스니펫 조립용)
-}
-
-/** 발급 직후에만 원문 token 을 반환 */
-export interface IssuedToken extends UserToken {
-  token: string;
-}
-
 export type EmbedKeyStatus = 'ACTIVE' | 'EXPIRED' | 'REVOKED';
 
 /** 목록에서 노출 가능한 임베드 키 메타데이터. Bearer 원문은 포함하지 않는다. */
@@ -235,6 +221,91 @@ export interface User {
   id: number;
   username: string;
   displayName: string;
+}
+
+export type UserRole = 'member' | 'admin';
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  displayName: string;
+  role: UserRole;
+}
+
+export interface AdminUserSummary {
+  id: number;
+  username: string;
+  displayName: string | null;
+  role: UserRole;
+  active: boolean;
+  createdAt: string;
+  chartCount: number;
+  embeddedChartCount: number;
+  activeSessions: number;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface AdminEmbedKeySummary {
+  id: number;
+  chartId: number;
+  chartName: string;
+  status: EmbedKeyStatus;
+  expiresAt: string;
+  createdAt: string;
+  revokedAt: string | null;
+  revokedReason: string | null;
+}
+
+export interface AdminUserDetailResponse {
+  user: Omit<AdminUserSummary, 'chartCount' | 'embeddedChartCount' | 'activeSessions'>;
+  summary: {
+    activeSessions: number;
+    chartCount: number;
+    embeddedChartCount: number;
+    activeEmbedKeyCount: number;
+    expiredEmbedKeyCount: number;
+    revokedEmbedKeyCount: number;
+    lastEmbedKeyIssuedAt: string | null;
+  };
+  embedKeys: AdminEmbedKeySummary[];
+}
+
+export interface AdminChartSummary {
+  id: number;
+  ownerId: number | null;
+  ownerUsername: string | null;
+  ownerDisplayName: string | null;
+  name: string;
+  description: string | null;
+  chartType: ChartType;
+  refreshMode: RefreshMode;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminChartListResponse {
+  charts: AdminChartSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface AdminChartDetail extends AdminChartSummary {
+  datasourceId: number;
+  datasourceName: string | null;
+  defineMode: DefineMode;
+  sqlQuery: string;
+  builderConfig: BuilderConfig;
+  options: ChartOptions;
+  version: number;
 }
 
 /** 스키마 탐색(S2 좌측). datasourceId 는 이 테이블이 속한 데이터소스(클라이언트가 로드 시 태깅) — 다중 소스 조인 식별에 쓴다. */

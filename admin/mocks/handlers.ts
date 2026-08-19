@@ -2,8 +2,8 @@
 // 경로·응답 형태는 API 계약서 v1.4 와 일치. 쓰기는 모듈 메모리에만 반영(새로고침 시 시드로 복원).
 import { http, HttpResponse } from 'msw';
 import type { Datasource } from '@/lib/api/types';
-import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, embedKeys as seedEmbedKeys, schemaTables, tokens as seedTokens, users as seedUsers } from './seed';
-import type { EmbedKeySummary, User, UserToken } from '@/lib/api';
+import { charts, chartDetail, datasources as seedDatasources, datasourceUsage, embedKeys as seedEmbedKeys, schemaTables, users as seedUsers } from './seed';
+import type { AdminUserSummary, AuthUser, EmbedKeySummary, User } from '@/lib/api';
 import { assembleOption, buildAggregateRows, buildGeneratedSql, buildRawRows, buildRowsSql, buildTablePreview, withResultDisplayNames } from './mockTransform';
 import type { BuilderConfig, ChartMainTable, ChartType, TableRef } from '@/lib/api';
 import { builderExecutionIssue } from '@/lib/builder';
@@ -15,13 +15,48 @@ let chartList = charts.map((c) => ({ ...c }));
 let nextChartId = Math.max(...charts.map((c) => c.id)) + 1;
 const savedCharts: Record<number, Record<string, unknown>> = {}; // 생성/수정된 차트 전체 본문
 const computedAtByChart: Record<number, string> = {};
-let tokenList: UserToken[] = seedTokens.map((t) => ({ ...t }));
 let userList: User[] = seedUsers.map((u) => ({ ...u }));
 type MockEmbedKey = EmbedKeySummary & { embedKey: string };
 let embedKeyList: MockEmbedKey[] = seedEmbedKeys.map((k) => ({ ...k }));
-let nextTokenId = Math.max(...tokenList.map((t) => t.tokenId)) + 1;
 let nextUserId = Math.max(...userList.map((u) => u.id)) + 1;
 let nextEmbedKeyId = Math.max(...embedKeyList.map((k) => k.id)) + 1;
+let mockAuthenticated = true;
+const mockUser: AuthUser = {
+  id: userList[0]?.id ?? 1,
+  username: userList[0]?.username ?? 'admin',
+  displayName: userList[0]?.displayName ?? '관리자',
+  role: 'admin',
+};
+
+function chartOwner(chartId: number): User {
+  return userList[Math.abs(chartId) % userList.length] ?? userList[0];
+}
+
+let adminUserList: AdminUserSummary[] = userList.map((user, index) => ({
+  ...user,
+  displayName: user.displayName || null,
+  role: index === 0 ? 'admin' : 'member',
+  active: true,
+  createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+  chartCount: chartList.filter((chart) => chartOwner(chart.id).id === user.id).length,
+  embeddedChartCount: new Set(embedKeyList
+    .filter((key) => key.userId === user.id && key.status === 'ACTIVE')
+    .map((key) => key.chartId)).size,
+  activeSessions: index === 0 ? 1 : 0,
+}));
+
+function isMockAuthenticated() {
+  if (typeof document === 'undefined') return mockAuthenticated;
+  const persisted = document.cookie.split('; ').find((entry) => entry.startsWith('chartsdk-msw-auth='))?.split('=')[1];
+  return persisted == null ? mockAuthenticated : persisted === '1';
+}
+
+function setMockAuthenticated(value: boolean) {
+  mockAuthenticated = value;
+  if (typeof document !== 'undefined') {
+    document.cookie = `chartsdk-msw-auth=${value ? '1' : '0'}; Path=/; SameSite=Lax`;
+  }
+}
 
 function publicEmbedKey(key: MockEmbedKey): EmbedKeySummary {
   return {
@@ -86,6 +121,40 @@ function storedRefreshMode(chart: { refreshMode?: unknown }): string | null {
 }
 
 export const handlers = [
+  // ── 로그인/세션 ───────────────────────────────────
+  http.get('/api/v1/auth/csrf', () => HttpResponse.json({ headerName: 'X-CSRF-TOKEN', token: 'msw-csrf-token' })),
+  http.get('/api/v1/auth/me', () => (isMockAuthenticated()
+    ? HttpResponse.json(mockUser)
+    : err(401, 'AUTH_REQUIRED', '로그인이 필요합니다.'))),
+  http.post('/api/v1/auth/login', async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as { username?: string; password?: string };
+    if (!body.username || !body.password) return err(401, 'INVALID_CREDENTIALS', '아이디 또는 비밀번호가 올바르지 않습니다.');
+    setMockAuthenticated(true);
+    return HttpResponse.json(mockUser);
+  }),
+  http.post('/api/v1/auth/signup', async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as { username?: string; password?: string; passwordConfirm?: string };
+    if (!body.password || [...body.password].length < 15) {
+      return err(400, 'PASSWORD_TOO_SHORT', '비밀번호는 최소 15자여야 합니다.', { fields: { password: '최소 15자여야 합니다.' } });
+    }
+    if (body.password !== body.passwordConfirm) {
+      return err(400, 'PASSWORD_CONFIRMATION_MISMATCH', '비밀번호 확인이 일치하지 않습니다.', { fields: { passwordConfirm: '비밀번호와 같아야 합니다.' } });
+    }
+    const username = body.username?.trim() ?? '';
+    if (!username) return err(400, 'VALIDATION_FAILED', '아이디를 입력하세요.', { fields: { username: '아이디를 입력하세요.' } });
+    const id = nextUserId++;
+    userList = [...userList, { id, username, displayName: username }];
+    adminUserList = [...adminUserList, {
+      id, username, displayName: username, role: 'member', active: true,
+      createdAt: new Date().toISOString(), chartCount: 0, embeddedChartCount: 0, activeSessions: 0,
+    }];
+    return HttpResponse.json({ id, username, displayName: username, role: 'member' }, { status: 201 });
+  }),
+  http.post('/api/v1/auth/logout', () => {
+    setMockAuthenticated(false);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   // ── 차트 ──────────────────────────────────────────
   http.get('/api/v1/charts', ({ request }) => {
     const p = new URL(request.url).searchParams;
@@ -435,7 +504,7 @@ export const handlers = [
     const now = Date.now();
     return HttpResponse.json({
       embedKeys: embedKeyList
-        .filter((key) => key.chartId === chartId)
+        .filter((key) => key.chartId === chartId && key.userId === mockUser.id)
         .map((key) => ({
           ...publicEmbedKey(key),
           status: key.status === 'REVOKED' || new Date(key.expiresAt).getTime() > now ? key.status : 'EXPIRED',
@@ -443,12 +512,11 @@ export const handlers = [
     });
   }),
 
-  // 발급 — (사용자, 차트) 쌍당 활성 1개: 기존 활성 회수(ROTATED) 후 새 키 INSERT. 키 원문은 활성 행에만 담긴다.
+  // 발급 — 로그인 사용자/차트 쌍당 활성 1개. 요청 본문에서 userId를 받지 않는다.
   http.post('/api/v1/charts/:chartId/embed-keys', async ({ params, request }) => {
     const chartId = Number(params.chartId);
-    const body = (await request.json().catch(() => ({}))) as { userId?: number; expiresInDays?: number };
-    const userId = Number(body.userId);
-    if (!userList.some((u) => u.id === userId)) return err(404, 'USER_NOT_FOUND', '사용자를 찾을 수 없습니다.');
+    const body = (await request.json().catch(() => ({}))) as { expiresInDays?: number };
+    const userId = mockUser.id;
     if (!chartList.some((c) => c.id === chartId) && !savedCharts[chartId]) {
       return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
     }
@@ -484,41 +552,112 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  // ── 토큰 · 사용자(S7) ─────────────────────────────
-  http.get('/api/v1/tokens', () => HttpResponse.json({ tokens: tokenList })),
-
-  // 발급 — 1인 1활성: 기존 활성 회수 후 새 토큰 INSERT(API 4.1)
-  http.post('/api/v1/users/:userId/tokens', async ({ params, request }) => {
+  // ── 관리자 사용자 ─────────────────────────────────
+  http.get('/api/v1/admin/users', ({ request }) => {
+    const params = new URL(request.url).searchParams;
+    const q = params.get('q')?.toLowerCase();
+    const status = params.get('status');
+    const role = params.get('role');
+    const pageSize = Math.min(100, Math.max(1, Number(params.get('pageSize') ?? 20)));
+    const requestedPage = Math.max(1, Number(params.get('page') ?? 1));
+    let list = [...adminUserList];
+    if (q) list = list.filter((user) => user.username.toLowerCase().includes(q)
+      || user.displayName?.toLowerCase().includes(q));
+    if (status) list = list.filter((user) => user.active === (status === 'active'));
+    if (role) list = list.filter((user) => user.role === role);
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    return HttpResponse.json({ users: list.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages });
+  }),
+  http.get('/api/v1/admin/users/:userId', ({ params }) => adminUserDetail(Number(params.userId))),
+  http.patch('/api/v1/admin/users/:userId/status', async ({ params, request }) => {
     const userId = Number(params.userId);
-    const body = (await request.json().catch(() => ({}))) as { expiresInDays?: number };
-    const days = body.expiresInDays ?? 365;
-    tokenList = tokenList.map((t) => (t.userId === userId && t.isActive ? { ...t, isActive: false } : t));
-    const now = new Date();
-    const exp = new Date(now.getTime() + days * 86400000);
-    const token: UserToken & { token: string } = {
-      tokenId: nextTokenId++,
-      userId,
-      createdAt: now.toISOString(),
-      expiresAt: exp.toISOString(),
-      isActive: true,
-      token: `eyJhbGciOiJIUzI1NiJ9.${btoa(JSON.stringify({ userId }))}.${Math.random().toString(36).slice(2, 6)}`,
-    };
-    tokenList = [...tokenList, token];
-    return HttpResponse.json({ tokenId: token.tokenId, token: token.token, userId, expiresAt: token.expiresAt, isActive: true }, { status: 201 });
+    const body = await request.json() as { active: boolean };
+    const user = adminUserList.find((item) => item.id === userId);
+    if (!user) return err(404, 'USER_NOT_FOUND', '사용자를 찾을 수 없습니다.');
+    if (!body.active && userId === mockUser.id) return err(409, 'CANNOT_DISABLE_SELF', '현재 로그인한 관리자 계정은 비활성화할 수 없습니다.');
+    adminUserList = adminUserList.map((item) => item.id === userId ? { ...item, active: body.active, activeSessions: 0 } : item);
+    if (!body.active) embedKeyList = embedKeyList.map((key) => key.userId === userId && key.status === 'ACTIVE'
+      ? { ...key, status: 'REVOKED', revokedAt: new Date().toISOString(), revokedReason: 'USER_DISABLED' }
+      : key);
+    return adminUserDetail(userId);
+  }),
+  http.patch('/api/v1/admin/users/:userId/role', async ({ params, request }) => {
+    const userId = Number(params.userId);
+    const body = await request.json() as { role: 'member' | 'admin' };
+    const user = adminUserList.find((item) => item.id === userId);
+    if (!user) return err(404, 'USER_NOT_FOUND', '사용자를 찾을 수 없습니다.');
+    const activeAdminCount = adminUserList.filter((item) => item.active && item.role === 'admin').length;
+    if (user.active && user.role === 'admin' && body.role === 'member' && activeAdminCount <= 1) {
+      return err(409, 'LAST_ADMIN_PROTECTED', '마지막 활성 관리자는 변경할 수 없습니다.');
+    }
+    adminUserList = adminUserList.map((item) => item.id === userId ? { ...item, role: body.role, activeSessions: 0 } : item);
+    return adminUserDetail(userId);
   }),
 
-  // 회수
-  http.delete('/api/v1/tokens/:tokenId', ({ params }) => {
-    const id = Number(params.tokenId);
-    tokenList = tokenList.map((t) => (t.tokenId === id ? { ...t, isActive: false } : t));
-    return new HttpResponse(null, { status: 204 });
+  // ── 관리자 전체 차트(읽기 전용) ──────────────────
+  http.get('/api/v1/admin/charts', ({ request }) => {
+    const params = new URL(request.url).searchParams;
+    const ownerId = params.get('ownerId');
+    const q = params.get('q')?.toLowerCase();
+    const type = params.get('type');
+    const pageSize = Math.min(100, Math.max(1, Number(params.get('pageSize') ?? 20)));
+    const requestedPage = Math.max(1, Number(params.get('page') ?? 1));
+    let list = chartList.map(adminChartSummary);
+    if (ownerId) list = list.filter((chart) => chart.ownerId === Number(ownerId));
+    if (q) list = list.filter((chart) => chart.name.toLowerCase().includes(q)
+      || chart.description?.toLowerCase().includes(q));
+    if (type) list = list.filter((chart) => chart.chartType === type);
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    return HttpResponse.json({ charts: list.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages });
   }),
-
-  http.get('/api/v1/users', () => HttpResponse.json({ users: userList })),
-  http.post('/api/v1/users', async ({ request }) => {
-    const body = (await request.json()) as { username: string; displayName: string };
-    const user: User = { id: nextUserId++, username: body.username, displayName: body.displayName };
-    userList = [...userList, user];
-    return HttpResponse.json(user, { status: 201 });
+  http.get('/api/v1/admin/charts/:chartId/preview', ({ params }) => chartPreview(Number(params.chartId))),
+  http.get('/api/v1/admin/charts/:chartId', ({ params }) => {
+    const id = Number(params.chartId);
+    const summary = chartList.find((chart) => chart.id === id);
+    if (!summary) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+    const detail = savedCharts[id] ?? chartDetail(summary);
+    const owner = chartOwner(id);
+    return HttpResponse.json({ ...detail, ...adminChartSummary(summary), ownerId: owner.id, ownerUsername: owner.username,
+      ownerDisplayName: owner.displayName, datasourceName: datasources.find((item) => item.id === summary.datasourceId)?.name ?? null });
   }),
 ];
+
+function adminUserDetail(userId: number) {
+  const user = adminUserList.find((item) => item.id === userId);
+  if (!user) return err(404, 'USER_NOT_FOUND', '사용자를 찾을 수 없습니다.');
+  const keys = embedKeyList.filter((key) => key.userId === userId);
+  return HttpResponse.json({
+    user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role, active: user.active, createdAt: user.createdAt },
+    summary: {
+      activeSessions: user.activeSessions,
+      chartCount: user.chartCount,
+      embeddedChartCount: user.embeddedChartCount,
+      activeEmbedKeyCount: keys.filter((key) => key.status === 'ACTIVE').length,
+      expiredEmbedKeyCount: keys.filter((key) => key.status === 'EXPIRED').length,
+      revokedEmbedKeyCount: keys.filter((key) => key.status === 'REVOKED').length,
+      lastEmbedKeyIssuedAt: keys[0]?.createdAt ?? null,
+    },
+    embedKeys: keys.map((key) => ({ ...publicEmbedKey(key), chartName: chartList.find((chart) => chart.id === key.chartId)?.name ?? `#${key.chartId}` })),
+  });
+}
+
+function adminChartSummary(chart: (typeof chartList)[number]) {
+  const owner = chartOwner(chart.id);
+  return { ...chart, ownerId: owner.id, ownerUsername: owner.username, ownerDisplayName: owner.displayName,
+    refreshMode: storedRefreshMode(savedCharts[chart.id] ?? chartDetail(chart)) ?? 'manual', createdAt: '2026-01-01T00:00:00Z' };
+}
+
+function chartPreview(id: number) {
+  const saved = savedCharts[id] as { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown } | undefined;
+  const summary = chartList.find((chart) => chart.id === id);
+  const chart = saved ?? (summary ? chartDetail(summary) : null);
+  if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
+  const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
+  return HttpResponse.json({ chartId: id, columns: result.columns, rows: result.rows, rowCount: result.rowCount,
+    truncated: result.truncated, elapsedMs: result.elapsedMs, computedAt: computedAtFor(id),
+    option: assembleOption(result, chart.chartType, chart.options ?? {}, chart.builderConfig, storedRefreshMode(chart)) });
+}

@@ -1,12 +1,18 @@
 // 리소스별 타입 안전 엔드포인트. 화면은 이 함수들만 호출한다(경로·메서드 노출 금지).
 import { request } from './client';
 import type {
+  AuthUser,
+  AdminChartDetail,
+  AdminChartListResponse,
+  AdminUserDetailResponse,
+  AdminUserListResponse,
   Chart,
   ChartDataResponse,
   ChartInput,
   ChartListParams,
   ChartListResponse,
   ChartSummary,
+  ChartType,
   ChartPreviewBatchResponse,
   ChartRefreshResponse,
   ConnectionTestResult,
@@ -14,11 +20,8 @@ import type {
   DatasourceInput,
   EmbedKeySummary,
   IssuedEmbedKey,
-  IssuedToken,
   QueryResult,
   SchemaTable,
-  User,
-  UserToken,
 } from './types';
 
 export { ApiError, apiErrorMessage, apiFieldError } from './client';
@@ -117,23 +120,37 @@ export const schemaApi = {
   }) => request<void>('/schema/display-name', { method: 'PUT', body: input }),
 };
 
-export const tokensApi = {
-  list: () => request<{ tokens: UserToken[] }>('/tokens').then((r) => r.tokens),
-  issue: (userId: number, expiresInDays?: number) =>
-    request<IssuedToken>(`/users/${userId}/tokens`, { method: 'POST', body: { expiresInDays } }),
-  revoke: (tokenId: number) => request<void>(`/tokens/${tokenId}`, { method: 'DELETE' }),
-};
-
 /** S3 임베드 코드 모달 — 차트별 임베드 키. 발급은 같은 (사용자, 차트)의 기존 활성 키를 회수(ROTATED)하고 교체한다. */
 export const embedKeysApi = {
   listForChart: (chartId: number) =>
     request<{ embedKeys: EmbedKeySummary[] }>(`/charts/${chartId}/embed-keys`).then((r) => r.embedKeys),
-  issue: (chartId: number, userId: number, expiresInDays?: number) =>
-    request<IssuedEmbedKey>(`/charts/${chartId}/embed-keys`, { method: 'POST', body: { userId, expiresInDays } }),
+  issue: (chartId: number, expiresInDays?: number) =>
+    request<IssuedEmbedKey>(`/charts/${chartId}/embed-keys`, { method: 'POST', body: { expiresInDays } }),
   revoke: (keyId: number) => request<void>(`/embed-keys/${keyId}`, { method: 'DELETE' }),
 };
 
-export const usersApi = {
-  list: () => request<{ users: User[] }>('/users').then((r) => r.users),
-  create: (input: { username: string; displayName: string }) => request<User>('/users', { method: 'POST', body: input }),
+export const authApi = {
+  me: () => request<AuthUser>('/auth/me'),
+  signup: (input: { username: string; password: string; passwordConfirm: string }) =>
+    request<AuthUser>('/auth/signup', { method: 'POST', body: input }),
+  login: (input: { username: string; password: string }) =>
+    request<AuthUser>('/auth/login', { method: 'POST', body: input }),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+};
+
+export const adminUsersApi = {
+  list: (params: { q?: string; status?: 'active' | 'inactive'; role?: 'member' | 'admin'; page?: number; pageSize?: number } = {}) =>
+    request<AdminUserListResponse>(`/admin/users${qs(params)}`),
+  get: (userId: number) => request<AdminUserDetailResponse>(`/admin/users/${userId}`),
+  setStatus: (userId: number, active: boolean) =>
+    request<AdminUserDetailResponse>(`/admin/users/${userId}/status`, { method: 'PATCH', body: { active } }),
+  setRole: (userId: number, role: 'member' | 'admin') =>
+    request<AdminUserDetailResponse>(`/admin/users/${userId}/role`, { method: 'PATCH', body: { role } }),
+};
+
+export const adminChartsApi = {
+  list: (params: { ownerId?: number; q?: string; type?: ChartType; page?: number; pageSize?: number } = {}) =>
+    request<AdminChartListResponse>(`/admin/charts${qs(params)}`),
+  get: (chartId: number) => request<AdminChartDetail>(`/admin/charts/${chartId}`),
+  preview: (chartId: number) => request<ChartDataResponse>(`/admin/charts/${chartId}/preview`),
 };

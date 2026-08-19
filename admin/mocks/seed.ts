@@ -1,5 +1,5 @@
 // 개발용 시드 데이터 — S1 화면(183:16)의 카드 구성과 일치시킨다.
-import type { Chart, ChartSummary, Datasource, EmbedKeySummary, SchemaTable, User, UserToken } from '@/lib/api/types';
+import type { Chart, ChartSummary, Datasource, EmbedKeySummary, SchemaTable, User } from '@/lib/api/types';
 
 const DATASOURCE_NAMES: Record<number, string> = {
   1: 'analytics-db',
@@ -236,14 +236,6 @@ export const users: User[] = [
   { id: 8, username: 'lee.sh', displayName: '이서현' },
   { id: 9, username: 'park.jw', displayName: '박지원' },
   { id: 10, username: 'choi.mn', displayName: '최민' },
-];
-
-// figma S7 목록과 일치: kim·lee 활성, park 만료(exp 과거), choi 회수됨(isActive=false). 1인 1활성.
-export const tokens: UserToken[] = [
-  { tokenId: 42, userId: 7, createdAt: '2026-06-10T00:00:00Z', expiresAt: '2027-06-10T00:00:00Z', isActive: true, token: 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjcsImp0aSI6NDJ9.a8Xk' },
-  { tokenId: 43, userId: 8, createdAt: '2026-05-02T00:00:00Z', expiresAt: '2027-05-02T00:00:00Z', isActive: true, token: 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjgsImp0aSI6NDN9.Q2mP' },
-  { tokenId: 44, userId: 9, createdAt: '2025-12-15T00:00:00Z', expiresAt: '2026-06-01T00:00:00Z', isActive: true, token: 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjksImp0aSI6NDR9.t7Rd' },
-  { tokenId: 45, userId: 10, createdAt: '2026-01-20T00:00:00Z', expiresAt: '2027-01-20T00:00:00Z', isActive: false, token: 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOjEwLCJqdGkiOjQ1fQ.k9Lw' },
 ];
 
 // S3 임베드 키 — (사용자, 차트) 쌍 바인딩. 스니펫에는 chartId 대신 이 키만 들어간다.
