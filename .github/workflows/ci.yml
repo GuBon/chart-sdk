@@ -71,6 +71,35 @@ jobs:
         if: always()
         run: docker compose --profile spatial-test down -v
 
+  # 관리 콘솔 전체 화면 E2E(MSW 목 백엔드) — 배포 게이트. dev 서버 예열 + 2 worker 로 약 6~8분.
+  admin-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run gen:defaults
+      - run: npx playwright install --with-deps chromium
+
+      - name: Admin console E2E (MSW)
+        run: npm run test:e2e
+
+      - name: Upload admin E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-e2e-diagnostics
+          path: |
+            admin/test-results/
+            admin/playwright-report/
+          if-no-files-found: ignore
+
   real-backend-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 25
