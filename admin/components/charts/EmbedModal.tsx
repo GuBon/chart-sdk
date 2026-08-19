@@ -1,13 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { Copy } from 'lucide-react';
-import { apiErrorMessage, embedKeysApi, usersApi } from '@/lib/api';
-import type { ChartSummary, EmbedKeySummary, IssuedEmbedKey, User } from '@/lib/api';
+import { apiErrorMessage, embedKeysApi } from '@/lib/api';
+import type { ChartSummary, EmbedKeySummary, IssuedEmbedKey } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
-import { Field } from '@/components/ui/Field';
-import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 
 // S3 임베드 코드 모달(273:366). 임베드 키 발급·코드 조립·복사 담당.
@@ -45,7 +42,7 @@ function summaryFromIssued(issued: IssuedEmbedKey): EmbedKeySummary {
   };
 }
 
-export function EmbedModal({ chart, onClose, onNavigate }: {
+export function EmbedModal({ chart, onClose }: {
   chart: Pick<ChartSummary, 'id'>;
   onClose: () => void;
   /** 내부 이동 훅 — 차트 에디터처럼 미저장 이탈 가드가 필요한 호스트가 주입한다. 없으면 일반 링크. */
@@ -54,8 +51,6 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
   const [summaries, setSummaries] = useState<EmbedKeySummary[]>([]);
   // 원문 키는 발급한 이 모달 인스턴스의 메모리에만 둔다. 목록·스토리지에서는 복원하지 않는다.
   const [revealed, setRevealed] = useState<IssuedEmbedKey | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
-  const [userId, setUserId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [mutation, setMutation] = useState<'idle' | 'issuing' | 'revoking'>('idle');
@@ -69,14 +64,10 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
     let alive = true;
     setLoading(true);
     setLoadError(false);
-    void Promise.all([embedKeysApi.listForChart(chart.id), usersApi.list()])
-      .then(([k, u]) => {
+    void embedKeysApi.listForChart(chart.id)
+      .then((keys) => {
         if (!alive) return;
-        setSummaries(k);
-        setUsers(u);
-        // 기존 활성 키의 원문은 재표시하지 않지만, 해당 사용자를 기본 선택해 상태는 바로 알린다.
-        const active = k.find((x) => x.status === 'ACTIVE');
-        setUserId(active?.userId ?? u[0]?.id ?? null);
+        setSummaries(keys);
       })
       // 로딩/실패를 "키 없음"으로 오표시하지 않도록 상태를 분리한다.
       .catch(() => { if (alive) setLoadError(true); })
@@ -84,8 +75,8 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
     return () => { alive = false; };
   }, [chart.id]);
 
-  const activeKey = summaries.find((key) => key.userId === userId && key.status === 'ACTIVE');
-  const revealedKey = revealed?.userId === userId && revealed.status === 'ACTIVE' ? revealed : null;
+  const activeKey = summaries.find((key) => key.status === 'ACTIVE');
+  const revealedKey = revealed?.status === 'ACTIVE' ? revealed : null;
   const code = revealedKey ? snippet(revealedKey.embedKey) : '';
 
   const optimisticIssue = useCallback((issued: IssuedEmbedKey) => {
@@ -98,13 +89,13 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
   }, []);
 
   const issue = useCallback(async () => {
-    if (userId == null || mutation !== 'idle') return;
+    if (mutation !== 'idle') return;
     if (activeKey && !window.confirm('재발급하면 현재 배포된 임베드 키가 즉시 무효화됩니다. 새 키를 발급할까요?')) return;
     setMutation('issuing');
     setMutationError(null);
     setRefreshWarning(null);
     try {
-      const issued = await embedKeysApi.issue(chart.id, userId);
+      const issued = await embedKeysApi.issue(chart.id);
       setRevealed(issued);
       optimisticIssue(issued);
       // 발급 성공과 후속 목록 동기화는 별개다. GET 실패가 이미 받은 원문 키를 지우면 안 된다.
@@ -118,7 +109,7 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
     } finally {
       setMutation('idle');
     }
-  }, [activeKey, chart.id, mutation, optimisticIssue, userId]);
+  }, [activeKey, chart.id, mutation, optimisticIssue]);
 
   const revoke = useCallback(async () => {
     if (!activeKey || mutation !== 'idle') return;
@@ -173,33 +164,8 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
         <p className="py-6 text-center text-[13px] text-text-secondary">임베드 키를 불러오는 중…</p>
       ) : loadError ? (
         <p className="py-6 text-center text-[13px] text-danger">임베드 키 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</p>
-      ) : users.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 py-2">
-          <p className="text-[13px] text-text-secondary">사용자가 없습니다. 임베드하려면 먼저 사용자를 만드세요.</p>
-          {onNavigate ? (
-            // 가드가 필요한 호스트(에디터)에서는 <Link> 직행이 이탈확인을 우회하므로 콜백으로 이동한다.
-            <Button size="sm" className="h-8" onClick={() => onNavigate('/tokens')}>사용자 관리로 이동</Button>
-          ) : (
-            <Link href="/tokens">
-              <Button size="sm" className="h-8">사용자 관리로 이동</Button>
-            </Link>
-          )}
-        </div>
       ) : (
         <div className="flex flex-col gap-3.5">
-          <Field label="사용자">
-            <Select
-              aria-label="사용자"
-              value={userId ?? ''}
-              onChange={(e) => {
-                setUserId(Number(e.target.value));
-                setRevealed(null);
-                setMutationError(null);
-                setRefreshWarning(null);
-              }}
-              options={users.map((u) => ({ value: u.id, label: u.username }))}
-            />
-          </Field>
           {revealedKey ? (
             <>
               <p className="text-sm text-text-secondary">
@@ -224,12 +190,12 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
                   {copied ? '복사되었습니다' : '복사'}
                 </Button>
               </div>
-              <p className="text-xs text-text-secondary">재발급하면 이 사용자의 기존 키는 즉시 무효화됩니다.</p>
+              <p className="text-xs text-text-secondary">재발급하면 내 기존 키는 즉시 무효화됩니다.</p>
             </>
           ) : activeKey ? (
             <div className="flex flex-col items-start gap-3 py-1">
               <p className="text-[13px] text-text-secondary">
-                이 사용자의 임베드 키가 활성 상태입니다 (만료 {activeKey.expiresAt.slice(0, 10)}). 보안을 위해 기존 키 원문은 다시 표시하지 않습니다.
+                내 임베드 키가 활성 상태입니다 (만료 {activeKey.expiresAt.slice(0, 10)}). 보안을 위해 기존 키 원문은 다시 표시하지 않습니다.
               </p>
               <div className="flex gap-2">
                 <Button size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={issue}>
@@ -243,7 +209,7 @@ export function EmbedModal({ chart, onClose, onNavigate }: {
             </div>
           ) : (
             <div className="flex flex-col items-start gap-3 py-1">
-              <p className="text-[13px] text-text-secondary">이 사용자에게 발급된 이 차트의 임베드 키가 없습니다.</p>
+              <p className="text-[13px] text-text-secondary">이 차트에 발급된 내 임베드 키가 없습니다.</p>
               <Button size="sm" className="h-8" disabled={mutation !== 'idle'} onClick={issue}>
                 {mutation === 'issuing' ? '발급 중…' : '임베드 키 발급'}
               </Button>

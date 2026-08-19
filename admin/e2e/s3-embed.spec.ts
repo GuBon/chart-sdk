@@ -12,8 +12,7 @@ test.describe('S3 임베드 코드', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('임베드 코드')).toBeVisible();
 
-    // 기존 활성 키는 메타데이터만 보이고 Bearer 원문은 목록에서 재노출되지 않는다.
-    await expect(dialog.getByRole('combobox', { name: '사용자' })).toBeVisible();
+    // 발급 대상은 로그인 사용자로 고정된다. 기존 활성 키는 메타데이터만 보이고 Bearer 원문은 재노출되지 않는다.
     await expect(dialog.getByText(/기존 키 원문은 다시 표시하지 않습니다/)).toBeVisible();
     await expect(dialog.locator('pre')).toHaveCount(0);
     page.once('dialog', (confirmation) => confirmation.accept());

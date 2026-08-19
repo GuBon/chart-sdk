@@ -16,7 +16,18 @@ async function openDataRefresh(page: Page) {
   return section.getByTestId('option-action-refreshNow');
 }
 
-test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시 갱신을 관통한다', async ({ page, context }) => {
+test('MSW 없이 가입·로그인→등록→지도 저장·재진입→임베드→캐시 갱신을 관통한다', async ({ page, context }) => {
+  await page.goto('/signup');
+  await page.getByLabel('아이디').fill('real-e2e-owner');
+  await page.getByLabel(/비밀번호 \(최소/).fill('real-e2e-password-2026');
+  await page.getByLabel('비밀번호 확인').fill('real-e2e-password-2026');
+  await page.getByRole('button', { name: '회원가입', exact: true }).click();
+  await expect(page).toHaveURL(/\/login\?registered=1$/);
+  await page.getByLabel('아이디').fill('real-e2e-owner');
+  await page.getByLabel('비밀번호').fill('real-e2e-password-2026');
+  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+
   await page.goto('/datasources');
   await page.getByRole('button', { name: '데이터소스 추가', exact: true }).first().click();
   const datasourceDialog = page.getByRole('dialog', { name: '데이터소스 추가' });
@@ -70,22 +81,11 @@ test('MSW 없이 등록→지도 저장·재진입→토큰→임베드→캐시
   await expect(refreshAction).toContainText('마지막 계산');
   await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
 
-  await page.goto('/tokens');
-  await page.getByRole('button', { name: '토큰 발급', exact: true }).click();
-  const tokenDialog = page.getByRole('dialog', { name: '토큰 발급' });
-  await tokenDialog.getByRole('button', { name: /새 사용자 만들기/ }).click();
-  await tokenDialog.getByPlaceholder('username').fill('real-e2e-user');
-  await tokenDialog.getByPlaceholder('표시명').fill('실백엔드 E2E 사용자');
-  await tokenDialog.getByRole('button', { name: '발급', exact: true }).click();
-  await expect(page.getByText('토큰을 발급했습니다')).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'real-e2e-user', exact: true })).toBeVisible();
-
   await page.goto(chartPath);
   await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
   await page.locator('header').first().getByRole('button', { name: '임베드 코드', exact: true }).click();
   const embedDialog = page.getByRole('dialog', { name: '임베드 코드' });
-  // 새 차트에는 아직 임베드 키가 없다 — 모달에서 사용자를 고르고 키를 발급하면 스니펫이 나타난다.
-  await embedDialog.getByRole('combobox', { name: '사용자' }).selectOption({ label: 'real-e2e-user' });
+  // 새 차트에는 아직 임베드 키가 없다 — 소유자가 자신의 차트 키를 발급한다.
   await embedDialog.getByRole('button', { name: '임베드 키 발급', exact: true }).click();
   const snippet = await embedDialog.locator('pre').innerText();
   expect(snippet).toContain('data-embed-key="cek1_');
