@@ -1,7 +1,44 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 async function selectBase(page: Page, name: string | RegExp) {
   await page.locator('aside').first().getByRole('button', { name: tableButtonName(name) }).click();
+}
+
+async function expectSelectedBase(page: Page, qualifiedName: string) {
+  await expect(page.getByTestId('builder-data-config-toggle')).toContainText(qualifiedName);
+}
+
+async function findCanvasPointWithElementColor(canvas: Locator, colorSource: Locator) {
+  const expected = await colorSource.evaluate((element) => {
+    const channels = getComputedStyle(element).backgroundColor.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number);
+    if (!channels || channels.length !== 3) throw new Error('선택 대상의 RGB 색상을 읽지 못했습니다.');
+    return { red: channels[0], green: channels[1], blue: channels[2] };
+  });
+  return canvas.evaluate((element, color) => {
+    const target = element as HTMLCanvasElement;
+    const context = target.getContext('2d');
+    if (!context) return null;
+    const pixels = context.getImageData(0, 0, target.width, target.height).data;
+    for (let y = 0; y < target.height; y += 2) {
+      for (let x = 0; x < target.width; x += 2) {
+        const offset = (y * target.width + x) * 4;
+        if (Math.abs(pixels[offset] - color.red) <= 3
+          && Math.abs(pixels[offset + 1] - color.green) <= 3
+          && Math.abs(pixels[offset + 2] - color.blue) <= 3
+          && pixels[offset + 3] > 0) {
+          return { x: x / target.width, y: y / target.height };
+        }
+      }
+    }
+    return null;
+  }, expected);
+}
+
+async function elementBackgroundHex(element: Locator) {
+  const channels = await element.evaluate((target) =>
+    getComputedStyle(target).backgroundColor.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number));
+  if (!channels || channels.length !== 3) throw new Error('팔레트의 RGB 색상을 읽지 못했습니다.');
+  return `#${channels.map((channel) => Math.round(channel).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 }
 
 async function selectNewJoin(page: Page, name: string | RegExp) {
@@ -262,17 +299,19 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.getByText('읽기 전용 조회')).toHaveCount(0);
     await expect(page.getByTestId('base-table-selector')).toHaveCount(0);
     await selectBase(page, 'sales public');
-    await expect(page.locator('aside').first().getByRole('button', { name: 'sales public' })).toHaveClass(/bg-blue-100/);
-    await expect(page.getByText('public.sales', { exact: true })).toBeVisible();
+    await expect(page.locator('aside').first().getByRole('button', { name: tableButtonName('sales public') })).toHaveAttribute('aria-pressed', 'true');
+    await expectSelectedBase(page, 'public.sales');
 
     await page.getByRole('button', { name: '+ 조인 추가' }).click();
     await expect(page.getByTestId('table-selection-banner')).toContainText('1번째 조인 테이블 선택 중');
     await expect(page.locator('#schema-search')).toBeFocused();
-    await expect(page.locator('aside').first().getByRole('button', { name: 'sales public' })).toBeDisabled();
-    await page.locator('aside').first().getByRole('button', { name: 'orders public' }).click();
+    await expect(page.locator('aside').first().getByRole('button', { name: tableButtonName('sales public') })).toBeDisabled();
+    await page.locator('aside').first().getByRole('button', { name: tableButtonName('orders public') }).click();
 
+    // 조인 선택 필드는 표시명·데이터소스를 보여주고 실제 qualified 이름은 title 로 확인한다.
     const joinSelector = page.getByTestId('join-table-selector-0');
-    await expect(joinSelector).toContainText('public.orders');
+    await expect(joinSelector).toContainText('orders · analytics-db');
+    await expect(joinSelector).toHaveAttribute('title', /public\.orders$/);
     await joinSelector.click();
     await expect(page.getByTestId('table-selection-banner')).toContainText('1번째 조인 테이블 선택 중');
     await page.getByRole('button', { name: '테이블 선택 취소' }).click();
@@ -395,7 +434,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await selectChartType(page, 'bar');
     await expect(page.locator('aside').first().getByRole('button', { name: 'events analytics' })).toBeVisible();
 
-    await expect(page.getByText('analytics.events', { exact: true })).toBeVisible();
+    await expectSelectedBase(page, 'analytics.events');
 
     await useXAxis(page, 'kind');
     await addValue(page);
@@ -416,7 +455,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
     // ECharts 캔버스 렌더
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     // 차트 종류 선택기는 차트 구성에 있고 시각화 옵션에서는 중복 노출하지 않는다.
     await expect(page.getByText('시각화 옵션')).toBeVisible();
@@ -426,7 +465,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 대분류 전환(막대→원형) 후에도 미리보기 유지
     await chartTypeGroup.getByRole('button', { name: '원형', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('시각화 옵션 배치를 자동·왼쪽·아래쪽으로 선택하고 사용자 선택을 저장한다', async ({ page }) => {
@@ -462,7 +501,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
   test('가로·세로 프리셋과 직접 크기 편집, 데이터·구성 패널 좌측 레일 접기·전체 화면 검수가 동작한다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     const designCanvas = page.getByTestId('chart-design-canvas');
     const sizePreset = page.getByRole('combobox', { name: '미리보기 설계 크기' });
@@ -543,7 +582,14 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(dialog).toHaveCount(0);
     await expect(focusPreviewButton).toBeFocused();
 
+    // 미저장 변경은 300ms 뒤 세션 초안으로 남는다. 기록을 기다린 뒤 새로고침해야 복구 안내가 결정적으로 뜬다.
+    await expect.poll(() => page.evaluate(
+      () => Object.keys(sessionStorage).some((key) => key.startsWith('chartsdk:editor-draft:')),
+    )).toBe(true);
     await page.reload();
+    const recoveryDialog = page.getByRole('dialog', { name: '복구 가능한 편집 내용이 있습니다' });
+    await expect(recoveryDialog).toBeVisible();
+    await recoveryDialog.getByRole('button', { name: '초안 버리기', exact: true }).click();
     await expect(page.getByTestId('schema-sidebar')).toHaveCount(0);
     await expect(page.getByTestId('data-builder-workspace')).toHaveCount(0);
     await expect(page.getByTestId('visual-option-editor')).toBeVisible();
@@ -564,7 +610,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     });
 
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     // 저장 차트 재진입 시 정의 복원에 필요한 초기 조회는 이 테스트의 편집 동작과 무관하다.
     builderRuns = 0;
 
@@ -675,7 +721,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await openOptionTab(page, '스타일');
     await openOptionSection(page, '색상');
     const seriesChip = page.locator('[data-testid^="series-color-chip-"]').first();
@@ -716,7 +762,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(255, 0, 0)');
     await page.getByRole('button', { name: '지정 해제', exact: true }).click();
     await expect(seriesSwatch).toHaveCSS('background-color', 'rgb(166, 206, 227)');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('차트에서 고른 요소를 칩으로 관리하고 선택 삭제·모두 삭제한다', async ({ page }) => {
@@ -739,21 +785,10 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     const selectedItem = page.getByTestId('selected-chart-color-item');
     const canvas = preview.locator('canvas');
-    const colorPoint = await canvas.evaluate((element) => {
-      const target = element as HTMLCanvasElement;
-      const context = target.getContext('2d');
-      if (!context) return null;
-      const pixels = context.getImageData(0, 0, target.width, target.height).data;
-      for (let y = 0; y < target.height; y += 2) {
-        for (let x = 0; x < target.width; x += 2) {
-          const offset = (y * target.width + x) * 4;
-          if (pixels[offset] === 31 && pixels[offset + 1] === 119 && pixels[offset + 2] === 180 && pixels[offset + 3] > 0) {
-            return { x: x / target.width, y: y / target.height };
-          }
-        }
-      }
-      return null;
-    });
+    const colorPoint = await findCanvasPointWithElementColor(
+      canvas,
+      page.locator('[data-testid^="series-color-swatch-"]').first(),
+    );
     expect(colorPoint).not.toBeNull();
     const bounds = await canvas.boundingBox();
     expect(bounds).not.toBeNull();
@@ -767,16 +802,18 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
       if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
       return request.postDataJSON().options.itemColorOverrides?.length === 1;
     });
-    await page.getByTestId('palette-swatch-2').click();
+    const paletteSwatch = page.getByTestId('palette-swatch-2');
+    const paletteColor = await elementBackgroundHex(paletteSwatch);
+    await paletteSwatch.click();
     const request = await previewRequest;
     expect(request.postDataJSON().options.itemColorOverrides).toEqual([
       expect.objectContaining({
         kind: 'cartesian',
         occurrence: 0,
-        color: '#2CA02C',
+        color: paletteColor,
       }),
     ]);
-    await expect(selectedItem.locator('span').last()).toHaveCSS('background-color', 'rgb(44, 160, 44)');
+    expect(await elementBackgroundHex(selectedItem.locator('span').last())).toBe(paletteColor);
 
     // 지정 해제는 현재 항목 칩을 유지한 채 현재 테마색으로만 되돌린다.
     const clearRequest = page.waitForRequest((request) => {
@@ -868,7 +905,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('#option-yAxis_interval')).toBeVisible();
     await page.locator('#option-yAxis_interval').fill('20');
 
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('산점도 전환 시 숫자 X축 스케일 설정이 노출되고 미리보기에 반영된다', async ({ page }) => {
@@ -897,7 +934,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     });
     await scaleRow.getByRole('button', { name: '로그', exact: true }).click();
     await logPreview;
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('표본 SUM은 외삽하지 않고 표본 합계로 명확히 표시한다', async ({ page }) => {
@@ -926,44 +963,49 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await expect(page.locator('pre')).not.toContainText(/100\.0 \/|500000000\.0 \/|EXTRAPOLAT/);
   });
 
-  test('실행 버튼은 집계만 조회하고 원본 데이터는 탭을 열 때 지연 조회한다', async ({ page }) => {
+  test('테이블 선택 원본 미리보기와 실행 집계 조회를 분리한다', async ({ page }) => {
     const modes: string[] = [];
+    let tablePreviewRequests = 0;
     page.on('request', (request) => {
-      if (!request.url().includes('/api/v1/query/run-builder')) return;
-      const body = request.postDataJSON() as { mode?: string };
-      modes.push(body.mode ?? 'aggregate');
+      const path = new URL(request.url()).pathname;
+      if (path === '/api/v1/schema/tables/sales/preview') tablePreviewRequests += 1;
+      if (path === '/api/v1/query/run-builder') {
+        const body = request.postDataJSON() as { mode?: string };
+        modes.push(body.mode ?? 'aggregate');
+      }
     });
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
     await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
-    await addValue(page);
+    await addValue(page, 'amount');
     await useSumValue(page);
+    await expect.poll(() => tablePreviewRequests).toBe(1);
 
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByRole('cell', { name: '의류', exact: true }).first()).toBeVisible();
     expect(modes).toEqual(['aggregate']);
 
     await page.getByRole('button', { name: '원본 데이터', exact: true }).click();
-    await expect.poll(() => modes).toEqual(['aggregate', 'rows']);
+    await expect(page.getByRole('columnheader', { name: 'category' })).toBeVisible();
+    expect(modes).toEqual(['aggregate']);
   });
 
   test('자동 표본은 전체 추정 행 수 안내와 실제 표본 수를 표시한다', async ({ page }) => {
     await page.goto('/charts/new');
     await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
     await selectBase(page, 'sales public');
-    await selectChartType(page, 'bar');
-    await useXAxis(page, 'category');
-    await addValue(page);
-    await useSumValue(page);
+    await selectChartType(page, 'scatter');
+    await useXAxis(page, 'id');
+    await addValue(page, 'amount');
 
     await page.getByRole('switch', { name: '표본 추출' }).click();
     await expect(page.getByRole('combobox', { name: '표본 방식' })).toHaveValue('auto');
     await expect(page.getByTestId('sample-total-hint')).toContainText('전체 약 500,000,000행 중 무작위 표본');
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
-    await expect(page.getByTestId('sample-badge')).toContainText('무작위 행 표본 10,000행 · 표본 결과');
+    await expect(page.getByTestId('sample-badge')).toContainText('무작위 행 표본 12행 · 표본 결과');
   });
 
   test('직접 지정 표본 크기는 최대 50,000행까지 실행 결과에 반영된다', async ({ page }) => {
@@ -972,7 +1014,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await selectBase(page, 'sales public');
     await selectChartType(page, 'bar');
     await useXAxis(page, 'category');
-    await addValue(page);
+    await addValue(page, 'amount');
     await useSumValue(page);
 
     await page.getByRole('switch', { name: '표본 추출' }).click();
@@ -993,7 +1035,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
 
     // 차트 12 base=sales-db(ds2) → 왼쪽 목록에서 ds2 의 users 로 변경해도 표본 설정 유지.
     await selectBase(page, /users/);
-    await page.getByRole('button', { name: '변경', exact: true }).click();
+    await page.getByRole('button', { name: '예', exact: true }).click();
     // 기준 테이블을 바꾸면 축이 초기화되어 실행이 차단된다. 새 축을 구성해도 보존된 표본 설정은 유지된다.
     await useXAxis(page, 'region');
     await addValue(page);
@@ -1032,16 +1074,19 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     await selectChartType(page, 'bar');
     await expect(page.locator('aside').first().getByText('View', { exact: true })).toBeVisible();
 
-    await expect(page.getByText('analytics.sales_summary', { exact: true })).toBeVisible();
+    await expectSelectedBase(page, 'analytics.sales_summary');
     await useXAxis(page, 'category');
-    await addValue(page);
+    await addValue(page, 'amount');
     await useSumValue(page);
+    // 자동 표본은 원본 점 계열에만 적용되므로 막대 집계 차트는 직접 지정으로 전환한다.
     await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
     await expect(page.getByTestId('sample-total-hint')).toHaveText('View 조회 결과에서 무작위 행 표본');
 
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.getByTestId('sample-badge')).toContainText('결과 무작위 행 표본 10,000행 · 표본 결과');
-    await expect(page.getByText('주의: 조회 결과에서 무작위로 선택된 행의 표본 결과입니다.')).toBeVisible();
+    // RESULT_RANDOM 은 키 충돌로 목표(10,000)보다 √n 만큼 적게 실현된다 — mock 은 서버 계약을 미러한다.
+    await expect(page.getByTestId('sample-badge')).toContainText('결과 Bernoulli 행 표본 9,900행 · 표본 결과');
+    await expect(page.getByText(/^주의: 조회 결과의 각 행을 같은 확률로 독립 선택한 Bernoulli 표본입니다\./)).toBeVisible();
     await page.getByText('생성된 SQL 보기').click();
     await expect(page.getByText(/"__chartsdk_population" AS/)).toBeVisible();
   });
@@ -1059,7 +1104,7 @@ test.describe('S2 차트 편집 — 골격 + 스키마 탐색기', () => {
     const ready = tree.getByRole('button', { name: /monthly_sales_mv/ });
     await expect(ready).toBeEnabled();
     await ready.click();
-    await expect(page.getByText('analytics.monthly_sales_mv', { exact: true })).toBeVisible();
+    await expectSelectedBase(page, 'analytics.monthly_sales_mv');
   });
 
   test('테이블 조인을 구성하면 생성 SQL에 JOIN이 들어가고 컬럼이 qualified 된다 (11장)', async ({ page }) => {
@@ -1214,8 +1259,12 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
 
     await expect(page.getByRole('button', { name: '임베드 코드' })).toBeEnabled();
     await page.getByRole('button', { name: '임베드 코드' }).click();
-    await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByText(/sdk\.js/)).toBeVisible();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    // Bearer 원문은 목록에서 복원하지 않는다. 새 차트는 키를 명시적으로 발급한 뒤에만 스니펫을 표시한다.
+    await expect(dialog.getByText('이 차트에 발급된 내 임베드 키가 없습니다.')).toBeVisible();
+    await dialog.getByRole('button', { name: '임베드 키 발급', exact: true }).click();
+    await expect(dialog.getByText(/sdk\.js/)).toBeVisible();
   });
 
   test('빌더 변경으로 결과가 무효화되어도 저장 버튼은 안내를 위해 활성 상태를 유지한다', async ({ page }) => {
@@ -1253,7 +1302,7 @@ test.describe('S2 차트 편집 — 저장·모달(S2-f)', () => {
     await expect(page.getByText('public.sales', { exact: true })).toBeVisible();
     await selectBase(page, /users/);
     await page.getByRole('button', { name: '예', exact: true }).click();
-    await expect(page.getByText('public.users', { exact: true })).toBeVisible();
+    await expectSelectedBase(page, 'public.users');
     await expect(page.getByTestId('builder-x-axis')).toContainText('데이터 패널에서 컬럼 선택');
   });
 
@@ -1479,9 +1528,10 @@ test.describe('S2 차트 유형 제약', () => {
     await expect(sampleSwitch).toBeVisible();
     await expect(sampleSwitch).toBeEnabled();
     await sampleSwitch.click();
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
     await page.getByRole('button', { name: '실행', exact: true }).click();
 
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await expect(page.getByTestId('sample-badge')).toContainText('표본 결과');
     await expect(page.getByText('amount: 표본 원본값')).toBeVisible();
   });
@@ -1491,12 +1541,12 @@ test.describe('S2 차트 유형 제약', () => {
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('분포전환');
     await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
     // 이미 원본값 구성이므로 분포 전환과 호환돼 실행 결과를 재사용한다.
     await page.getByRole('button', { name: '산점도', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await expect(page.getByRole('button', { name: '저장', exact: true })).toBeEnabled();
   });
 });
@@ -1549,7 +1599,7 @@ test.describe('S2 이탈 모달·옵션 검색', () => {
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     // '제목' 검색 → 차트 제목은 남고 색상 테마는 사라짐
     await page.locator('#option-search').fill('제목');
     await expect(page.getByText('차트 제목', { exact: true })).toBeVisible();
@@ -1568,7 +1618,7 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     // 기본 variant → 100% 정규화 숨김(showIf: variant==='stacked')
     await expect(page.getByText('100% 정규화')).toBeHidden();
     // 누적 선택 → 토글 노출 → 켜도 미리보기 유지
@@ -1577,7 +1627,7 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
     await openOptionSection(page, '막대');
     await expect(page.getByText('100% 정규화')).toBeVisible();
     await page.getByRole('switch', { name: '100% 정규화' }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('시리즈 종류에서 한 시리즈를 선으로 바꾸면 혼합 차트가 렌더된다', async ({ page }) => {
@@ -1585,13 +1635,13 @@ test.describe('S2 네이티브 확장 — 100% 정규화·혼합(combo)', () => 
     await useXAxis(page, 'category');
     await addValue(page); // 시리즈 sum_id
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     // 실행 후 '시리즈 종류' 컨트롤 노출 → sum_id 시리즈를 선으로
     await openOptionTab(page, '계열');
     await openOptionSection(page, '혼합');
     await expect(page.getByText('시리즈 종류')).toBeVisible();
     await page.locator('[data-testid^="series-type-"]').first().getByRole('button', { name: '선', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 });
 
@@ -1678,7 +1728,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   }
 
   for (const label of ['박스 플롯', '행렬 히트맵', '영역 지도']) {
@@ -1687,7 +1737,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
       // 대분류 전환 → 빌더 정규화로 결과 무효화될 수 있어 재실행
       await page.getByRole('button', { name: label, exact: true }).click();
       await page.getByRole('button', { name: '실행', exact: true }).click();
-      await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+      await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     });
   }
 
@@ -1852,6 +1902,7 @@ test.describe('S2 신규 유형 — 상자수염·히트맵·지도', () => {
     await addValue(page);
     await useSumValue(page);
     await page.getByRole('switch', { name: '표본 추출' }).click();
+    await page.getByRole('combobox', { name: '표본 방식' }).selectOption('manual');
     await page.getByRole('button', { name: '실행', exact: true }).click();
     await expect(page.getByText('주의: 전체 데이터에서 무작위로 선택된 행의 표본 결과입니다.')).toBeVisible();
     await expect(page.getByText('주의: SUM·COUNT는 선택된 표본의 합계·개수이며 전체 데이터의 합계·개수가 아닙니다.')).toBeVisible();
@@ -1922,7 +1973,7 @@ test.describe('S2 분석 표시 — 박스플롯 이상치·시간축 이동평�
     await page.getByRole('combobox', { name: 'Y축 2 값 방식' }).selectOption('sum');
     await page.getByRole('button', { name: '선', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     await openOptionTab(page, '계열');
     // 이동평균은 정렬 선택을 무효로 만든다 — 잠금 전 상태와 저장값을 먼저 고정한다.
@@ -1994,14 +2045,14 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     // 지도 포인트 전환 → 텍스트 X(category)는 거부되므로 숫자 경도 컬럼으로 교체 후 실행
     await page.getByRole('button', { name: '포인트 지도', exact: true }).click();
     await expect(page.getByText('포인트 지도는 숫자 경도(X) 컬럼이 필요합니다.')).toBeVisible();
     await useXAxis(page, 'amount');
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('PostGIS Point 컬럼과 크기값을 선택하면 실제 좌표 표본으로 지도 포인트가 렌더된다', async ({ page }) => {
@@ -2029,7 +2080,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
 
     await expect(page.getByRole('columnheader', { name: '__chartsdk_longitude' })).toBeVisible();
     await expect(page.getByText('126.978')).toBeVisible();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     await page.getByText('생성된 SQL 보기').click();
     const sql = page.locator('pre');
@@ -2073,14 +2124,14 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await useXAxis(page, 'category');
     await addValue(page);
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     // 지리 계열도 대분류 한 줄 그리드에 함께 노출 (화면설계 S2 옵션 패널)
     await expect(page.getByTestId('builder-chart-type-map')).toBeVisible();
     await expect(page.getByTestId('builder-chart-type-geoscatter')).toBeVisible();
     await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await openOptionTab(page, '영역');
     await openOptionSection(page, '표시 영역');
     // '행정 경계'는 아코디언 섹션 헤더라 부모에 컨트롤이 없다 — 실제 세그먼트가 있는 '경계 수준' 행을 기준으로 찾는다.
@@ -2094,7 +2145,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     });
     await boundaryRow.getByRole('button', { name: '시·군·구', exact: true }).click();
     await sigunguPreview;
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('동적 Polygon 지도의 표시 영역을 데이터·지역·지도 조정·WGS84 좌표로 지정한다', async ({ page }) => {
@@ -2109,10 +2160,11 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
     await page.getByRole('button', { name: '영역 지도', exact: true }).click();
     await page.getByRole('combobox', { name: '지도 경계 방식' }).selectOption('spatial');
     await page.getByRole('button', { name: '실행', exact: true }).click();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('지도 영역 저장 테스트');
 
     await openOptionTab(page, '영역');
+    await openOptionSection(page, '표시 영역');
     const control = page.getByTestId('map-viewport-control');
     const areaActions = control.getByTestId('map-viewport-actions');
     const topBar = page.locator('header').first();
@@ -2196,7 +2248,7 @@ test.describe('S2 지도 확장 — 지도 포인트·행정 경계', () => {
       if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/charts/preview') return false;
       return request.postDataJSON().options.tooltip?.enabled === false;
     });
-    await tooltipSection.getByRole('switch', { name: '툴팁 표시' }).click();
+    await tooltipSection.getByRole('switch', { name: '툴팁 표시', exact: true }).click();
     await tooltipPreview;
     await openOptionTab(page, '영역');
     await page.waitForTimeout(300);

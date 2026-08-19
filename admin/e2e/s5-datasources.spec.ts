@@ -24,7 +24,7 @@ test.describe('S5 데이터소스 관리', () => {
     await page.getByRole('link', { name: 'analytics-db' }).click();
     await expect(page).toHaveURL('/charts/analytics-db?view=schema');
     await expect(page.getByRole('heading', { name: 'analytics-db' })).toBeVisible();
-    await page.getByRole('link', { name: 'public' }).click();
+    await page.getByRole('link', { name: /^public 관계/ }).click();
     await expect(page).toHaveURL('/charts/analytics-db/public?view=relations');
     await page.getByRole('navigation', { name: '스키마 보기' }).getByRole('link', { name: '차트', exact: true }).click();
     await expect(page).toHaveURL('/charts/analytics-db/public');
@@ -39,8 +39,13 @@ test.describe('S5 데이터소스 관리', () => {
     await expect(page.getByRole('link', { name: 'sales' })).toHaveCount(0);
     await search.clear();
 
-    await page.getByRole('link', { name: 'sales' }).click();
-    await expect(page).toHaveURL('/charts/analytics-db/public/sales?view=columns');
+    const salesLink = page.getByRole('link', { name: 'sales', exact: true });
+    await expect(salesLink).toBeVisible();
+    await expect(salesLink).toHaveAttribute('href', '/charts/analytics-db/public/sales?view=columns');
+    await Promise.all([
+      page.waitForURL('/charts/analytics-db/public/sales?view=columns'),
+      salesLink.click(),
+    ]);
     // 관계 제목은 데이터 표시 이름을 우선한다 — 실제 이름은 설명 줄과 컬럼 표의 '실제 이름' 열로 확인한다.
     await expect(page.getByRole('heading', { name: '매출', exact: true })).toBeVisible();
     await expect(page.getByText('public.sales · TABLE')).toBeVisible();

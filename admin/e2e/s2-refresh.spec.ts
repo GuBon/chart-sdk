@@ -15,11 +15,24 @@ async function openDataRefresh(page: Page) {
   return section.getByTestId('option-action-refreshNow');
 }
 
+async function buildNewChart(page: Page) {
+  await page.goto('/charts/new');
+  await page.getByRole('combobox', { name: '데이터소스' }).selectOption({ label: 'analytics-db' });
+  await page.locator('aside').first().getByRole('button', { name: /sales.*public/ }).click();
+  await page.getByTestId('builder-chart-type-bar').click();
+  await page.getByTestId('builder-x-axis').click();
+  await page.locator('aside').first().getByRole('button', { name: 'category 컬럼을 X축에 사용', exact: true }).click();
+  await page.getByRole('button', { name: '+ 값 추가' }).click();
+  await page.locator('aside').first().getByRole('button', { name: 'amount 컬럼을 Y축 1에 사용', exact: true }).click();
+  await page.getByRole('button', { name: '실행', exact: true }).click();
+  await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
+}
+
 test.describe('S2 저장 차트 스냅샷 갱신', () => {
   test('데이터 탭은 수동·항상 최신 조회만 제공하고 저장된 live 모드를 복원한다', async ({ page }) => {
     // 24 = mocks/seed.ts LIVE_REFRESH_CHART_ID('월별 순이익') — 시드에서 유일한 live 차트.
     await page.goto('/charts/analytics-db/public/sales/24');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await openDataRefresh(page);
 
     await expect(page.getByRole('button', { name: '수동', exact: true })).toBeVisible();
@@ -33,7 +46,7 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
 
   test('지금 갱신은 스냅샷 재계산 뒤 preview를 다시 읽고 마지막 계산 시각을 표시한다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await expect(page.getByTestId('chart-design-canvas').getByText(/데이터 기준/)).toBeVisible();
     const action = await openDataRefresh(page);
     await expect(action).toContainText('마지막 계산');
@@ -49,12 +62,12 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
 
     await expect(page.getByText('데이터를 갱신했습니다')).toBeVisible();
     await expect(action).toContainText('마지막 계산');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 
   test('데이터 기준 시각 토글은 편집기 미리보기 캡션을 실제로 숨긴다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     const canvas = page.getByTestId('chart-design-canvas');
     await expect(canvas.getByText(/데이터 기준/)).toBeVisible();
     await openDataRefresh(page);
@@ -72,7 +85,7 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
 
   test('갱신 결과에 새 자동 계열 색상이 생겨도 편집기를 미저장 상태로 만들지 않는다', async ({ page }) => {
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
 
     await page.evaluate(() => {
       const originalFetch = window.fetch.bind(window);
@@ -105,20 +118,28 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
   });
 
   test('신규·수정 중 차트는 저장 전 갱신을 막고 서버 오류를 인라인으로 안내한다', async ({ page }) => {
-    await page.goto('/charts/new');
+    await buildNewChart(page);
     let action = await openDataRefresh(page);
     await expect(action.getByRole('button', { name: '지금 갱신', exact: true })).toBeDisabled();
     await expect(action).toContainText('차트를 저장한 뒤 갱신할 수 있습니다.');
 
     await page.goto('/charts/sales-db/public/sales/12');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await page.getByPlaceholder('차트 이름').fill('저장 전 변경');
     action = await openDataRefresh(page);
     await expect(action.getByRole('button', { name: '지금 갱신', exact: true })).toBeDisabled();
     await expect(action).toContainText('변경사항을 저장한 뒤 갱신하세요.');
 
+    // 미저장 변경은 300ms 뒤 세션 초안으로 남는다. 기록을 기다린 뒤 새로고침해야 복구 안내가 결정적으로 뜬다.
+    await expect.poll(() => page.evaluate(
+      () => Object.keys(sessionStorage).some((key) => key.startsWith('chartsdk:editor-draft:')),
+    )).toBe(true);
     await page.reload();
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    const recoveryDialog = page.getByRole('dialog', { name: '복구 가능한 편집 내용이 있습니다' });
+    await expect(recoveryDialog).toBeVisible();
+    await recoveryDialog.getByRole('button', { name: '초안 버리기', exact: true }).click();
+    await expect(recoveryDialog).toHaveCount(0);
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
     await page.evaluate(() => {
       const originalFetch = window.fetch.bind(window);
       window.fetch = (input, init) => {
@@ -136,6 +157,6 @@ test.describe('S2 저장 차트 스냅샷 갱신', () => {
     await action.getByRole('button', { name: '지금 갱신', exact: true }).click();
     await expect(action.getByRole('alert')).toHaveText('테스트 갱신 실패');
     await expect(action.getByRole('status')).toContainText('마지막 계산');
-    await expect(page.locator('[data-testid="chart-preview"] canvas')).toBeVisible();
+    await expect(page.locator('[data-testid="chart-preview"] canvas').first()).toBeVisible();
   });
 });
