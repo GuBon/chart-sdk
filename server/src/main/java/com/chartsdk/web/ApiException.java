@@ -2,12 +2,19 @@ package com.chartsdk.web;
 
 import org.springframework.http.HttpStatus;
 
+import java.util.Map;
+
 public class ApiException extends RuntimeException {
     private final HttpStatus status;
     private final String code;
+    private final Map<String, Object> fields;
 
     public ApiException(HttpStatus status, String code, String message) {
-        this(status, code, message, null);
+        this(status, code, message, null, null);
+    }
+
+    public ApiException(HttpStatus status, String code, String message, Map<String, Object> fields) {
+        this(status, code, message, fields, null);
     }
 
     /**
@@ -16,9 +23,15 @@ public class ApiException extends RuntimeException {
      * 상세)이 클라이언트로 새는 것을 구조적으로 차단한다.
      */
     public ApiException(HttpStatus status, String code, String message, Throwable cause) {
+        this(status, code, message, null, cause);
+    }
+
+    public ApiException(HttpStatus status, String code, String message,
+                        Map<String, Object> fields, Throwable cause) {
         super(message, cause);
         this.status = status;
         this.code = code;
+        this.fields = fields == null ? Map.of() : Map.copyOf(fields);
     }
 
     public HttpStatus status() {
@@ -27,5 +40,9 @@ public class ApiException extends RuntimeException {
 
     public String code() {
         return code;
+    }
+
+    public Map<String, Object> fields() {
+        return fields;
     }
 }

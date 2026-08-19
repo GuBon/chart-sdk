@@ -47,7 +47,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             // wrapper의 throw 지점과 원인 체인을 함께 남긴다. 응답에는 계속 안전한 메시지만 사용한다.
             log.warn("Handled {} ({})", e.code(), e.status(), e);
         }
-        return ResponseEntity.status(e.status()).body(envelope(e.code(), e.getMessage(), null));
+        return ResponseEntity.status(e.status()).body(envelope(e.code(), e.getMessage(), e.fields()));
     }
 
     /** PostgreSQL SQLSTATE — unique_violation. 표준 JDBC 코드라 드라이버 클래스 import 없이 접근한다. */
