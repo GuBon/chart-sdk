@@ -18,6 +18,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("org.springframework.session:spring-session-jdbc")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.apache.commons:commons-math3:3.6.1") // 카이제곱 분위수: 표준편차·분산 95% 추정 구간
@@ -27,6 +30,7 @@ dependencies {
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.0") // prod 프로파일 JSON 로그
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.springframework.security:spring-security-test")
 }
 
 // 단위 테스트(*Test) — DB 불요·결정적. CI·기본 검증 대상.
