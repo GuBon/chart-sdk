@@ -26,12 +26,30 @@ spring:
     validate-on-migrate: true
     clean-disabled: true
     baseline-on-migrate: true
+  session:
+    timeout: 8h
+    jdbc:
+      # 애플리케이션 시작 시 임의 DDL을 실행하지 않는다. 세션 테이블도 Flyway V13이 소유한다.
+      initialize-schema: never
+      table-name: mc_session
   lifecycle:
     timeout-per-shutdown-phase: 20s   # graceful shutdown 시 진행 중 요청 드레인 대기
 
 server:
   port: ${PORT:8080}
+  # 기본은 외부 Forwarded 헤더를 신뢰하지 않는다. 신뢰 프록시가 헤더를 제거·재작성하는
+  # 배포에서만 FORWARD_HEADERS_STRATEGY=framework 로 켠다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
   shutdown: graceful   # SIGTERM 시 진행 중 요청을 마치고 종료(무중단 배포 대비)
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        name: ${SESSION_COOKIE_NAME:chartsdk-session}
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:false}
+        same-site: lax
+        path: /
 
 # 관측성 — Actuator (헬스·메트릭·프로메테우스). ※ 인증 도입 전까지 health show-details 는 내부망 전제.
 management:
@@ -49,6 +67,13 @@ management:
       application: chartsdk-server
 
 chartsdk:
+  cors:
+    admin-origins: ${ADMIN_CORS_ORIGINS:http://localhost:3000,http://localhost:3100,http://localhost:3001}
+  csrf:
+    # 인증 세션과 분리된 double-submit 토큰. JS는 쿠키가 아니라 /auth/csrf 응답의 토큰만 읽는다.
+    cookie:
+      name: ${CSRF_COOKIE_NAME:chartsdk-csrf}
+      secure: ${CSRF_COOKIE_SECURE:false}
   chart:
     require-update-version: ${CHART_REQUIRE_UPDATE_VERSION:false}
   query:
