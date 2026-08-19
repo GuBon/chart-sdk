@@ -64,16 +64,18 @@ class AdminApiIT {
         mvc.perform(get("/api/v1/admin/users").with(user(principal(memberId, "member"))))
                 .andExpect(status().isForbidden());
 
-        // 관리자는 일반 차트 목록에서 소유자 필터로 타인 차트를 본다(항목에 ownerId 포함). 일반 사용자의 필터는 무시된다.
+        // 관리자의 일반 차트 목록은 전체 범위이고 검색어가 소유자 아이디에도 걸린다(항목에 ownerId 포함).
+        // 같은 검색어라도 일반 사용자 세션은 자기 범위라 타인 차트가 나오지 않는다.
+        String memberUsername = jdbc.queryForObject("SELECT username FROM mc_user WHERE id=?", String.class, memberId);
         mvc.perform(get("/api/v1/charts")
-                        .param("ownerId", String.valueOf(memberId))
+                        .param("q", memberUsername)
                         .with(user(principal(adminId, "admin"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.charts.length()").value(1))
                 .andExpect(jsonPath("$.charts[0].id").value(chartId))
                 .andExpect(jsonPath("$.charts[0].ownerId").value(memberId));
         mvc.perform(get("/api/v1/charts")
-                        .param("ownerId", String.valueOf(memberId))
+                        .param("q", memberUsername)
                         .with(user(principal(adminId, "member"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.charts.length()").value(0));

@@ -138,8 +138,6 @@ export interface ChartListParams {
   sort?: ChartSort;
   page?: number;
   pageSize?: number;
-  /** 관리자 전용 소유자 필터. 일반 사용자의 값은 서버가 무시한다. */
-  ownerId?: number;
 }
 
 export interface ChartListResponse {

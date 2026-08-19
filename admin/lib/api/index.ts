@@ -43,7 +43,6 @@ export const chartsApi = {
         sort: params.sort && params.sort !== 'updated_desc' ? params.sort : undefined,
         page: params.page && params.page > 1 ? params.page : undefined,
         pageSize: params.pageSize,
-        ownerId: params.ownerId,
       })}`,
     ).then((res) => normalizeChartList(res, params)),
   get: (id: number) => request<Chart>(`/charts/${id}`),

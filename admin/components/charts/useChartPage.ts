@@ -5,7 +5,7 @@ import { chartsApi } from '@/lib/api';
 import type { ChartListParams, ChartOptions, ChartSummary } from '@/lib/api';
 
 export function useChartPage(params: ChartListParams, onPageResolved?: (page: number) => void) {
-  const { q, type, datasourceId, schema, relation, sort, page = 1, pageSize, ownerId } = params;
+  const { q, type, datasourceId, schema, relation, sort, page = 1, pageSize } = params;
   const [charts, setCharts] = useState<ChartSummary[] | null>(null);
   const [error, setError] = useState(false);
   const [previewOptions, setPreviewOptions] = useState<Record<number, ChartOptions | null>>({});
@@ -22,7 +22,7 @@ export function useChartPage(params: ChartListParams, onPageResolved?: (page: nu
     setCharts(null);
     setError(false);
     setPreviewOptions({});
-    void chartsApi.list({ q, type, datasourceId, schema, relation, sort, page, pageSize, ownerId })
+    void chartsApi.list({ q, type, datasourceId, schema, relation, sort, page, pageSize })
       .then((response) => {
         if (!alive) return;
         setCharts(response.charts);
@@ -40,7 +40,7 @@ export function useChartPage(params: ChartListParams, onPageResolved?: (page: nu
         setTotalPages(1);
       });
     return () => { alive = false; };
-  }, [datasourceId, ownerId, page, pageSize, q, relation, reloadToken, schema, sort, type]);
+  }, [datasourceId, page, pageSize, q, relation, reloadToken, schema, sort, type]);
 
   useEffect(() => {
     if (!charts?.length) {

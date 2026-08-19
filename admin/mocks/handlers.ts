@@ -29,6 +29,11 @@ const mockUser: AuthUser = {
 };
 
 /** 시드·저장 차트의 ownerId 로 소유자를 찾는다. 소유자 정보가 없으면 로그인 사용자 소유로 본다. */
+function matchesOwner(chartId: number, q: string): boolean {
+  const owner = chartOwner(chartId);
+  return owner.username.toLowerCase().includes(q) || owner.displayName.toLowerCase().includes(q) || String(owner.id) === q;
+}
+
 function chartOwner(chartId: number): User {
   const ownerId = chartList.find((chart) => chart.id === chartId)?.ownerId;
   return userList.find((user) => user.id === ownerId) ?? userList[0];
@@ -163,17 +168,16 @@ export const handlers = [
     const q = p.get('q')?.toLowerCase().trim();
     const type = p.get('type');
     const dsId = p.get('datasourceId');
-    const ownerId = p.get('ownerId');
     const schema = p.get('schema');
     const relation = p.get('relation');
     const sort = p.get('sort') ?? 'updated_desc';
     const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '8') || 8));
     const requestedPage = Math.max(1, Number(p.get('page') ?? '1') || 1);
     let list = chartList;
-    if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
+    // 서버 미러: 관리자 전체 목록에서는 검색어가 소유자의 아이디·표시 이름·숫자 id 에도 걸린다.
+    if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false)
+      || (mockUser.role === 'admin' && matchesOwner(c.id, q)));
     if (type) list = list.filter((c) => c.chartType === type);
-    // 서버 미러: 소유자 필터는 관리자에게만 의미가 있다(일반 사용자는 항상 자기 범위). 목 로그인은 관리자다.
-    if (ownerId && mockUser.role === 'admin') list = list.filter((c) => c.ownerId === Number(ownerId));
     if (dsId) list = list.filter((c) => chartUsesDatasource(c.id, c.datasourceId, Number(dsId)));
     if (schema || relation) {
       list = list.filter((c) => chartUsesRelation(c, dsId ? Number(dsId) : null, schema || 'public', relation));

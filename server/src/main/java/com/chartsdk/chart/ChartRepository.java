@@ -34,9 +34,23 @@ public class ChartRepository {
         java.util.ArrayList<Object> params = new java.util.ArrayList<>();
         appendOwnerScope(where, params, ownerId);
         if (query.q() != null && !query.q().isBlank()) {
-            where.append(" AND (name ILIKE ? OR description ILIKE ?)");
-            params.add("%" + query.q() + "%");
-            params.add("%" + query.q() + "%");
+            String term = query.q().trim();
+            String like = "%" + term + "%";
+            where.append(" AND (name ILIKE ? OR description ILIKE ?");
+            params.add(like);
+            params.add(like);
+            if (query.searchOwner()) {
+                // 관리자 전체 목록: 검색어가 소유자의 아이디·표시 이름에도 걸리고, 숫자면 소유자 id 와도 일치시킨다.
+                where.append(" OR EXISTS (SELECT 1 FROM mc_user u WHERE u.id=mc_chart.owner_id"
+                        + " AND (u.username ILIKE ? OR u.display_name ILIKE ?))");
+                params.add(like);
+                params.add(like);
+                if (term.matches("\\d{1,18}")) {
+                    where.append(" OR owner_id=?");
+                    params.add(Long.parseLong(term));
+                }
+            }
+            where.append(")");
         }
         if (query.type() != null && !query.type().isBlank()) {
             where.append(" AND chart_type=?");

@@ -35,9 +35,8 @@ public class ChartController {
                                     @RequestParam(required = false) String relation,
                                     @RequestParam(required = false) String sort,
                                     @RequestParam(required = false) Integer page,
-                                    @RequestParam(required = false) Integer pageSize,
-                                    @RequestParam(required = false) Long ownerId) {
-        return charts.list(new ChartListQuery(q, type, datasourceId, schema, relation, sort, page, pageSize, ownerId));
+                                    @RequestParam(required = false) Integer pageSize) {
+        return charts.list(new ChartListQuery(q, type, datasourceId, schema, relation, sort, page, pageSize));
     }
 
     @GetMapping("/{id}")

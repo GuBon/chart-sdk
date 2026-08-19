@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 
-// 차트 목록 검색 — 현재 목록 범위를 유지하면서 URL ?q 에 반영한다.
-export function SearchBox() {
+// 차트 목록 검색 — 현재 목록 범위를 유지하면서 URL ?q 에 반영한다. 관리자 목록은 같은 검색어가 소유자에도 걸린다.
+export function SearchBox({ placeholder = '차트 검색 (이름·설명)' }: { placeholder?: string } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -21,7 +21,7 @@ export function SearchBox() {
       name="chartSearch"
       icon={<Search className="size-3.5" aria-hidden />}
       wrapperClassName="h-[34px] w-60"
-      placeholder="차트 검색 (이름·설명)"
+      placeholder={placeholder}
       aria-label="차트 검색"
       value={q}
       onChange={(e) => {

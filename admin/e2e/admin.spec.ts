@@ -27,18 +27,20 @@ test('관리자의 차트 목록에는 모든 사용자의 차트가 보이고 �
   await expect(page.getByRole('heading', { name: '부서별 지출' })).toBeVisible();
 });
 
-test('관리자는 차트 목록의 소유자 ID 필터로 좁혀 보고, 읽기 전용 상세는 저장 스냅샷만 그린다', async ({ page }) => {
-  // 관리자 페이지에는 별도 전체 차트 탭이 없다 — 소유자 필터는 일반 목록에 있다.
+test('관리자는 차트 검색으로 소유자도 찾고, 읽기 전용 상세는 저장 스냅샷만 그린다', async ({ page }) => {
+  // 관리자 페이지에는 별도 전체 차트 탭이 없다 — 전체 목록·소유자 검색은 일반 목록이 담당한다.
   await page.goto('/admin/users');
   await expect(page.getByRole('link', { name: '전체 차트' })).toHaveCount(0);
 
   await page.goto('/');
-  const ownerFilter = page.getByRole('textbox', { name: '소유자 ID' });
-  await ownerFilter.fill('8');
-  await ownerFilter.press('Enter');
-  await expect(page).toHaveURL(/ownerId=8/);
+  // 별도 소유자 입력 없이 기존 차트 검색이 소유자 아이디·표시 이름·숫자 id 에도 걸린다.
+  const search = page.getByRole('textbox', { name: '차트 검색' });
+  await expect(search).toHaveAttribute('placeholder', '차트 검색 (이름·설명·소유자)');
+  await search.fill('lee.sh');
   await expect(page.locator('[data-testid="chart-card-name"]')).toHaveCount(1);
   await expect(page.locator('[data-testid="chart-card-name"]')).toHaveText('부서별 지출');
+  await search.fill('8');
+  await expect(page.locator('[data-testid="chart-card-name"]')).toHaveText(['부서별 지출']);
 
   // 읽기 전용 상세: 저장 스냅샷이 있는 차트는 캔버스가 그려지고 편집 버튼은 없다.
   await page.goto('/admin/charts/12');
