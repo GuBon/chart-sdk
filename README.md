@@ -113,11 +113,25 @@ docker compose --profile spatial-test up -d
 DATABASE_URL=jdbc:postgresql://localhost:5433/chartsol
 DATABASE_USER=postgres
 DATABASE_PASSWORD=0218
-CHARTSDK_EMBED_JWT_SECRET=dev-chartsol-embed-secret-change-me
 CHARTSDK_EMBED_KEY_SECRET=dev-chartsol-embed-key-secret-change-me
 NEXT_PUBLIC_API_BASE=http://localhost:8080
 NEXT_PUBLIC_ENABLE_MSW=false
+ADMIN_CORS_ORIGINS=http://localhost:3000,http://localhost:3100,http://localhost:3001
+FORWARD_HEADERS_STRATEGY=none
 ```
+
+Admin 로그인은 JWT를 사용하지 않는다. 서버가 PostgreSQL에 8시간 세션을 저장하고 브라우저에는
+HttpOnly 세션 ID 쿠키만 전달한다. 회원가입은 공개이며 아이디·비밀번호·비밀번호 확인만 받는다.
+최초 관리자는 가입 후 DB 소유자 계정으로 역할을 한 번 승격하고 다시 로그인한다.
+
+```sql
+UPDATE mc_user
+   SET role = 'admin', auth_version = auth_version + 1
+ WHERE username_normalized = '<NFKC + Unicode strip + Locale.ROOT 소문자화한 아이디>';
+```
+
+로그인 전 생성된 `owner_id IS NULL` 차트·데이터소스는 로그인 사용자에게 자동 노출되지 않는다.
+귀속 대상을 정한 뒤 [`docs/legacy_owner_backfill.sql`](docs/legacy_owner_backfill.sql)을 검토해 실행한다.
 
 운영에서는 메타 DB runtime과 Flyway 계정을 분리한다. `chartsdk_app`은 `mc_*` DML만 수행하고,
 `chartsdk_migrator`가 Flyway를 실행한다. Flyway 이력도 동일한 네임스페이스 원칙에 따라
@@ -126,14 +140,25 @@ NEXT_PUBLIC_ENABLE_MSW=false
 ```bash
 DATABASE_USER=chartsdk_app
 DATABASE_PASSWORD=<runtime-secret>
+DATABASE_URL=jdbc:postgresql://db.internal:5432/chartsol
 SPRING_FLYWAY_USER=chartsdk_migrator
 SPRING_FLYWAY_PASSWORD=<migration-secret>
 SPRING_FLYWAY_URL=jdbc:postgresql://db.internal:5432/chartsol
+CHARTSDK_EMBED_KEY_SECRET=<32바이트 이상의 강한 랜덤 값>
+DATASOURCE_ENC_KEY=<32바이트 이상의 강한 랜덤 값>
+DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT=false
+SPRING_PROFILES_ACTIVE=prod
 ```
+
+`prod` 프로필은 로그인 쿠키를 `__Host-chartsdk-session; Secure; HttpOnly; SameSite=Lax; Path=/`로
+고정하고 CSRF 토큰을 별도의 `__Host-chartsdk-csrf` Secure/HttpOnly 쿠키에 저장한다. CSRF 발급은
+DB 로그인 세션을 만들지 않는다. 운영 필수 DB 접속정보·임베드 HMAC 키·데이터소스 암호화 키가 없거나
+저장소의 개발 기본값이면 데이터소스/Flyway가 시작되기 전에 기동을 중단한다. TLS 종단 뒤에서도
+애플리케이션이 HTTPS 요청으로 인식하도록 배포 플랫폼의 forwarded-header 설정을 함께 확인한다.
 
 운영 적용 순서와 평문 datasource 비밀번호 전환은 [`docs/운영_데이터베이스_권한과_비밀번호전환.md`](docs/운영_데이터베이스_권한과_비밀번호전환.md)를 따른다.
 
-S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK는 chartId 없이 `GET /api/v1/charts/data`를 호출하며, Bearer 임베드 키의 서버측 바인딩으로 차트를 결정한다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_KEY_SECRET`을 강한 랜덤 값으로 교체하고 실제 호스트 도메인을 서버 CORS 허용 목록에 등록해야 한다.
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK는 chartId 없이 `GET /api/v1/charts/data`를 호출하며, Bearer 임베드 키의 서버측 바인딩으로 차트를 결정한다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_KEY_SECRET`을 강한 랜덤 값으로 교체해야 한다. 임베드 데이터 API는 쿠키 없이 Bearer `cek1_*`만 사용하는 공개 CORS 경계이고, 쿠키를 쓰는 Admin API는 동일 출처 운영을 기본으로 한다.
 
 ### 임베드 코드를 직접 붙여 확인하기
 

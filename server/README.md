@@ -42,11 +42,15 @@ com.chartsdk
 
 - JDK 21.
 - Gradle Wrapper가 저장소에 포함돼 있다. macOS/Linux는 `./gradlew bootRun`, Windows PowerShell은 `.\gradlew.bat bootRun`을 사용한다.
-- DB 연결: 환경변수 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD` (기본값은 `application.yml` 참조).
+- DB 연결: 개발 기본값은 `application.yml` 참조. `prod`에서는 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD`가 모두 필수다.
 - 운영 Flyway 분리: `SPRING_FLYWAY_URL` · `SPRING_FLYWAY_USER` · `SPRING_FLYWAY_PASSWORD`. 미설정 시 runtime datasource 재사용.
+- 운영 쿠키: `SPRING_PROFILES_ACTIVE=prod`에서 로그인은 `__Host-chartsdk-session`, CSRF는 `__Host-chartsdk-csrf` Secure/HttpOnly/SameSite=Lax를 사용한다. CSRF 토큰 발급은 DB 세션을 만들지 않는다.
+- 로그인 상태: Spring Session JDBC(`mc_session*`), 유휴 만료 8시간, 사용자당 활성 세션 최대 3개.
 - Flyway 이력 테이블: `public.mc_flyway_schema_history`. 기존 `public.flyway_schema_history`는 첫 부팅에서 이력을 보존한 채 자동으로 이름을 변경한다.
 - 레거시 datasource 비밀번호: `DATASOURCE_PASSWORD_MIGRATE_LEGACY_ON_STARTUP=true`로 1회 변환 후
   미암호화 0건을 확인하고 `DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT=false`로 전환한다.
+- 운영 fail-closed: `CHARTSDK_EMBED_KEY_SECRET`·`DATASOURCE_ENC_KEY`는 각각 32바이트 이상이어야 하며,
+  필수 DB 접속정보 누락·개발 기본값·평문 비밀번호 fallback·비보안 쿠키 설정은 컨텍스트 생성 전에 거부한다.
 - 쿼리 timeout 기본값: preview/catalog/explain 10초, chart/sample/federation 30초.
   운영 조정은 `QUERY_TIMEOUT_{PREVIEW|CATALOG|EXPLAIN|CHART|SAMPLE|FEDERATION}_SECONDS`를 사용한다.
 - 부팅 검증: `GET /health` → `{ "status": "ok", "chartTypes": [...] }`. `chartTypes`는 `defaults.json`의 현재 8개 대분류를 반환하므로 배열 순서에 의존하지 않는다.

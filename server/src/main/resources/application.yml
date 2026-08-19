@@ -118,3 +118,32 @@ chartsdk:
       max-entries: ${DATASOURCE_POOL_REGISTRY_MAX:128}
       idle-ttl-seconds: ${DATASOURCE_POOL_IDLE_TTL_SECONDS:1800}
       cleanup-interval-seconds: ${DATASOURCE_POOL_CLEANUP_INTERVAL_SECONDS:60}
+
+---
+# 운영에서는 Secure가 필수인 __Host- 쿠키로 고정한다. Domain을 지정하지 않고 Path=/를 유지해야 한다.
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    # 운영에서는 개발 기본값으로 폴백하지 않는다. 누락 시 placeholder 해석 단계에서 기동 실패한다.
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+server:
+  servlet:
+    session:
+      cookie:
+        name: __Host-chartsdk-session
+        secure: true
+chartsdk:
+  csrf:
+    cookie:
+      name: __Host-chartsdk-csrf
+      secure: true
+  embed:
+    key-secret: ${CHARTSDK_EMBED_KEY_SECRET}
+  datasource:
+    enc-key: ${DATASOURCE_ENC_KEY}
+    password:
+      allow-legacy-plaintext: false
