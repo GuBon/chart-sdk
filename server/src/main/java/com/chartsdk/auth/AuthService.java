@@ -15,7 +15,7 @@ import java.util.Map;
 @Service
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class AuthService {
-    public static final int MIN_PASSWORD_CODE_POINTS = 15;
+    public static final int MIN_PASSWORD_CODE_POINTS = 8;
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwords;

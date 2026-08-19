@@ -134,8 +134,8 @@ export const handlers = [
   }),
   http.post('/api/v1/auth/signup', async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as { username?: string; password?: string; passwordConfirm?: string };
-    if (!body.password || [...body.password].length < 15) {
-      return err(400, 'PASSWORD_TOO_SHORT', '비밀번호는 최소 15자여야 합니다.', { fields: { password: '최소 15자여야 합니다.' } });
+    if (!body.password || [...body.password].length < 8) {
+      return err(400, 'PASSWORD_TOO_SHORT', '비밀번호는 최소 8자여야 합니다.', { fields: { password: '최소 8자여야 합니다.' } });
     }
     if (body.password !== body.passwordConfirm) {
       return err(400, 'PASSWORD_CONFIRMATION_MISMATCH', '비밀번호 확인이 일치하지 않습니다.', { fields: { passwordConfirm: '비밀번호와 같아야 합니다.' } });

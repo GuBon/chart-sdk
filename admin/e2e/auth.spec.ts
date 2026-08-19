@@ -11,7 +11,7 @@ test('회원가입·로그인·보호 경로·로그아웃 흐름', async ({ pag
 
   await page.goto('/signup');
   await page.getByLabel('아이디').fill('new-chart-user');
-  await page.getByLabel(/비밀번호 \(최소 15자\)/).fill('long password for charts');
+  await page.getByLabel(/비밀번호 \(최소 8자\)/).fill('long password for charts');
   await page.getByLabel('비밀번호 확인').fill('long password for charts');
   await page.getByRole('button', { name: '회원가입', exact: true }).click();
   await expect(page).toHaveURL(/\/login\?registered=1$/);

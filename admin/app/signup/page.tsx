@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Input } from '@/components/ui/Input';
 
-const MIN_PASSWORD_LENGTH = 15;
+const MIN_PASSWORD_LENGTH = 8;
 
 export default function SignupPage() {
   const router = useRouter();
