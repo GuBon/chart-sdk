@@ -152,6 +152,32 @@ class ChartServiceTest {
     }
 
     @Test
+    void adminListsAllOwnersButOtherOwnersLiveCardsUseStoredSnapshotsOnly() {
+        // 관리자(42)의 목록: 12 는 본인 차트(manual), 24 는 타인의 live 차트.
+        when(currentUser.currentUserId()).thenReturn(OptionalLong.of(42L));
+        when(currentUser.isAdmin()).thenReturn(true);
+        ChartDefinition mine = charts.previewDefinition(null, 12L);
+        ChartDefinition othersLive = new ChartDefinition(
+                24L, 1L, "SELECT category FROM sales", "bar",
+                Map.of(), Map.of(), "live", 5, null);
+        when(charts.previewDefinitions(null, List.of(12L, 24L)))
+                .thenReturn(Map.of(12L, mine, 24L, othersLive));
+        when(charts.previewDefinitions(42L, List.of(12L, 24L))).thenReturn(Map.of(12L, mine));
+        Map<Long, ChartCacheExpectation> expectations = Map.of(
+                12L, new ChartCacheExpectation(3, null),
+                24L, new ChartCacheExpectation(5, null));
+        when(compute.cachedCompatible(expectations)).thenReturn(Map.of());
+
+        service.list(new ChartListQuery(null, null, null, null, null, null, null, null));
+        service.previews("12,24");
+
+        // 목록은 소유자 조건 없이(전체), 타인의 live 카드는 재계산 대신 저장 스냅샷만 조회한다.
+        verify(charts).list(isNull(), any());
+        verify(compute).cachedCompatible(expectations);
+        verify(compute, never()).serve(anyLong(), any(), anyInt(), any());
+    }
+
+    @Test
     void refreshChecksOwnerScopeBeforeRecomputing() {
         when(currentUser.currentUserId()).thenReturn(OptionalLong.of(42L));
         when(charts.previewDefinition(42L, 12L)).thenThrow(

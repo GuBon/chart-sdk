@@ -18,6 +18,7 @@ import { DuplicateChartModal } from './DuplicateChartModal';
 import { EmbedModal } from './EmbedModal';
 import { useChartPage } from './useChartPage';
 import { SearchBox } from '@/components/layout/SearchBox';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 const PAGE_SIZE = 8;
 
@@ -52,6 +53,10 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
   const [toEmbed, setToEmbed] = useState<ChartSummary | null>(null);
   const [toDuplicate, setToDuplicate] = useState<ChartSummary | null>(null);
   const { notice: duplicateNotice, show: showDuplicateNotice } = useToast(3000);
+  const auth = useAuth();
+  // 관리자 목록에는 모든 사용자의 차트가 오지만 편집·임베드·삭제는 소유자만 한다. 타인(또는 소유자 없는 레거시)
+  // 차트는 읽기 전용 카드로 그려 관리자 상세 화면으로 연다.
+  const isReadOnly = (chart: ChartSummary) => auth.user?.role === 'admin' && chart.ownerId !== auth.user.id;
 
   useEffect(() => {
     pendingParamsRef.current = paramsString;
@@ -173,7 +178,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] items-start gap-4">
           {charts?.map((chart) => (
-            <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} onEmbed={setToEmbed} onDelete={setToDelete} onDuplicate={setToDuplicate} />
+            <ChartCard key={chart.id} chart={chart} previewOption={previewOptions[chart.id]} readOnly={isReadOnly(chart)} onEmbed={setToEmbed} onDelete={setToDelete} onDuplicate={setToDuplicate} />
           ))}
           {!hasFilter && page === 1 && (
             <Link

@@ -28,8 +28,10 @@ const mockUser: AuthUser = {
   role: 'admin',
 };
 
+/** 시드·저장 차트의 ownerId 로 소유자를 찾는다. 소유자 정보가 없으면 로그인 사용자 소유로 본다. */
 function chartOwner(chartId: number): User {
-  return userList[Math.abs(chartId) % userList.length] ?? userList[0];
+  const ownerId = chartList.find((chart) => chart.id === chartId)?.ownerId;
+  return userList.find((user) => user.id === ownerId) ?? userList[0];
 }
 
 let adminUserList: AdminUserSummary[] = userList.map((user, index) => ({
@@ -340,6 +342,7 @@ export const handlers = [
       chartType: body.chartType as ChartType,
       datasourceId,
       mainTable,
+      ownerId: mockUser.id,
       authorName: seedUsers[0]?.displayName ?? null,
       updatedAt: now,
     }, ...chartList];

@@ -89,8 +89,9 @@ public class ChartService {
         this.datasources = datasources;
     }
 
+    /** 목록은 관리자에게 전체 사용자 범위로 열린다(읽기 전용 카드). 그 외 조회·변경은 계속 소유자 범위다. */
     public Map<String, Object> list(ChartListQuery query) {
-        return charts.list(ownerId(), query);
+        return charts.list(currentUser.isAdmin() ? null : ownerId(), query);
     }
 
     public Map<String, Object> get(long id) {
@@ -107,13 +108,18 @@ public class ChartService {
         Map<String, Object> previews = new LinkedHashMap<>();
         Map<String, Object> errors = new LinkedHashMap<>();
         List<Long> requested = parseIds(ids).stream().limit(MAX_PREVIEW_CARDS).toList();
-        Map<Long, ChartDefinition> definitions = charts.previewDefinitions(ownerId(), requested);
+        Long ownerId = ownerId();
+        boolean adminScope = currentUser.isAdmin();
+        Map<Long, ChartDefinition> definitions = charts.previewDefinitions(adminScope ? null : ownerId, requested);
+        // 관리자 목록의 타인 차트는 저장 스냅샷만 그린다 — 열람이 다른 사용자의 데이터소스 재계산을 일으키지 않는다.
+        java.util.Set<Long> ownedIds = adminScope && ownerId != null
+                ? charts.previewDefinitions(ownerId, requested).keySet() : definitions.keySet();
         // live 카드는 재계산 결과만 쓰고 실패 시 에러 카드가 되므로(스냅샷 폴백 없음 — 목록이 장애를
         // 숨기지 않는다) 대형 JSONB 스냅샷을 배치 조회에서 아예 읽지 않는다. 목록 1회 요청의 live 재계산
         // 수는 목록 UI 페이지 크기(8)가 자연 상한이다 — 별도 상한을 두지 않는다(이력 N19.1 재평가).
         Map<Long, ChartCacheExpectation> expectations = new LinkedHashMap<>();
         definitions.forEach((id, chart) -> {
-            if (!"live".equals(chart.refreshMode())) {
+            if (!"live".equals(chart.refreshMode()) || !ownedIds.contains(id)) {
                 expectations.put(id, new ChartCacheExpectation(chart.version(), chart.sampling()));
             }
         });
@@ -126,7 +132,7 @@ public class ChartService {
                     errors.put(String.valueOf(id), "Chart not found.");
                     continue;
                 }
-                CachedChartRows rows = "live".equals(chart.refreshMode())
+                CachedChartRows rows = "live".equals(chart.refreshMode()) && ownedIds.contains(id)
                         ? compute.serve(chart.id(), chart.refreshMode(), chart.version(), chart.sampling())
                         : cached.get(id);
                 if (rows == null) {

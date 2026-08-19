@@ -85,7 +85,7 @@ public class ChartRepository {
         int safePage = query.resolvedPage(totalPages);
 
         StringBuilder sql = new StringBuilder("""
-                SELECT id, name, description, chart_type, datasource_id, builder_config::text, updated_at,
+                SELECT id, owner_id, name, description, chart_type, datasource_id, builder_config::text, updated_at,
                        (SELECT ds.name
                           FROM mc_datasource ds
                          WHERE ds.id=COALESCE(NULLIF(mc_chart.builder_config->'table'->>'datasourceId', '')::bigint,
@@ -327,6 +327,7 @@ public class ChartRepository {
         String fallbackDatasourceName = rs.getString("datasource_name");
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", rs.getLong("id"));
+        m.put("ownerId", rs.getObject("owner_id", Long.class));
         m.put("name", rs.getString("name"));
         m.put("description", rs.getString("description"));
         m.put("chartType", rs.getString("chart_type"));

@@ -10,6 +10,8 @@ const AUTHOR_NAMES = ['김건영', '이서현', '박지원'] as const;
 
 /** live 갱신 모드 시드 차트('월별 순이익'). e2e s2-refresh가 이 id로 진입해 live UI 계약을 검증한다. */
 export const LIVE_REFRESH_CHART_ID = 24;
+/** 목 로그인 사용자(kim.gy, id 7)가 아닌 이서현(id 8) 소유 시드 차트. 관리자 목록의 읽기 전용 카드 계약을 검증한다. */
+export const OTHER_OWNER_CHART_ID = 19;
 
 export const charts: ChartSummary[] = ([
   // 최신 5개(6월) — updated_desc 기본 정렬에서 1페이지 앞자리. s1/s3 기존 테스트의 "첫 카드=월별 매출" 전제 보존.
@@ -29,7 +31,7 @@ export const charts: ChartSummary[] = ([
   { id: 22, name: '요일별 주문', description: '요일별 주문 수', chartType: 'bar', datasourceId: 1, updatedAt: '2026-05-13T09:00:00Z' },
   { id: 23, name: '상품별 재고', description: '상품별 재고량', chartType: 'bar', datasourceId: 2, updatedAt: '2026-05-10T09:00:00Z' },
   { id: 24, name: '월별 순이익', description: '월별 순이익 추이', chartType: 'line', datasourceId: 1, updatedAt: '2026-05-05T09:00:00Z' },
-] satisfies Array<Omit<ChartSummary, 'mainTable' | 'authorName'>>).map((chart) => ({
+] satisfies Array<Omit<ChartSummary, 'mainTable' | 'authorName' | 'ownerId'>>).map((chart) => ({
   ...chart,
   mainTable: {
     datasourceId: chart.datasourceId,
@@ -37,6 +39,7 @@ export const charts: ChartSummary[] = ([
     schema: 'public',
     name: 'sales',
   },
+  ownerId: chart.id === OTHER_OWNER_CHART_ID ? 8 : 7,
   authorName: chart.id === 15 ? null : AUTHOR_NAMES[chart.id % AUTHOR_NAMES.length],
 }));
 

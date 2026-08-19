@@ -18,12 +18,15 @@ function formatDate(iso: string) {
 export function ChartCard({
   chart,
   previewOption,
+  readOnly = false,
   onEmbed,
   onDelete,
   onDuplicate,
 }: {
   chart: ChartSummary;
   previewOption?: ChartOptions | null;
+  /** 관리자 목록의 타인 차트 — 편집·임베드·복제·삭제 대신 읽기 전용 상세(/admin/charts/{id})로 연다. */
+  readOnly?: boolean;
   onEmbed: (c: ChartSummary) => void;
   onDelete: (c: ChartSummary) => void;
   onDuplicate: (c: ChartSummary) => void;
@@ -41,24 +44,26 @@ export function ChartCard({
       </div>
       {/* 가끔 쓰는 부차 액션(복제·삭제)은 hover 코너에 묶는다. 복제는 중립색, 삭제는 danger.
           group-focus-within: 마우스 hover 없이 키보드로 카드에 진입해도 도달·조작할 수 있게 노출한다(접근성). */}
-      <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex group-focus-within:flex">
-        <button
-          type="button"
-          aria-label={`${chart.name} 복제`}
-          onClick={() => onDuplicate(chart)}
-          className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-text-primary"
-        >
-          <Copy className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          aria-label={`${chart.name} 삭제`}
-          onClick={() => onDelete(chart)}
-          className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-danger"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex group-focus-within:flex">
+          <button
+            type="button"
+            aria-label={`${chart.name} 복제`}
+            onClick={() => onDuplicate(chart)}
+            className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-text-primary"
+          >
+            <Copy className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={`${chart.name} 삭제`}
+            onClick={() => onDelete(chart)}
+            className="rounded-md bg-bg-panel/90 p-1.5 text-text-secondary shadow-sm hover:text-danger"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       <div className="flex h-[70px] shrink-0 flex-col gap-1.5 px-3.5 py-2">
         <div className="flex items-center gap-2">
@@ -68,16 +73,29 @@ export function ChartCard({
             {label}
           </span>
         </div>
-        <div className="flex gap-2">
-          <Link href={chartEditPath(chart.id, chart.mainTable)} className="flex-1">
-            <Button variant="secondary" size="sm" className="h-7 w-full">
-              편집
+        {readOnly ? (
+          <div className="flex items-center gap-2">
+            <Link href={`/admin/charts/${chart.id}`} className="flex-1">
+              <Button variant="secondary" size="sm" className="h-7 w-full">
+                열기
+              </Button>
+            </Link>
+            <span className="flex-1 truncate text-xs text-text-tertiary" title={chart.authorName ?? undefined}>
+              {chart.authorName?.trim() ? `${chart.authorName} · 읽기 전용` : '읽기 전용'}
+            </span>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <Link href={chartEditPath(chart.id, chart.mainTable)} className="flex-1">
+              <Button variant="secondary" size="sm" className="h-7 w-full">
+                편집
+              </Button>
+            </Link>
+            <Button variant="secondary" size="sm" className="h-7 flex-1 bg-muted" onClick={() => onEmbed(chart)}>
+              임베드
             </Button>
-          </Link>
-          <Button variant="secondary" size="sm" className="h-7 flex-1 bg-muted" onClick={() => onEmbed(chart)}>
-            임베드
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
 
       {expanded && (

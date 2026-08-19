@@ -120,6 +120,8 @@ export interface ChartSummary {
   datasourceId: number;
   /** builderConfig.table에서 추출한 메인 관계. 정식 편집 URL과 관계별 차트 목록에 사용한다. */
   mainTable: ChartMainTable;
+  /** 소유자 사용자 id. owner가 없는 레거시 차트는 null. 관리자 목록에서 내 차트/타인 차트(읽기 전용) 구분에 쓴다. */
+  ownerId: number | null;
   /** owner가 없는 레거시 차트는 null. */
   authorName: string | null;
   updatedAt: string;
