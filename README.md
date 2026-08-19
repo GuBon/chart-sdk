@@ -1,7 +1,40 @@
 # chartsdk — 임베드 차트 솔루션
 
 웹페이지에 `<div>` 한 줄 + 스크립트로 차트를 렌더하는 임베드 차트 솔루션.
-문서의 전체 목록과 영역별 권위는 [`문서 안내`](docs/문서안내.md)를 참조한다. 상세 사건 원문은 [`개발 문제해결 이력`](docs/개발_문제해결_이력.md), 반복 원인·개선·남은 위험은 [`품질개선 종합분석`](docs/품질개선_종합분석.md)에서 확인한다.
+
+> `docs/` 안의 화면설계서·인터페이스 계약서 등 `.md`/`.html` 설계 문서는 작성자 개인 작업 기록이라 저장소에 올리지 않는다(로컬 전용, `.gitignore` 처리). Flyway 마이그레이션(`docs/V*.sql`, `docs/afterMigrate__*.sql`)은 빌드가 실제로 읽으므로 계속 코드와 함께 추적한다.
+
+## 빠른 시작
+
+```bash
+# 0) 필요 도구: Docker, Node >= 22, JDK 21
+git clone <이 저장소> && cd chartsdk
+
+# 1) DB — 로컬 PostgreSQL과 충돌하지 않도록 5433에 컨테이너로 띄운다
+docker compose up -d
+# chartsol(메타 DB)의 기본 테이블(mc_user 등)은 이 시점에 이미 만들어져 있다.
+
+# 2) 프론트 의존성 + 옵션 SSOT 산출물
+npm install
+npm run gen:defaults
+
+# 3) 서버 기동 — 최초 부팅 시 Flyway가 남은 마이그레이션(V2~V17)을 자동 적용한다.
+#    수동으로 SQL을 실행할 필요는 없다. 접속 정보 기본값이 위 docker-compose 설정과 이미 일치하므로
+#    별도 .env 설정 없이 바로 뜬다. Windows PowerShell은 .\gradlew.bat 사용.
+cd server && ./gradlew bootRun
+# 부팅 확인: GET http://localhost:8080/health → {"status":"ok", ...}
+
+# 4) 관리 콘솔(새 터미널) — 기본은 MSW 목 데이터로 뜬다. 방금 띄운 실제 서버(DB)에 붙이려면
+#    admin/.env.local 을 만든다.
+cat > admin/.env.local <<'EOF'
+NEXT_PUBLIC_API_BASE=http://localhost:8080
+NEXT_PUBLIC_ENABLE_MSW=false
+EOF
+npm run dev   # http://localhost:3000
+```
+
+가입은 `/signup`에서 아이디·비밀번호만으로 공개적으로 할 수 있다. 최초 관리자를 만드는 절차는 [아래](#docker-postgresql)를 참조한다.
+`admin/.env.local`을 만들지 않으면 Next.js가 기본값(`NEXT_PUBLIC_ENABLE_MSW`가 `false`가 아니고 `NEXT_PUBLIC_API_BASE`가 없으면 목 모드)으로 MSW 목 백엔드를 띄운다 — 실제 DB 없이 화면만 빠르게 볼 때 유용하다.
 
 ## 모노레포 구조
 
@@ -19,14 +52,14 @@
 - server는 `mc_` 접두사 테이블만 소유한다(Type B 안전 요건).
 - 노코드 빌더의 `agg:"none"`은 모든 그래프에서 원본값 튜플을 그리는 모드다. 서버는 GROUP BY 없는 SQL을 만들고, 프론트는 no-code UI에서 이를 선택할 수 있어야 한다.
 - builder 저장 시 최종 SQL은 서버가 `builderConfig`에서 재생성한다. 클라이언트가 보낸 `sqlQuery`는 표시/상태 값일 뿐 신뢰 경계가 아니다.
-- 구현 책임과 공통화 기준은 [`docs/코드구조_안내.md`](docs/코드구조_안내.md)를 따른다. 파일 길이만으로 나누지 않고 변경 이유와 재사용 경계를 기준으로 분리한다.
+- 구현 책임과 공통화 기준: 파일 길이만으로 나누지 않고 변경 이유와 재사용 경계를 기준으로 분리한다.
 
 ## 현재 구현 상태
 
 - 백엔드는 `web` 컨트롤러, `chart` 서비스/저장소, `query` SQL 생성/실행, `converter` 옵션 변환으로 분리되어 있다.
 - 공통 에러 envelope은 `ApiExceptionHandler`, 차트별 `cek1_*` 검증은 `EmbedKeyInterceptor`, 현재 사용자 스코프는 `CurrentUserProvider` 경로로 처리한다.
-- 검증 기준은 [`docs/제품요구사항.md`](docs/제품요구사항.md), [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md), [`docs/노코드_질의생성_규칙.md`](docs/노코드_질의생성_규칙.md), [`docs/화면설계서.md`](docs/화면설계서.md)의 최신 문서 버전을 따른다.
-- 100개 독립 데이터소스·대용량 point 운영 경계와 배포 절차는 [`docs/대용량_운영_설계.md`](docs/대용량_운영_설계.md), 15/30/100 실행법은 [`load-tests/README.md`](load-tests/README.md)를 따른다.
+- 검증 기준(제품요구사항·인터페이스 계약·노코드 질의생성 규칙·화면설계)은 개인 설계 문서(로컬)를 따른다.
+- 100개 독립 데이터소스·대용량 point 운영 경계와 배포 절차도 개인 설계 문서(로컬)를 따른다. 15/30/100 부하 실행법은 [`load-tests/README.md`](load-tests/README.md)를 참조한다.
 
 ## 개발
 
@@ -68,7 +101,7 @@ npm run test:e2e:real         # Admin→Spring→PostGIS→임베드 키→SDK �
 cd server && ./gradlew integrationTest   # 서버 통합(실 DB 필요)
 ```
 
-계층·수치·라이브 스위프 절차는 [`docs/테스트_전략.md`](docs/테스트_전략.md)가 단일 관리한다.
+계층·수치·라이브 스위프 절차는 개인 테스트 전략 문서(로컬)가 단일 관리한다. 현재 정의된 테스트 수는 위 명령을 직접 실행해 확인한다.
 
 ## 서드파티 고지
 
@@ -90,7 +123,9 @@ docker compose up -d
 | `chartsol` | `mc_` 메타 테이블, 사용자/세션/차트/임베드 키/데이터소스 저장 |
 | `chartsol_user` | 노코드 빌더가 조회할 샘플 업무 데이터 |
 
-서버 로컬 실행 기본값은 Docker DB 기준이다.
+컨테이너 생성 시 실행되는 초기화 SQL(`docker/postgres/init/*`, `docs/V1__init.sql`)은 `chartsol`의 **기본 스키마**만 만든다. 나머지 마이그레이션(V2~V17 — 인증·세션·소유권·관리자 감사 로그 등)은 수동 실행할 필요가 없다. `chartsdk-server`가 처음 뜰 때 Flyway가 `docs/V*.sql`을 버전 순서대로 자동 적용하고, 이후 부팅부터는 이미 적용된 버전을 건너뛴다. 스키마가 꼬였다고 의심되면 `docker compose down -v`로 볼륨을 지우고 `docker compose up -d`부터 다시 시작한다(로컬 데이터는 사라진다).
+
+서버 로컬 실행 기본값(`application.yml`)이 이미 위 Docker 접속 정보(`localhost:5433`, `postgres`/`0218`)와 일치하므로, 아래 env 블록은 **로컬 개발에는 설정할 필요가 없다** — 운영 배포 시 실제 값으로 교체해서 쓰는 참고용이다. `.env`를 자동으로 읽어들이는 로더는 없으므로(Java·Gradle 어느 쪽도 dotenv 플러그인을 쓰지 않는다), 운영에서는 배포 플랫폼의 환경변수로 직접 주입한다.
 
 ### PostGIS 공간 차트 데모 데이터
 
@@ -156,9 +191,19 @@ DB 로그인 세션을 만들지 않는다. 운영 필수 DB 접속정보·임�
 저장소의 개발 기본값이면 데이터소스/Flyway가 시작되기 전에 기동을 중단한다. TLS 종단 뒤에서도
 애플리케이션이 HTTPS 요청으로 인식하도록 배포 플랫폼의 forwarded-header 설정을 함께 확인한다.
 
-운영 적용 순서와 평문 datasource 비밀번호 전환은 [`docs/운영_데이터베이스_권한과_비밀번호전환.md`](docs/운영_데이터베이스_권한과_비밀번호전환.md)를 따른다.
+### 운영 DB 권한 분리 적용 순서
 
-S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK는 chartId 없이 `GET /api/v1/charts/data`를 호출하며, Bearer 임베드 키의 서버측 바인딩으로 차트를 결정한다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 상세 계약은 [`docs/인터페이스_계약서.md`](docs/인터페이스_계약서.md)를 따른다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_KEY_SECRET`을 강한 랜덤 값으로 교체해야 한다. 임베드 데이터 API는 쿠키 없이 Bearer `cek1_*`만 사용하는 공개 CORS 경계이고, 쿠키를 쓰는 Admin API는 동일 출처 운영을 기본으로 한다.
+Role 부트스트랩 SQL은 [`ops/postgres/`](ops/postgres)에 있다(비밀번호는 SQL에 넣지 않고 배포 플랫폼 secret으로 설정).
+
+1. `ops/postgres/01-create-roles.sql` 실행 — `chartsdk_migrator`(Flyway·DDL), `chartsdk_app`(런타임 DML) role 생성
+2. 두 계정 비밀번호를 secret manager에 설정
+3. 위 `SPRING_FLYWAY_*`/`DATABASE_*` 분리 값으로 배포해 최신 Flyway 버전이 적용됐는지 확인
+4. `ops/postgres/02-chartsol-runtime-grants.sql` 실행 — `mc_*`에만 런타임 권한 부여, Flyway 이력 테이블 권한은 회수
+5. 제한된 role로 smoke/E2E를 돌려 확인한 뒤, 애플리케이션 환경에서 `postgres` 슈퍼유저 자격증명을 제거
+
+고객 데이터소스의 평문 비밀번호를 암호화로 전환할 때는 무중단 순서를 따른다: 먼저 `DATASOURCE_PASSWORD_ALLOW_LEGACY_PLAINTEXT=true`·`DATASOURCE_PASSWORD_MIGRATE_LEGACY_ON_STARTUP=true`로 배포해 기존 값을 자동 변환하고, `SELECT count(*) FROM mc_datasource WHERE db_password_enc NOT LIKE 'v1:%'`가 0임을 확인한 뒤 두 플래그를 `false`로 되돌린다.
+
+S3 모달이 주는 `<div> + <script>`를 호스트 HTML에 그대로 붙이면 된다. Admin의 dev/build가 SDK 번들과 선택형 웹폰트를 `/sdk.js`, `/fonts/{assetVersion}/`로 자동 배포하고, 스니펫의 `data-api-base`가 SDK에 `NEXT_PUBLIC_API_BASE`를 전달한다. SDK는 chartId 없이 `GET /api/v1/charts/data`를 호출하며, Bearer 임베드 키의 서버측 바인딩으로 차트를 결정한다. API 응답은 브라우저에 저장하지 않고 PostgreSQL 결과 캐시를 단일 진실원으로 사용한다. 운영 배포에서는 `sdk.js`와 `fonts/`를 같은 디렉터리 계층에 함께 배포하고, 다른 출처의 페이지가 임베드한다면 폰트 응답의 CORS와 호스트 CSP `font-src`에 SDK 출처를 허용해야 한다. 버전형 폰트는 1년 `immutable`, 고정 파일명 `sdk.js`는 매 배포 재검증한다. 또한 `CHARTSDK_EMBED_KEY_SECRET`을 강한 랜덤 값으로 교체해야 한다. 임베드 데이터 API는 쿠키 없이 Bearer `cek1_*`만 사용하는 공개 CORS 경계이고, 쿠키를 쓰는 Admin API는 동일 출처 운영을 기본으로 한다.
 
 ### 임베드 코드를 직접 붙여 확인하기
 

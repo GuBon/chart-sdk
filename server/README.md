@@ -34,7 +34,7 @@ com.chartsdk
 
 | 입력 | 원본 | 리소스 | 용도 |
 |---|---|---|---|
-| 스키마 DDL | `../docs/V1__init.sql` | `db/migration/V1__init.sql` | Flyway 마이그레이션 |
+| 스키마 DDL | `../docs/V*__*.sql`, `../docs/afterMigrate__*.sql` | `db/migration/` | Flyway 마이그레이션(전부 복사 — `verifyFlywayResources`가 목록·바이트 일치를 검증) |
 | 옵션 기본값 | `../chart-options/defaults.json` | `chart-defaults.json` | 변환기 `withDefaults` |
 
 > 옵션 기본값은 먼저 루트에서 `npm run gen:defaults` 로 생성해야 한다.
@@ -43,7 +43,7 @@ com.chartsdk
 
 - JDK 21.
 - Gradle Wrapper가 저장소에 포함돼 있다. macOS/Linux는 `./gradlew bootRun`, Windows PowerShell은 `.\gradlew.bat bootRun`을 사용한다.
-- DB 연결: 개발 기본값은 `application.yml` 참조. `prod`에서는 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD`가 모두 필수다.
+- DB 연결: 개발 기본값(`localhost:5433/chartsol`, `postgres`/`0218`)은 `application.yml` 참조. 저장소 루트에서 `docker compose up -d`로 먼저 띄워야 한다 — 기본 스키마는 컨테이너 초기화 SQL이 만들고, 나머지 Flyway 마이그레이션은 이 서버가 처음 뜰 때 자동 적용된다. `prod`에서는 `DATABASE_URL` · `DATABASE_USER` · `DATABASE_PASSWORD`가 모두 필수다.
 - 운영 Flyway 분리: `SPRING_FLYWAY_URL` · `SPRING_FLYWAY_USER` · `SPRING_FLYWAY_PASSWORD`. 미설정 시 runtime datasource 재사용.
 - 운영 쿠키: `SPRING_PROFILES_ACTIVE=prod`에서 로그인은 `__Host-chartsdk-session`, CSRF는 `__Host-chartsdk-csrf` Secure/HttpOnly/SameSite=Lax를 사용한다. CSRF 토큰 발급은 DB 세션을 만들지 않는다.
 - 로그인 상태: Spring Session JDBC(`mc_session*`), 유휴 만료 8시간, 사용자당 활성 세션 최대 3개.
