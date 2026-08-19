@@ -41,6 +41,16 @@ interface RequestInitJson extends Omit<RequestInit, 'body'> {
 const inFlightGets = new Map<string, Promise<unknown>>();
 let csrfPromise: Promise<{ headerName: string; token: string }> | null = null;
 
+// 세션 세대 — 로그인·로그아웃이 성공할 때마다 1 증가한다. 그 전에 시작된 요청은 이전 세션의 결과이므로
+// (1) 그 401 은 현재 세션을 무효화하지 않고 (2) 진행 중 GET 공유도 세대가 다르면 재사용하지 않는다.
+// 초기 /auth/me 가 느리게 401 로 끝나는 사이 로그인이 완료되면 방금 로그인한 상태를 뒤집던 경쟁을 막는다.
+let authGeneration = 0;
+
+/** 현재 세션 세대. 호출 측은 비동기 대기 전후 값을 비교해 이전 세션의 결과를 버린다. */
+export function currentAuthGeneration(): number {
+  return authGeneration;
+}
+
 export function clearCsrfToken() {
   csrfPromise = null;
 }
@@ -49,7 +59,7 @@ export function request<T>(path: string, init: RequestInitJson = {}): Promise<T>
   const method = (init.method ?? 'GET').toUpperCase();
   if (method !== 'GET' || init.body !== undefined) return execute<T>(path, init);
 
-  const key = `${BASE}${path}`;
+  const key = `${authGeneration}:${BASE}${path}`;
   const existing = inFlightGets.get(key);
   if (existing) return existing as Promise<T>;
 
@@ -63,6 +73,7 @@ export function request<T>(path: string, init: RequestInitJson = {}): Promise<T>
 }
 
 async function execute<T>(path: string, init: RequestInitJson, retryCsrf = true): Promise<T> {
+  const startedGeneration = authGeneration;
   const { body, headers, ...rest } = init;
   const method = (rest.method ?? 'GET').toUpperCase();
   const requestHeaders = new Headers(headers);
@@ -109,13 +120,18 @@ async function execute<T>(path: string, init: RequestInitJson, retryCsrf = true)
       // CSRF 검증 실패 시 controller mutation은 실행되지 않았으므로 새 토큰으로 한 번만 재시도한다.
       if (retryCsrf) return execute<T>(path, init, false);
     }
-    if (res.status === 401 && path !== '/auth/login' && typeof window !== 'undefined') {
+    // 이전 세대에 시작된 요청의 401 은 그 세션이 끝났다는 뜻일 뿐, 지금 세션의 무효화가 아니다.
+    if (res.status === 401 && path !== '/auth/login' && startedGeneration === authGeneration
+      && typeof window !== 'undefined') {
       window.dispatchEvent(new Event(AUTH_INVALID_EVENT));
     }
     throw new ApiError(code, message, res.status, fields, requestId);
   }
 
-  if (path === '/auth/login' || path === '/auth/logout') clearCsrfToken();
+  if (path === '/auth/login' || path === '/auth/logout') {
+    authGeneration += 1;
+    clearCsrfToken();
+  }
   if (res.status === 204 || res.status === 205 || responseText.trim() === '') return undefined as T;
   return JSON.parse(responseText) as T;
 }

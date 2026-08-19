@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
 import { BarChart3 } from 'lucide-react';
 import { apiErrorMessage } from '@/lib/api';
 import { safeLoginNext } from '@/lib/authRedirect';
@@ -14,15 +13,18 @@ import { Input } from '@/components/ui/Input';
 
 export default function LoginPage() {
   const auth = useAuth();
-  const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 이미 로그인된 방문이든 방금 로그인했든 이동 경로는 하나다 — 안전한 `next` 로 전체 로드해
+  // 이전 세션에서 만들어진 클라이언트 상태를 버린다. (submit 과 effect 가 서로 다른 곳으로 경쟁하지 않는다.)
   useEffect(() => {
-    if (auth.status === 'authenticated') router.replace('/');
-  }, [auth.status, router]);
+    if (auth.status !== 'authenticated') return;
+    const candidate = new URLSearchParams(window.location.search).get('next');
+    window.location.replace(safeLoginNext(candidate, window.location.origin));
+  }, [auth.status]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -31,9 +33,6 @@ export default function LoginPage() {
     setError(null);
     try {
       await auth.login({ username, password });
-      const candidate = new URLSearchParams(window.location.search).get('next');
-      const next = safeLoginNext(candidate, window.location.origin);
-      window.location.replace(next);
     } catch (cause) {
       setError(apiErrorMessage(cause, '로그인에 실패했습니다.'));
     } finally {

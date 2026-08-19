@@ -1,5 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_INVALID_EVENT, ApiError, apiErrorMessage, apiFieldError, clearCsrfToken, request } from './client';
+import {
+  AUTH_INVALID_EVENT, ApiError, apiErrorMessage, apiFieldError, clearCsrfToken, currentAuthGeneration, request,
+} from './client';
+
+const csrfResponse = () => ({
+  ok: true, status: 200, text: async () => JSON.stringify({ headerName: 'X-CSRF-TOKEN', token: 't' }),
+});
+const unauthorizedResponse = () => ({
+  ok: false, status: 401, text: async () => JSON.stringify({ error: { code: 'AUTH_REQUIRED', message: '로그인 필요' } }),
+});
+/** 호출 측이 resolve 시점을 쥐는 fetch 응답. */
+function deferredResponse<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
 
 describe('Admin API client cache policy', () => {
   afterEach(() => {
@@ -69,6 +84,48 @@ describe('Admin API client cache policy', () => {
     await expect(request('/charts')).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
     expect(listener).toHaveBeenCalledOnce();
     window.removeEventListener(AUTH_INVALID_EVENT, listener);
+  });
+
+  it('로그인 전에 시작된 /auth/me 의 401 은 로그인 뒤 도착해도 세션을 무효화하지 않는다', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    const listener = vi.fn();
+    window.addEventListener(AUTH_INVALID_EVENT, listener);
+    const slowMe = deferredResponse<ReturnType<typeof unauthorizedResponse>>();
+    const fetchMock = vi.fn()
+      .mockReturnValueOnce(slowMe.promise)                                   // 부팅 시 /auth/me (느림)
+      .mockResolvedValueOnce(csrfResponse())                                 // 로그인 전 CSRF
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ id: 1 }) }); // /auth/login
+    vi.stubGlobal('fetch', fetchMock);
+
+    const generationBefore = currentAuthGeneration();
+    const me = request('/auth/me');
+    await request('/auth/login', { method: 'POST', body: { username: 'u', password: 'p' } });
+    expect(currentAuthGeneration()).toBe(generationBefore + 1);
+
+    slowMe.resolve(unauthorizedResponse());
+    await expect(me).rejects.toMatchObject({ status: 401 });
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener(AUTH_INVALID_EVENT, listener);
+  });
+
+  it('로그인 뒤의 GET 은 이전 세대에서 진행 중이던 같은 경로 요청을 공유하지 않는다', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    const slowMe = deferredResponse<ReturnType<typeof unauthorizedResponse>>();
+    const fetchMock = vi.fn()
+      .mockReturnValueOnce(slowMe.promise)
+      .mockResolvedValueOnce(csrfResponse())
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ id: 1 }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ id: 1, username: 'u' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const staleMe = request('/auth/me');
+    await request('/auth/login', { method: 'POST', body: { username: 'u', password: 'p' } });
+    const freshMe = request<{ username: string }>('/auth/me');
+    expect(freshMe).not.toBe(staleMe);
+    await expect(freshMe).resolves.toEqual({ id: 1, username: 'u' });
+    slowMe.resolve(unauthorizedResponse());
+    await expect(staleMe).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });
 

@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ApiError, authApi } from '@/lib/api';
-import { AUTH_INVALID_EVENT } from '@/lib/api/client';
+import { AUTH_INVALID_EVENT, currentAuthGeneration } from '@/lib/api/client';
 import type { AuthUser } from '@/lib/api';
 
 type AuthState =
@@ -23,10 +23,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: 'loading', user: null });
 
   const refresh = useCallback(async () => {
+    // 대기 중 로그인·로그아웃이 끝나면(세대 변경) 이 조회는 이전 세션의 답이므로 상태에 반영하지 않는다.
+    const generation = currentAuthGeneration();
     setState({ status: 'loading', user: null });
     try {
-      setState({ status: 'authenticated', user: await authApi.me() });
+      const user = await authApi.me();
+      if (generation !== currentAuthGeneration()) return;
+      setState({ status: 'authenticated', user });
     } catch (error) {
+      if (generation !== currentAuthGeneration()) return;
       if (error instanceof ApiError && error.status === 401) {
         setState({ status: 'anonymous', user: null });
         return;
