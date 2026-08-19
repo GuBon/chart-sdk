@@ -220,17 +220,18 @@ public class ChartRepository {
     }
 
     /** 차트가 참조하는 데이터소스 집합을 junction 에 반영(교체). 저장 시 호출(설계 §12.1). */
-    public void setChartDatasources(long chartId, java.util.Set<Long> datasourceIds) {
+    public void setChartDatasources(Long ownerId, long chartId, java.util.Set<Long> datasourceIds) {
         jdbc.update("DELETE FROM mc_chart_datasource WHERE chart_id=?", chartId);
         if (datasourceIds.isEmpty()) return;
         // 소스 수만큼 INSERT 를 반복하지 않고 다중 VALUES 한 문으로 넣는다 — 저장 1회당 왕복 2회 고정.
-        String values = String.join(", ", java.util.Collections.nCopies(datasourceIds.size(), "(?, ?)"));
-        java.util.ArrayList<Object> params = new java.util.ArrayList<>(datasourceIds.size() * 2);
+        String values = String.join(", ", java.util.Collections.nCopies(datasourceIds.size(), "(?, ?, ?)"));
+        java.util.ArrayList<Object> params = new java.util.ArrayList<>(datasourceIds.size() * 3);
         for (Long ds : datasourceIds) {
             params.add(chartId);
             params.add(ds);
+            params.add(ownerId);
         }
-        jdbc.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id) VALUES " + values
+        jdbc.update("INSERT INTO mc_chart_datasource(chart_id, datasource_id, owner_id) VALUES " + values
                 + " ON CONFLICT DO NOTHING", params.toArray());
     }
 
@@ -242,8 +243,8 @@ public class ChartRepository {
 
     public void copyChartDatasources(long newId, long originalId) {
         jdbc.update("""
-                INSERT INTO mc_chart_datasource(chart_id, datasource_id)
-                SELECT ?, datasource_id
+                INSERT INTO mc_chart_datasource(chart_id, datasource_id, owner_id)
+                SELECT ?, datasource_id, owner_id
                   FROM mc_chart_datasource
                  WHERE chart_id=?
                 ON CONFLICT DO NOTHING
@@ -316,7 +317,7 @@ public class ChartRepository {
 
     private static void appendOwnerScope(StringBuilder sql, List<Object> params, Long ownerId) {
         if (ownerId == null) return;
-        sql.append(" AND (owner_id=? OR owner_id IS NULL)");
+        sql.append(" AND owner_id=?");
         params.add(ownerId);
     }
 

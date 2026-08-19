@@ -36,7 +36,7 @@ class ChartDefinitionWriterTest {
         assertThat(saved).isEqualTo(new ChartDefinitionWriter.SavedChart(41L, 0));
         var order = inOrder(charts);
         order.verify(charts).create(null, input);
-        order.verify(charts).setChartDatasources(41L, Set.of(2L, 3L));
+        order.verify(charts).setChartDatasources(null, 41L, Set.of(2L, 3L));
     }
 
     private static ChartSaveRequest request(Integer version) {

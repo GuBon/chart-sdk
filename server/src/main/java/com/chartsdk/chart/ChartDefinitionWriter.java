@@ -23,7 +23,7 @@ public class ChartDefinitionWriter {
     @Transactional
     public SavedChart create(Long ownerId, ChartSaveRequest input, Set<Long> datasourceIds) {
         long id = charts.create(ownerId, input);
-        charts.setChartDatasources(id, datasourceIds);
+        charts.setChartDatasources(ownerId, id, datasourceIds);
         return new SavedChart(id, 0);
     }
 
@@ -37,7 +37,7 @@ public class ChartDefinitionWriter {
             }
             throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
         }
-        charts.setChartDatasources(id, datasourceIds);
+        charts.setChartDatasources(ownerId, id, datasourceIds);
         return new SavedChart(id, version);
     }
 

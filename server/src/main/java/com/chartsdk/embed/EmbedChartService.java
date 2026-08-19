@@ -56,15 +56,13 @@ public class EmbedChartService {
         return response;
     }
 
-    // owner_id IS NULL 은 로그인 도입 전 레거시 차트 호환 — chartId 가 키 바인딩에서만 오므로
-    // 임의 chartId 를 대입한 열거(IDOR)는 성립하지 않는다. 소유권 마이그레이션 후 strict 일치로 좁힌다.
     private ChartDefinition findChart(long chartId, long userId) {
         return jdbc.query("""
                 SELECT id, datasource_id, sql_query, chart_type, options::text, builder_config::text,
                        refresh_mode, version
                   FROM mc_chart
                  WHERE id=?
-                   AND (owner_id=? OR owner_id IS NULL)
+                   AND owner_id=?
                 """, rs -> {
             if (!rs.next()) throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
             return chart(rs);

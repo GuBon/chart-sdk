@@ -35,7 +35,7 @@ public class EmbedKeyController {
     public IssuedEmbedKey issue(@PathVariable long chartId,
                                 @Valid @RequestBody EmbedKeyIssueRequest body) {
         int days = body.expiresInDays() != null ? body.expiresInDays() : 365;
-        return embedKeys.issue(chartId, body.userId(), days);
+        return embedKeys.issue(chartId, days);
     }
 
     @DeleteMapping("/embed-keys/{keyId}")

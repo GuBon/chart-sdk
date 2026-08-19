@@ -1,5 +1,6 @@
 package com.chartsdk.token;
 
+import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.web.ApiException;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -13,6 +14,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -29,7 +31,8 @@ import static org.mockito.Mockito.when;
 class EmbedKeyServiceTest {
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final EmbedKeyCodec codec = new EmbedKeyCodec("test-embed-key-secret");
-    private final EmbedKeyService service = new EmbedKeyService(jdbc, codec);
+    private final CurrentUserProvider currentUser = () -> OptionalLong.of(7L);
+    private final EmbedKeyService service = new EmbedKeyService(jdbc, codec, currentUser);
 
     @Test
     void issueReportsMissingActiveUserBeforeTouchingKeys() {
@@ -37,7 +40,7 @@ class EmbedKeyServiceTest {
                 "SELECT count(*) FROM mc_user WHERE id=? AND is_active=true", Integer.class, 404L))
                 .thenReturn(0);
 
-        assertThatThrownBy(() -> service.issue(12L, 404L, 365))
+        assertThatThrownBy(() -> service.issueFor(12L, 404L, 365))
                 .isInstanceOf(ApiException.class)
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("USER_NOT_FOUND");
@@ -57,7 +60,7 @@ class EmbedKeyServiceTest {
                     return extractor.extractData(rs);
                 });
 
-        assertThatThrownBy(() -> service.issue(99L, 7L, 365))
+        assertThatThrownBy(() -> service.issueFor(99L, 7L, 365))
                 .isInstanceOf(ApiException.class)
                 .extracting(error -> ((ApiException) error).code())
                 .isEqualTo("CHART_NOT_FOUND");
@@ -66,8 +69,9 @@ class EmbedKeyServiceTest {
 
     @Test
     void listReturnsMetadataWithoutReconstructingBearerKey() {
-        when(jdbc.queryForObject("SELECT count(*) FROM mc_chart WHERE id=?", Integer.class, 12L)).thenReturn(1);
-        when(jdbc.query(contains("FROM mc_embed_key k"), any(RowMapper.class), eq(12L)))
+        when(jdbc.queryForObject(
+                "SELECT count(*) FROM mc_chart WHERE id=? AND owner_id=?", Integer.class, 12L, 7L)).thenReturn(1);
+        when(jdbc.query(contains("FROM mc_embed_key k"), any(RowMapper.class), eq(12L), eq(7L), eq(7L)))
                 .thenAnswer(invocation -> {
                     ResultSet rs = mock(ResultSet.class);
                     when(rs.getLong("id")).thenReturn(101L);
@@ -100,7 +104,7 @@ class EmbedKeyServiceTest {
         when(jdbc.query(contains("FOR UPDATE NOWAIT"), any(ResultSetExtractor.class), eq(12L), eq(7L)))
                 .thenThrow(new CannotAcquireLockException("lock", sql));
 
-        assertThatThrownBy(() -> service.issue(12L, 7L, 365))
+        assertThatThrownBy(() -> service.issueFor(12L, 7L, 365))
                 .isInstanceOf(ApiException.class)
                 .satisfies(error -> {
                     ApiException api = (ApiException) error;

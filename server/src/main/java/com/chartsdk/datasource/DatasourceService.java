@@ -1,5 +1,7 @@
 package com.chartsdk.datasource;
 
+import com.chartsdk.auth.CurrentUserProvider;
+import com.chartsdk.auth.DevelopmentCurrentUserProvider;
 import com.chartsdk.web.ApiException;
 import com.chartsdk.web.ThrowableCauseWalker;
 import org.slf4j.Logger;
@@ -19,6 +21,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalLong;
 
 /**
  * 데이터소스의 저장·수정·삭제·연결 검증과 자격증명 조회를 한 곳에서 관리한다.
@@ -30,35 +33,48 @@ public class DatasourceService {
     private final JdbcTemplate jdbc;
     private final DatasourcePasswordResolver passwords;
     private final ApplicationEventPublisher events;
+    private final CurrentUserProvider currentUser;
 
     public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordResolver passwords) {
-        this(jdbc, passwords, ignored -> { });
+        this(jdbc, passwords, ignored -> { }, null);
+    }
+
+    public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordResolver passwords,
+                             ApplicationEventPublisher events) {
+        this(jdbc, passwords, events, null);
     }
 
     @Autowired
     public DatasourceService(JdbcTemplate jdbc, DatasourcePasswordResolver passwords,
-                             ApplicationEventPublisher events) {
+                             ApplicationEventPublisher events, CurrentUserProvider currentUser) {
         this.jdbc = jdbc;
         this.passwords = passwords;
         this.events = events;
+        this.currentUser = currentUser;
     }
 
     public List<DatasourceView> list() {
-        return jdbc.query("""
+        Long ownerId = ownerId();
+        String sql = """
                 SELECT id, name, host, port, database_name, db_user, max_pool_size, last_tested_at, last_test_ok
                   FROM mc_datasource
                  WHERE is_active = true
+                """ + (ownerId == null ? "" : " AND owner_id = ?") + """
                  ORDER BY id
-                """, (rs, rowNum) -> view(rs));
+                """;
+        return ownerId == null
+                ? jdbc.query(sql, (rs, rowNum) -> view(rs))
+                : jdbc.query(sql, (rs, rowNum) -> view(rs), ownerId);
     }
 
     public DatasourceView create(DatasourceInput input) {
         validate(input, true);
         Long id = jdbc.queryForObject("""
-                INSERT INTO mc_datasource(name, host, port, database_name, db_user, db_password_enc, max_pool_size)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO mc_datasource(owner_id, name, host, port, database_name, db_user, db_password_enc, max_pool_size)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """, Long.class,
+                ownerId(),
                 input.name(), input.host(), input.resolvedPort(), input.databaseName(), input.dbUser(),
                 encrypt(input.dbPassword()), input.resolvedMaxPoolSize());
         return get(id);
@@ -67,6 +83,7 @@ public class DatasourceService {
     @Transactional
     public DatasourceView update(long id, DatasourceInput input) {
         validate(input, false);
+        requireOwned(id);
         ConnectionSettings before = connectionSettings(id);
         int updated;
         if (blank(input.dbPassword())) {
@@ -94,6 +111,7 @@ public class DatasourceService {
     @Transactional
     public void delete(long id) {
         try {
+            requireOwned(id);
             Integer inUse = jdbc.queryForObject(
                     "SELECT count(DISTINCT chart_id) FROM mc_chart_datasource WHERE datasource_id=?", Integer.class, id);
             if (inUse != null && inUse > 0) {
@@ -108,6 +126,7 @@ public class DatasourceService {
     }
 
     public ConnectionTestResult test(DatasourceTestInput input) {
+        if (input.id() != null) requireOwned(input.id());
         DatasourceCredentials credentials = input.id() == null
                 ? new DatasourceCredentials(input.host(), input.resolvedPort(), input.databaseName(), input.dbUser(), input.dbPassword(), 1)
                 : credentials(input.id());
@@ -165,27 +184,55 @@ public class DatasourceService {
     }
 
     private DatasourceView get(long id) {
-        return jdbc.query("""
+        Long ownerId = ownerId();
+        String sql = """
                 SELECT id, name, host, port, database_name, db_user, max_pool_size, last_tested_at, last_test_ok
                   FROM mc_datasource
                  WHERE id = ? AND is_active = true
-                """, rs -> {
+                """ + (ownerId == null ? "" : " AND owner_id = ?");
+        Object[] params = ownerId == null ? new Object[]{id} : new Object[]{id, ownerId};
+        return jdbc.query(sql, rs -> {
             if (!rs.next()) throw notFound();
             return view(rs);
-        }, id);
+        }, params);
     }
 
     private ConnectionSettings connectionSettings(long id) {
-        return jdbc.query("""
+        Long ownerId = ownerId();
+        String sql = """
                 SELECT host, port, database_name, db_user, max_pool_size
                   FROM mc_datasource
                  WHERE id=? AND is_active=true
-                """, rs -> {
+                """ + (ownerId == null ? "" : " AND owner_id=?");
+        Object[] params = ownerId == null ? new Object[]{id} : new Object[]{id, ownerId};
+        return jdbc.query(sql, rs -> {
             if (!rs.next()) throw notFound();
             return new ConnectionSettings(
                     rs.getString("host"), rs.getInt("port"), rs.getString("database_name"),
                     rs.getString("db_user"), rs.getInt("max_pool_size"));
-        }, id);
+        }, params);
+    }
+
+    /** 관리자 요청에서 사용하는 소유권 가드. 내부 임베드 계산의 credentials(id)에는 적용하지 않는다. */
+    public void requireOwned(long id) {
+        Long ownerId = ownerId();
+        if (ownerId == null) return; // 직접 생성 단위/통합 테스트의 레거시 호출만 허용. HTTP는 Security가 선행한다.
+        Boolean owned = jdbc.queryForObject("""
+                SELECT EXISTS(
+                    SELECT 1 FROM mc_datasource
+                     WHERE id=? AND owner_id=? AND is_active=true
+                )
+                """, Boolean.class, id, ownerId);
+        if (!Boolean.TRUE.equals(owned)) throw notFound();
+    }
+
+    private Long ownerId() {
+        if (currentUser == null || currentUser instanceof DevelopmentCurrentUserProvider) return null;
+        OptionalLong id = currentUser.currentUserId();
+        if (id.isEmpty()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "로그인이 필요합니다.");
+        }
+        return id.getAsLong();
     }
 
     private static DatasourceChangedEvent.Impact changeImpact(ConnectionSettings before, DatasourceInput input) {

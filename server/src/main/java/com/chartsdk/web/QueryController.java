@@ -4,7 +4,9 @@ import com.chartsdk.converter.ChartOptionConverter;
 import com.chartsdk.converter.FieldDisplayNameResolver;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.cache.SamplingMetadata;
+import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.federation.FederatedQueryRunner;
+import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
 import com.chartsdk.query.SqlLiterals;
@@ -12,6 +14,7 @@ import com.chartsdk.web.dto.BuilderQueryRequest;
 import com.chartsdk.web.dto.ChartPreviewRequest;
 import com.chartsdk.web.dto.QueryRunRequest;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,15 +32,24 @@ public class QueryController {
     private final QueryExecutor queries;
     private final ChartOptionConverter converter;
     private final FederatedQueryRunner runner;
+    private final DatasourceService datasources;
 
     public QueryController(QueryExecutor queries, ChartOptionConverter converter, FederatedQueryRunner runner) {
+        this(queries, converter, runner, null);
+    }
+
+    @Autowired
+    public QueryController(QueryExecutor queries, ChartOptionConverter converter, FederatedQueryRunner runner,
+                           DatasourceService datasources) {
         this.queries = queries;
         this.converter = converter;
         this.runner = runner;
+        this.datasources = datasources;
     }
 
     @PostMapping("/query/run")
     public Map<String, Object> run(@Valid @RequestBody QueryRunRequest body) {
+        requireOwned(body.datasourceId());
         String sql = body.sql().trim();
         assertSelectOnly(sql);
         String chartType = str(body.chartType());
@@ -57,6 +69,9 @@ public class QueryController {
         String mode = body.mode() == null ? "aggregate" : body.mode();
         boolean rawMode = "rows".equals(mode);
         Map<String, Object> cfg = body.builderConfig();
+        java.util.Set<Long> referenced = new java.util.LinkedHashSet<>(BuilderSqlBuilder.referencedDatasources(cfg));
+        referenced.add(body.datasourceId());
+        referenced.forEach(this::requireOwned);
         FederatedQueryRunner.BuiltResult built = runner.runBuilder(body.datasourceId(), cfg, chartType, rawMode);
         QueryRows rows = built.rows();
         if (!rawMode) rows = SeriesPivot.pivot(rows, cfg, chartType);
@@ -100,6 +115,10 @@ public class QueryController {
         result.put("truncated", rows.truncated());
         result.put("elapsedMs", rows.elapsedMs());
         return result;
+    }
+
+    private void requireOwned(long datasourceId) {
+        if (datasources != null) datasources.requireOwned(datasourceId);
     }
 
     private static Map<String, Object> rowsResult(

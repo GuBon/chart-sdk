@@ -1,5 +1,6 @@
 package com.chartsdk.token;
 
+import com.chartsdk.auth.CurrentUserProvider;
 import com.chartsdk.web.ApiException;
 import com.chartsdk.web.ThrowableCauseWalker;
 import org.springframework.http.HttpStatus;
@@ -19,35 +20,41 @@ import java.util.List;
  * (사용자, 차트) 쌍에 묶인 임베드 키의 발급·조회·회수·검증.
  *
  * 임베드 스니펫에는 chartId 를 넣지 않는다 — 서빙할 차트는 검증된 키의 바인딩(chart_id)에서만 나온다.
- * 소유자 범위(owner_id) 검증은 발급·목록·회수에 모두 적용한다. 로그인 도입 전 owner_id NULL 호환은
- * 유지하되, 관리 API의 실제 호출자 인증은 별도의 Admin 인증 경계가 담당해야 한다.
+ * 소유자 범위(owner_id) 검증은 발급·목록·회수에 모두 적용하며 로그인 사용자의 ID와 정확히 일치해야 한다.
  */
 @Service
 public class EmbedKeyService {
     private final JdbcTemplate jdbc;
     private final EmbedKeyCodec codec;
+    private final CurrentUserProvider currentUser;
 
-    public EmbedKeyService(JdbcTemplate jdbc, EmbedKeyCodec codec) {
+    public EmbedKeyService(JdbcTemplate jdbc, EmbedKeyCodec codec, CurrentUserProvider currentUser) {
         this.jdbc = jdbc;
         this.codec = codec;
+        this.currentUser = currentUser;
     }
 
     /** S3 모달용 차트별 키 목록. Bearer 원문은 재파생하지 않고 상태 메타데이터만 반환한다. */
     public List<EmbedKeySummary> listForChart(long chartId) {
-        requireChart(chartId);
+        long userId = currentUserId();
+        requireChart(chartId, userId);
         return jdbc.query("""
                 SELECT k.id, k.user_id, k.chart_id, k.expires_at, k.is_active, k.created_at,
                        k.revoked_at, k.revoked_reason
                   FROM mc_embed_key k
                   JOIN mc_chart c ON c.id = k.chart_id
                  WHERE k.chart_id=?
-                   AND (c.owner_id = k.user_id OR c.owner_id IS NULL)
+                   AND c.owner_id=? AND k.user_id=?
                  ORDER BY k.id
-                """, (rs, rowNum) -> summaryRow(rs), chartId);
+                """, (rs, rowNum) -> summaryRow(rs), chartId, userId, userId);
     }
 
     @Transactional
-    public IssuedEmbedKey issue(long chartId, long userId, int days) {
+    public IssuedEmbedKey issue(long chartId, int days) {
+        return issueFor(chartId, currentUserId(), days);
+    }
+
+    IssuedEmbedKey issueFor(long chartId, long userId, int days) {
         Integer userExists = jdbc.queryForObject(
                 "SELECT count(*) FROM mc_user WHERE id=? AND is_active=true", Integer.class, userId);
         if (userExists == null || userExists == 0) {
@@ -58,7 +65,7 @@ public class EmbedKeyService {
             Long lockedChartId = jdbc.query("""
                     SELECT id
                       FROM mc_chart
-                     WHERE id=? AND (owner_id=? OR owner_id IS NULL)
+                     WHERE id=? AND owner_id=?
                      FOR UPDATE NOWAIT
                     """, rs -> rs.next() ? rs.getLong("id") : null, chartId, userId);
             if (lockedChartId == null) {
@@ -88,14 +95,15 @@ public class EmbedKeyService {
 
     @Transactional
     public void revoke(long keyId) {
+        long userId = currentUserId();
         int updated = jdbc.update("""
                 UPDATE mc_embed_key k
                    SET is_active=false, revoked_at=now(), revoked_reason='MANUAL'
                   FROM mc_chart c
                  WHERE k.id=? AND k.is_active=true
                    AND c.id=k.chart_id
-                   AND (c.owner_id=k.user_id OR c.owner_id IS NULL)
-                """, keyId);
+                   AND c.owner_id=? AND k.user_id=?
+                """, keyId, userId, userId);
         if (updated == 0) {
             throw new ApiException(HttpStatus.NOT_FOUND, "EMBED_KEY_NOT_FOUND", "Embed key not found.");
         }
@@ -126,11 +134,20 @@ public class EmbedKeyService {
         }, keyId);
     }
 
-    private void requireChart(long chartId) {
-        Integer exists = jdbc.queryForObject("SELECT count(*) FROM mc_chart WHERE id=?", Integer.class, chartId);
+    private void requireChart(long chartId, long userId) {
+        Integer exists = jdbc.queryForObject(
+                "SELECT count(*) FROM mc_chart WHERE id=? AND owner_id=?", Integer.class, chartId, userId);
         if (exists == null || exists == 0) {
             throw new ApiException(HttpStatus.NOT_FOUND, "CHART_NOT_FOUND", "Chart not found.");
         }
+    }
+
+    private long currentUserId() {
+        return currentUser.currentUserId().orElseThrow(EmbedKeyService::authRequired);
+    }
+
+    private static ApiException authRequired() {
+        return new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "로그인이 필요합니다.");
     }
 
     private IssuedEmbedKey findIssuedKey(long id) {

@@ -4,8 +4,8 @@ import com.chartsdk.cache.SamplingMetadata;
 
 import java.util.Map;
 
-record ChartDefinition(long id, long datasourceId, String sqlQuery, String chartType,
-                       Map<String, Object> options, Map<String, Object> builderConfig,
-                       String refreshMode, int version,
-                       SamplingMetadata sampling) {
+public record ChartDefinition(long id, long datasourceId, String sqlQuery, String chartType,
+                              Map<String, Object> options, Map<String, Object> builderConfig,
+                              String refreshMode, int version,
+                              SamplingMetadata sampling) {
 }

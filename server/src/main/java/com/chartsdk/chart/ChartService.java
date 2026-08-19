@@ -10,6 +10,7 @@ import com.chartsdk.converter.FieldDisplayNameResolver;
 import com.chartsdk.converter.SeriesPivot;
 import com.chartsdk.federation.FederatedQueryRunner;
 import com.chartsdk.datasource.DatasourceRuntimeVersions;
+import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.BuilderSqlBuilder;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.SqlLiterals;
@@ -42,6 +43,7 @@ public class ChartService {
     private final ChartVersionPolicy versionPolicy;
     private final DatasourceRuntimeVersions runtimeVersions;
     private final SourceCompositionPolicy composition;
+    private final DatasourceService datasources;
 
     public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
                         ChartComputeService compute, ChartOptionConverter converter,
@@ -56,7 +58,16 @@ public class ChartService {
                         FederatedQueryRunner runner, ChartDefinitionWriter writer,
                         ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions) {
         this(charts, currentUser, queries, compute, converter, runner, writer, versionPolicy,
-                runtimeVersions, new DistinctCountCompositionPolicy());
+                runtimeVersions, new DistinctCountCompositionPolicy(), null);
+    }
+
+    public ChartService(ChartRepository charts, CurrentUserProvider currentUser, QueryExecutor queries,
+                        ChartComputeService compute, ChartOptionConverter converter,
+                        FederatedQueryRunner runner, ChartDefinitionWriter writer,
+                        ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions,
+                        SourceCompositionPolicy composition) {
+        this(charts, currentUser, queries, compute, converter, runner, writer, versionPolicy,
+                runtimeVersions, composition, null);
     }
 
     @Autowired
@@ -64,7 +75,7 @@ public class ChartService {
                         ChartComputeService compute, ChartOptionConverter converter,
                         FederatedQueryRunner runner, ChartDefinitionWriter writer,
                         ChartVersionPolicy versionPolicy, DatasourceRuntimeVersions runtimeVersions,
-                        SourceCompositionPolicy composition) {
+                        SourceCompositionPolicy composition, DatasourceService datasources) {
         this.charts = charts;
         this.currentUser = currentUser;
         this.queries = queries;
@@ -75,6 +86,7 @@ public class ChartService {
         this.versionPolicy = versionPolicy;
         this.runtimeVersions = runtimeVersions;
         this.composition = composition;
+        this.datasources = datasources;
     }
 
     public Map<String, Object> list(ChartListQuery query) {
@@ -229,8 +241,9 @@ public class ChartService {
             }
             // 라우터로 검증·계산(단일→PG / 다중→DuckDB 페더레이션). 실행 실패 시 저장도 실패(§7.7).
             Set<Long> configured = BuilderSqlBuilder.referencedDatasources(input.builderConfig());
-            Set<Long> expectedDatasources = configured.isEmpty()
-                    ? Set.of(input.datasourceId()) : configured;
+            Set<Long> expectedDatasources = new java.util.LinkedHashSet<>(configured);
+            expectedDatasources.add(input.datasourceId());
+            requireOwned(expectedDatasources);
             Map<Long, Long> sourceVersions = runtimeVersions.snapshot(expectedDatasources);
             int sampleCacheMaxAge = "live".equals(input.refreshMode())
                     ? 0 : ChartComputeService.MANUAL_SAMPLE_CACHE_MAX_AGE_SECONDS;
@@ -254,6 +267,7 @@ public class ChartService {
         assertSelectOnly(sql);
         // 캐시에는 전체 차트 결과가 필요하므로 제한 실행 후 재조회하지 않고 처음부터 한 번만 전체 실행한다.
         Set<Long> rawDatasource = Set.of(input.datasourceId());
+        requireOwned(rawDatasource);
         Map<Long, Long> sourceVersions = runtimeVersions.snapshot(rawDatasource);
         var rows = queries.executeChart(input.datasourceId(), sql, List.of());
         // raw SQL 은 항상 단일 소스(primary) — 구조상 페더레이션 대상 아님.
@@ -279,6 +293,10 @@ public class ChartService {
                     "A primary table is required to save a chart."
             );
         }
+    }
+
+    private void requireOwned(Set<Long> datasourceIds) {
+        if (datasources != null) datasourceIds.forEach(datasources::requireOwned);
     }
 
     private static ChartSaveRequest copy(ChartSaveRequest input, String defineMode, String sqlQuery, String chartType, String refreshMode) {

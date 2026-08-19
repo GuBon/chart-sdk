@@ -1,5 +1,6 @@
 package com.chartsdk.web;
 
+import com.chartsdk.datasource.DatasourceService;
 import com.chartsdk.query.DataDisplayNameService;
 import com.chartsdk.query.QueryExecutor;
 import com.chartsdk.query.QueryRows;
@@ -29,20 +30,28 @@ import java.util.Map;
 public class SchemaController {
     private final QueryExecutor queries;
     private final DataDisplayNameService displayNames;
+    private final DatasourceService datasources;
+
+    public SchemaController(QueryExecutor queries, DataDisplayNameService displayNames) {
+        this(queries, displayNames, null);
+    }
 
     @Autowired
-    public SchemaController(QueryExecutor queries, DataDisplayNameService displayNames) {
+    public SchemaController(QueryExecutor queries, DataDisplayNameService displayNames,
+                            DatasourceService datasources) {
         this.queries = queries;
         this.displayNames = displayNames;
+        this.datasources = datasources;
     }
 
     /** 단위 테스트와 레거시 직접 생성 호출 호환. */
     public SchemaController(QueryExecutor queries) {
-        this(queries, null);
+        this(queries, null, null);
     }
 
     @GetMapping("/tables")
     public Map<String, Object> tables(@RequestParam long datasourceId) {
+        requireOwned(datasourceId);
         SchemaCatalog catalog = catalog(datasourceId);
         List<Map<String, Object>> tables = new ArrayList<>();
         catalog.byTable().forEach((key, cols) -> {
@@ -76,6 +85,7 @@ public class SchemaController {
     @PutMapping("/display-name")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void updateDisplayName(@Valid @RequestBody DataDisplayNameUpdateRequest input) {
+        requireOwned(input.datasourceId());
         SchemaCatalog catalog = queries.catalog(input.datasourceId());
         displayNames.update(
                 input.datasourceId(),
@@ -91,6 +101,7 @@ public class SchemaController {
     public Map<String, Object> preview(@PathVariable String tableName,
                                        @RequestParam(required = false) String schema,
                                        @RequestParam long datasourceId) {
+        requireOwned(datasourceId);
         SchemaCatalog catalog = catalog(datasourceId);
         String resolvedSchema = (schema == null || schema.isBlank()) ? SchemaCatalog.DEFAULT_SCHEMA : schema;
         if (!catalog.hasTable(resolvedSchema, tableName)) {
@@ -122,5 +133,9 @@ public class SchemaController {
     private SchemaCatalog catalog(long datasourceId) {
         SchemaCatalog source = queries.catalog(datasourceId);
         return displayNames == null ? source : displayNames.applyOverrides(datasourceId, source);
+    }
+
+    private void requireOwned(long datasourceId) {
+        if (datasources != null) datasources.requireOwned(datasourceId);
     }
 }
