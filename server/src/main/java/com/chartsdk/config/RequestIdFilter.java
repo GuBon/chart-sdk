@@ -17,7 +17,7 @@ import java.util.UUID;
 
 /**
  * 요청마다 요청 ID 를 MDC 에 심어 모든 로그에 상관관계(correlation)를 부여하고, 액세스 로그 1줄을 남긴다.
- * X-Request-Id 가 들어오면 그대로 전파(게이트웨이/프록시 추적 연계), 없으면 생성. 응답 헤더로도 회신한다.
+ * 안전한 X-Request-Id만 전파해 게이트웨이 추적을 연결한다. 누락되거나 형식이 잘못되면 새 ID를 만들고 응답 헤더로 회신한다.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -30,7 +30,10 @@ public class RequestIdFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
             throws ServletException, IOException {
         String id = req.getHeader(HEADER);
-        if (id == null || id.isBlank()) id = UUID.randomUUID().toString().substring(0, 8);
+        if (id != null) id = id.strip();
+        if (id == null || !id.matches("[A-Za-z0-9._:-]{1,100}")) {
+            id = UUID.randomUUID().toString().substring(0, 8);
+        }
         MDC.put(MDC_KEY, id);
         res.setHeader(HEADER, id);
         long start = System.currentTimeMillis();
