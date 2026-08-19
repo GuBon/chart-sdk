@@ -22,6 +22,7 @@ describe('fetchChartOption', () => {
     expect(url).toBe('http://api.test/api/v1/charts/data');
     expect(url).not.toContain('chartId');
     expect(init.cache).toBe('no-store');
+    expect(init.credentials).toBe('omit');
     expect(init.headers.Authorization).toBe('Bearer cek1_101_sig');
   });
 

@@ -80,6 +80,8 @@ export async function fetchChartOption(
   try {
     const res = await fetch(url, {
       cache: 'no-store',
+      // 로그인 콘솔과 같은 origin에 임베드되더라도 관리 세션 쿠키를 절대 전송하지 않는다.
+      credentials: 'omit',
       headers: { Authorization: `Bearer ${embedKey}` },
       signal: controller.signal,
     });
