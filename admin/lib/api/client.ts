@@ -2,6 +2,7 @@
 // 개발 환경에서는 MSW 가 동일 경로를 가로챈다.
 
 const BASE = `${process.env.NEXT_PUBLIC_E2E_MSW === 'true' ? '' : (process.env.NEXT_PUBLIC_API_BASE ?? '')}/api/v1`;
+export const AUTH_INVALID_EVENT = 'chartsdk:auth-invalid';
 
 /** 서버 공통 에러 형식 {error:{code,message,fields?,requestId?}} 을 표현 */
 export class ApiError extends Error {
@@ -38,6 +39,11 @@ interface RequestInitJson extends Omit<RequestInit, 'body'> {
 // React Strict Mode 등에서 같은 GET이 동시에 시작되면 하나의 네트워크 요청을 공유한다.
 // 완료 후 즉시 제거하므로 응답 캐시가 아니며, 이후의 명시적 새로고침은 그대로 서버를 조회한다.
 const inFlightGets = new Map<string, Promise<unknown>>();
+let csrfPromise: Promise<{ headerName: string; token: string }> | null = null;
+
+export function clearCsrfToken() {
+  csrfPromise = null;
+}
 
 export function request<T>(path: string, init: RequestInitJson = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
@@ -56,12 +62,30 @@ export function request<T>(path: string, init: RequestInitJson = {}): Promise<T>
   return pending;
 }
 
-async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
+async function execute<T>(path: string, init: RequestInitJson, retryCsrf = true): Promise<T> {
   const { body, headers, ...rest } = init;
+  const method = (rest.method ?? 'GET').toUpperCase();
+  const requestHeaders = new Headers(headers);
+  if (body !== undefined && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json');
+  }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    csrfPromise ??= request<{ headerName: string; token: string }>('/auth/csrf');
+    let csrf: { headerName: string; token: string };
+    try {
+      csrf = await csrfPromise;
+    } catch (error) {
+      clearCsrfToken();
+      throw error;
+    }
+    requestHeaders.set(csrf.headerName, csrf.token);
+  }
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
+    method,
     cache: rest.cache ?? 'no-store',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    credentials: 'include',
+    headers: requestHeaders,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -80,9 +104,18 @@ async function execute<T>(path: string, init: RequestInitJson): Promise<T> {
     } catch {
       /* 비-JSON 응답은 statusText 로 둔다 */
     }
+    if (code === 'CSRF_INVALID') {
+      clearCsrfToken();
+      // CSRF 검증 실패 시 controller mutation은 실행되지 않았으므로 새 토큰으로 한 번만 재시도한다.
+      if (retryCsrf) return execute<T>(path, init, false);
+    }
+    if (res.status === 401 && path !== '/auth/login' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(AUTH_INVALID_EVENT));
+    }
     throw new ApiError(code, message, res.status, fields, requestId);
   }
 
+  if (path === '/auth/login' || path === '/auth/logout') clearCsrfToken();
   if (res.status === 204 || res.status === 205 || responseText.trim() === '') return undefined as T;
   return JSON.parse(responseText) as T;
 }

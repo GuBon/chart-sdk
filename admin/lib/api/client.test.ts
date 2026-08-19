@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiErrorMessage, apiFieldError, request } from './client';
+import { AUTH_INVALID_EVENT, ApiError, apiErrorMessage, apiFieldError, clearCsrfToken, request } from './client';
 
 describe('Admin API client cache policy', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    clearCsrfToken();
+    vi.unstubAllGlobals();
+  });
 
   it('서버 결과 캐시 정책을 브라우저 HTTP 캐시가 우회하지 않게 no-store로 요청한다', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -21,13 +24,51 @@ describe('Admin API client cache policy', () => {
   });
 
   it.each([204, 205, 200])('상태 %s의 빈 성공 본문을 undefined로 처리한다', async (status) => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      status,
-      text: async () => '',
-    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ headerName: 'X-CSRF-TOKEN', token: 'test-token' }),
+      })
+      .mockResolvedValueOnce({ ok: true, status, text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(request<void>('/empty', { method: 'DELETE' })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining('/api/v1/empty'),
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    const headers = fetchMock.mock.calls[1][1]?.headers as Headers;
+    expect(headers.get('X-CSRF-TOKEN')).toBe('test-token');
+  });
+
+  it('CSRF 만료 mutation은 새 토큰으로 정확히 한 번 재시도한다', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ headerName: 'X-CSRF-TOKEN', token: 'old' }) })
+      .mockResolvedValueOnce({ ok: false, status: 403, text: async () => JSON.stringify({ error: { code: 'CSRF_INVALID', message: '만료' } }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => JSON.stringify({ headerName: 'X-CSRF-TOKEN', token: 'new' }) })
+      .mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(request<void>('/mutation', { method: 'PATCH', body: { active: false } })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect((fetchMock.mock.calls[1][1]?.headers as Headers).get('X-CSRF-TOKEN')).toBe('old');
+    expect((fetchMock.mock.calls[3][1]?.headers as Headers).get('X-CSRF-TOKEN')).toBe('new');
+  });
+
+  it('세션 401을 인증 상태 무효화 이벤트로 알린다', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    const listener = vi.fn();
+    window.addEventListener(AUTH_INVALID_EVENT, listener);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: { code: 'SESSION_EXPIRED', message: '만료' } }),
+    }));
+
+    await expect(request('/charts')).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener(AUTH_INVALID_EVENT, listener);
   });
 });
 
