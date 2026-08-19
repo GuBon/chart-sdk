@@ -77,7 +77,7 @@ val verifyFlywayResources by tasks.registering {
     doLast {
         val sourceDirectory = file("../docs")
         val packagedDirectory = layout.buildDirectory.dir("resources/main/db/migration").get().asFile
-        val requiredMigration = "V12__index_tuning.sql"
+        val requiredMigration = "V17__admin_audit_log.sql"
         val requiredCallback = "afterMigrate__runtime_grants.sql"
         val migrationPattern = Regex("V[0-9]+__.+\\.sql")
 
