@@ -71,6 +71,15 @@ class AdminApiIT {
                 .andExpect(jsonPath("$.charts.length()").value(1))
                 .andExpect(jsonPath("$.charts[0].id").value(chartId));
 
+        // 관리자 미리보기는 스냅샷 전용 — 스냅샷이 없으면 (도달 불가능한) 고객 데이터소스에 접속을 시도하지 않고
+        // 404 로 끝난다. 재계산을 시작했다면 접속 오류(5xx/QUERY_*)가 났을 것이다.
+        mvc.perform(get("/api/v1/admin/charts/{id}/preview", chartId).with(user(principal(adminId, "admin"))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("SNAPSHOT_NOT_FOUND"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM mc_chart_cache WHERE chart_id=?", Integer.class, chartId))
+                .as("관리자 열람은 소유자 캐시를 만들거나 덮어쓰지 않는다")
+                .isZero();
+
         mvc.perform(patch("/api/v1/admin/users/{id}/status", memberId)
                         .with(user(principal(adminId, "admin")))
                         .with(csrf())

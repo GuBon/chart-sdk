@@ -614,7 +614,15 @@ export const handlers = [
     const page = Math.min(requestedPage, totalPages);
     return HttpResponse.json({ charts: list.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages });
   }),
-  http.get('/api/v1/admin/charts/:chartId/preview', ({ params }) => chartPreview(Number(params.chartId))),
+  http.get('/api/v1/admin/charts/:chartId/preview', ({ params }) => {
+    const id = Number(params.chartId);
+    const chart = storedChart(id);
+    // 서버 미러: 관리자 미리보기는 저장 스냅샷 전용이라 live 차트(스냅샷 없음)는 고객 DB 조회 없이 404 다.
+    if (chart && storedRefreshMode(chart) === 'live') {
+      return err(404, 'SNAPSHOT_NOT_FOUND', '저장된 미리보기 스냅샷이 없습니다. 관리자 화면은 고객 데이터베이스를 조회하지 않습니다.');
+    }
+    return chartPreview(id);
+  }),
   http.get('/api/v1/admin/charts/:chartId', ({ params }) => {
     const id = Number(params.chartId);
     const summary = chartList.find((chart) => chart.id === id);
@@ -651,10 +659,15 @@ function adminChartSummary(chart: (typeof chartList)[number]) {
     refreshMode: storedRefreshMode(savedCharts[chart.id] ?? chartDetail(chart)) ?? 'manual', createdAt: '2026-01-01T00:00:00Z' };
 }
 
-function chartPreview(id: number) {
+/** 저장본이 있으면 저장본, 없으면 시드 상세 — 미리보기·관리자 미리보기가 같은 정의를 본다. */
+function storedChart(id: number) {
   const saved = savedCharts[id] as { builderConfig?: BuilderConfig; chartType?: ChartType; options?: Record<string, unknown>; refreshMode?: unknown } | undefined;
   const summary = chartList.find((chart) => chart.id === id);
-  const chart = saved ?? (summary ? chartDetail(summary) : null);
+  return saved ?? (summary ? chartDetail(summary) : null);
+}
+
+function chartPreview(id: number) {
+  const chart = storedChart(id);
   if (!chart?.builderConfig || !chart.chartType) return err(404, 'CHART_NOT_FOUND', '차트를 찾을 수 없습니다.');
   const result = withResultDisplayNames(buildAggregateRows(chart.builderConfig, chart.chartType), chart.builderConfig);
   return HttpResponse.json({ chartId: id, columns: result.columns, rows: result.rows, rowCount: result.rowCount,

@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -118,6 +119,14 @@ public class ChartComputeService {
     /** Cache-only batch path for list cards; never starts customer-datasource recomputation. */
     public Map<Long, CachedChartRows> cachedCompatible(Map<Long, ChartCacheExpectation> expectations) {
         return cache.findCompatible(expectations);
+    }
+
+    /**
+     * 단일 차트 스냅샷 전용 읽기 — 관리자 열람처럼 "보기만 하는" 경로용. 호환 스냅샷이 없으면(live 차트,
+     * 미계산·정의 변경 후) 빈 값을 돌려주고 고객 데이터소스 재계산은 절대 시작하지 않는다.
+     */
+    public Optional<CachedChartRows> storedSnapshot(long chartId, int definitionVersion, SamplingMetadata sampling) {
+        return cache.findCompatible(chartId, definitionVersion, sampling);
     }
 
     /**
