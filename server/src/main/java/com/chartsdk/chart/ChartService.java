@@ -91,7 +91,8 @@ public class ChartService {
 
     /** 목록은 관리자에게 전체 사용자 범위로 열린다(읽기 전용 카드). 그 외 조회·변경은 계속 소유자 범위다. */
     public Map<String, Object> list(ChartListQuery query) {
-        return charts.list(currentUser.isAdmin() ? null : ownerId(), query);
+        // 관리자는 전체(또는 요청한 소유자)로, 일반 사용자는 요청 파라미터와 무관하게 자기 범위로 조회한다.
+        return charts.list(currentUser.isAdmin() ? query.ownerId() : ownerId(), query);
     }
 
     public Map<String, Object> get(long id) {

@@ -9,6 +9,7 @@ import { chartDatasourcePath } from '@/lib/chartRoutes';
 import { CHART_TYPE_FILTER_OPTIONS } from '@/lib/chartTypes';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
 import { Pagination } from '@/components/ui/Pagination';
 import { Select } from '@/components/ui/Select';
 import { Toast, useToast } from '@/components/ui/Toast';
@@ -48,15 +49,21 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
   const type = (params.get('type') ?? 'all') as ChartType | 'all';
   const sort = (params.get('sort') ?? 'updated_desc') as ChartSort;
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
+  const ownerParam = params.get('ownerId') ?? '';
+  const ownerId = /^\d+$/.test(ownerParam) ? Number(ownerParam) : undefined;
 
   const [toDelete, setToDelete] = useState<ChartSummary | null>(null);
   const [toEmbed, setToEmbed] = useState<ChartSummary | null>(null);
   const [toDuplicate, setToDuplicate] = useState<ChartSummary | null>(null);
   const { notice: duplicateNotice, show: showDuplicateNotice } = useToast(3000);
   const auth = useAuth();
+  const isAdmin = auth.user?.role === 'admin';
   // 관리자 목록에는 모든 사용자의 차트가 오지만 편집·임베드·삭제는 소유자만 한다. 타인(또는 소유자 없는 레거시)
   // 차트는 읽기 전용 카드로 그려 관리자 상세 화면으로 연다.
-  const isReadOnly = (chart: ChartSummary) => auth.user?.role === 'admin' && chart.ownerId !== auth.user.id;
+  const isReadOnly = (chart: ChartSummary) => isAdmin && chart.ownerId !== auth.user?.id;
+  // 소유자 ID 필터 — 관리자에게만 의미가 있다(서버는 일반 사용자의 값을 무시한다). URL ?ownerId 로 유지한다.
+  const [ownerDraft, setOwnerDraft] = useState(ownerParam);
+  useEffect(() => setOwnerDraft(ownerParam), [ownerParam]);
 
   useEffect(() => {
     pendingParamsRef.current = paramsString;
@@ -85,6 +92,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
       sort,
       page,
       pageSize: PAGE_SIZE,
+      ownerId: isAdmin ? ownerId : undefined,
     },
     setPage,
   );
@@ -109,7 +117,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
 
   const clearFilters = () => router.replace('/', { scroll: false });
 
-  const hasSecondaryFilter = !!q || type !== 'all';
+  const hasSecondaryFilter = !!q || type !== 'all' || (isAdmin && ownerId !== undefined);
   const isScoped = selectedDatasource !== null;
   const hasFilter = hasSecondaryFilter || isScoped;
   const datasourceOptions = [
@@ -136,6 +144,20 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
         <div className="w-40">
           <Select id="chart-sort" name="chartSort" aria-label="정렬" value={sort} options={SORT_OPTIONS} onChange={(event) => setParam('sort', event.target.value)} />
         </div>
+        {isAdmin && (
+          <Input
+            id="chart-owner-filter"
+            name="chartOwnerFilter"
+            aria-label="소유자 ID"
+            inputMode="numeric"
+            placeholder="소유자 ID"
+            wrapperClassName="h-[34px] w-32"
+            value={ownerDraft}
+            onChange={(event) => setOwnerDraft(event.target.value.replace(/\D/g, ''))}
+            onBlur={() => setParam('ownerId', ownerDraft)}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setParam('ownerId', ownerDraft); } }}
+          />
+        )}
         <div className="flex-1" />
         {catalogHref && (
           <Link href={catalogHref} className="whitespace-nowrap text-[13px] font-medium text-text-secondary hover:text-text-primary">

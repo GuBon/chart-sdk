@@ -9,8 +9,15 @@ public record ChartListQuery(
         String relation,
         String sort,
         Integer page,
-        Integer pageSize
+        Integer pageSize,
+        /** 관리자 전용 소유자 필터. 일반 사용자는 항상 자기 범위라 무시된다. */
+        Long ownerId
 ) {
+    public ChartListQuery(String q, String type, Long datasourceId, String schema, String relation,
+                          String sort, Integer page, Integer pageSize) {
+        this(q, type, datasourceId, schema, relation, sort, page, pageSize, null);
+    }
+
     public boolean hasRelation() {
         return relation != null && !relation.isBlank();
     }

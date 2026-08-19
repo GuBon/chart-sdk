@@ -163,6 +163,7 @@ export const handlers = [
     const q = p.get('q')?.toLowerCase().trim();
     const type = p.get('type');
     const dsId = p.get('datasourceId');
+    const ownerId = p.get('ownerId');
     const schema = p.get('schema');
     const relation = p.get('relation');
     const sort = p.get('sort') ?? 'updated_desc';
@@ -171,6 +172,8 @@ export const handlers = [
     let list = chartList;
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false));
     if (type) list = list.filter((c) => c.chartType === type);
+    // 서버 미러: 소유자 필터는 관리자에게만 의미가 있다(일반 사용자는 항상 자기 범위). 목 로그인은 관리자다.
+    if (ownerId && mockUser.role === 'admin') list = list.filter((c) => c.ownerId === Number(ownerId));
     if (dsId) list = list.filter((c) => chartUsesDatasource(c.id, c.datasourceId, Number(dsId)));
     if (schema || relation) {
       list = list.filter((c) => chartUsesRelation(c, dsId ? Number(dsId) : null, schema || 'public', relation));
