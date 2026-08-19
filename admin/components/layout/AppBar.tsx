@@ -2,18 +2,31 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BarChart3, Plus } from 'lucide-react';
+import { BarChart3, LogOut, Plus } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Button } from '@/components/ui/Button';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 // Figma App Bar(183:17) + GNB 내비(282:390). 모든 화면이 공유하는 전역 상단바.
 const NAV = [
   { href: '/datasources', label: '데이터소스', activePrefixes: ['/datasources'] },
-  { href: '/tokens', label: '토큰 관리', activePrefixes: ['/tokens'] },
 ];
 
 export function AppBar() {
   const pathname = usePathname();
+  const auth = useAuth();
+  const nav = auth.user?.role === 'admin'
+    ? [...NAV, { href: '/admin/users', label: '관리자', activePrefixes: ['/admin'] }]
+    : NAV;
+
+  async function logout() {
+    try {
+      await auth.logout();
+    } finally {
+      // JS 메모리의 캐시·민감 상태까지 확실히 폐기한다.
+      window.location.replace('/login');
+    }
+  }
 
   return (
     <header className="flex items-center gap-2.5 border-b border-border bg-bg-panel px-6 py-3.5">
@@ -25,7 +38,7 @@ export function AppBar() {
       <div className="flex-1" />
 
       <nav className="flex items-center gap-5 text-[13px]">
-        {NAV.map(({ href, label, activePrefixes }) => {
+        {nav.map(({ href, label, activePrefixes }) => {
           const active = activePrefixes.some((prefix) => pathname.startsWith(prefix));
           return (
             <Link
@@ -38,6 +51,13 @@ export function AppBar() {
           );
         })}
       </nav>
+
+      <div className="ml-2 flex items-center gap-2 border-l border-border pl-4">
+        <span className="max-w-40 truncate text-xs text-text-secondary" title={auth.user?.username}>
+          {auth.user?.displayName}
+        </span>
+        <Button variant="ghost" size="sm" aria-label="로그아웃" title="로그아웃" icon={<LogOut className="size-4" aria-hidden />} onClick={() => void logout()} />
+      </div>
 
       <Link href="/charts/new">
         <Button icon={<Plus className="size-4" aria-hidden />}>새 차트</Button>

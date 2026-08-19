@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { MockProvider } from '@/components/MockProvider';
+import { AuthProvider } from '@/components/auth/AuthProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -13,7 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ko">
       <body>
-        <MockProvider>{children}</MockProvider>
+        <MockProvider><AuthProvider>{children}</AuthProvider></MockProvider>
       </body>
     </html>
   );
