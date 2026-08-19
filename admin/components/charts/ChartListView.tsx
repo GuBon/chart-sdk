@@ -143,7 +143,7 @@ export function ChartListView({ datasources, selectedDatasource = null, schema, 
             데이터 탐색
           </Link>
         )}
-        <SearchBox placeholder={isAdmin ? '차트 검색 (이름·설명·소유자)' : undefined} />
+        <SearchBox />
       </div>
 
       {error ? (

@@ -174,9 +174,9 @@ export const handlers = [
     const pageSize = Math.min(60, Math.max(1, Number(p.get('pageSize') ?? '8') || 8));
     const requestedPage = Math.max(1, Number(p.get('page') ?? '1') || 1);
     let list = chartList;
-    // 서버 미러: 관리자 전체 목록에서는 검색어가 소유자의 아이디·표시 이름·숫자 id 에도 걸린다.
+    // 서버 미러: 검색어는 차트 이름·설명과 소유자의 아이디·표시 이름·숫자 id 에 걸린다(역할 무관).
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false)
-      || (mockUser.role === 'admin' && matchesOwner(c.id, q)));
+      || matchesOwner(c.id, q));
     if (type) list = list.filter((c) => c.chartType === type);
     if (dsId) list = list.filter((c) => chartUsesDatasource(c.id, c.datasourceId, Number(dsId)));
     if (schema || relation) {

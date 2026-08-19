@@ -9,22 +9,8 @@ public record ChartListQuery(
         String relation,
         String sort,
         Integer page,
-        Integer pageSize,
-        /**
-         * 검색어를 소유자(아이디·표시 이름·숫자 id)에도 매칭할지. 관리자의 전체 목록에서만 켠다 —
-         * 일반 사용자는 자기 범위라 소유자 검색이 의미가 없다.
-         */
-        boolean searchOwner
+        Integer pageSize
 ) {
-    public ChartListQuery(String q, String type, Long datasourceId, String schema, String relation,
-                          String sort, Integer page, Integer pageSize) {
-        this(q, type, datasourceId, schema, relation, sort, page, pageSize, false);
-    }
-
-    public ChartListQuery withSearchOwner(boolean value) {
-        return new ChartListQuery(q, type, datasourceId, schema, relation, sort, page, pageSize, value);
-    }
-
     public boolean hasRelation() {
         return relation != null && !relation.isBlank();
     }

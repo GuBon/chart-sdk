@@ -33,9 +33,9 @@ test('관리자는 차트 검색으로 소유자도 찾고, 읽기 전용 상세
   await expect(page.getByRole('link', { name: '전체 차트' })).toHaveCount(0);
 
   await page.goto('/');
-  // 별도 소유자 입력 없이 기존 차트 검색이 소유자 아이디·표시 이름·숫자 id 에도 걸린다.
+  // 검색 규칙은 역할과 무관하게 하나 — 차트 이름·설명·소유자(아이디·표시 이름·숫자 id).
   const search = page.getByRole('textbox', { name: '차트 검색' });
-  await expect(search).toHaveAttribute('placeholder', '차트 검색 (이름·설명·소유자)');
+  await expect(search).toHaveAttribute('placeholder', '차트 검색 (차트 이름, 설명, 소유자)');
   await search.fill('lee.sh');
   await expect(page.locator('[data-testid="chart-card-name"]')).toHaveCount(1);
   await expect(page.locator('[data-testid="chart-card-name"]')).toHaveText('부서별 지출');
