@@ -3,7 +3,6 @@ import { request } from './client';
 import type {
   AuthUser,
   AdminChartDetail,
-  AdminChartListResponse,
   AdminUserDetailResponse,
   AdminUserListResponse,
   Chart,
@@ -150,8 +149,6 @@ export const adminUsersApi = {
 };
 
 export const adminChartsApi = {
-  list: (params: { ownerId?: number; q?: string; type?: ChartType; page?: number; pageSize?: number } = {}) =>
-    request<AdminChartListResponse>(`/admin/charts${qs(params)}`),
   get: (chartId: number) => request<AdminChartDetail>(`/admin/charts/${chartId}`),
   preview: (chartId: number) => request<ChartDataResponse>(`/admin/charts/${chartId}/preview`),
 };

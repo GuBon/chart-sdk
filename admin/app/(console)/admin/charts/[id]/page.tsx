@@ -34,7 +34,7 @@ export default function AdminChartDetailPage() {
 
   if (!chart) return <p className="text-sm text-text-secondary">{error ?? '차트 정보를 불러오는 중…'}</p>;
   return <section>
-    <Link href="/admin/charts" className="mb-4 inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"><ArrowLeft className="size-4" />전체 차트</Link>
+    <Link href="/" className="mb-4 inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"><ArrowLeft className="size-4" />차트 목록</Link>
     <div><div className="mb-1 inline-flex rounded bg-muted px-2 py-1 text-xs text-text-secondary">관리자 읽기 전용</div><h1 className="text-2xl font-semibold text-text-primary">{chart.name}</h1><p className="mt-1 text-sm text-text-secondary">{chart.description || '설명 없음'}</p></div>
     <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
       <div className="rounded-lg border border-border bg-bg-panel p-4"><h2 className="mb-3 font-semibold text-text-primary">미리보기</h2>{preview ? <div className="h-[480px]"><ChartPreview option={preview.option} /></div> : <div className="grid h-[480px] place-items-center text-sm text-text-secondary">{previewError ?? '미리보기를 불러오는 중…'}</div>}</div>

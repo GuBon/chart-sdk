@@ -64,12 +64,19 @@ class AdminApiIT {
         mvc.perform(get("/api/v1/admin/users").with(user(principal(memberId, "member"))))
                 .andExpect(status().isForbidden());
 
-        mvc.perform(get("/api/v1/admin/charts")
+        // 관리자는 일반 차트 목록에서 소유자 필터로 타인 차트를 본다(항목에 ownerId 포함). 일반 사용자의 필터는 무시된다.
+        mvc.perform(get("/api/v1/charts")
                         .param("ownerId", String.valueOf(memberId))
                         .with(user(principal(adminId, "admin"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.charts.length()").value(1))
-                .andExpect(jsonPath("$.charts[0].id").value(chartId));
+                .andExpect(jsonPath("$.charts[0].id").value(chartId))
+                .andExpect(jsonPath("$.charts[0].ownerId").value(memberId));
+        mvc.perform(get("/api/v1/charts")
+                        .param("ownerId", String.valueOf(memberId))
+                        .with(user(principal(adminId, "member"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.charts.length()").value(0));
 
         // 관리자 미리보기는 스냅샷 전용 — 스냅샷이 없으면 (도달 불가능한) 고객 데이터소스에 접속을 시도하지 않고
         // 404 로 끝난다. 재계산을 시작했다면 접속 오류(5xx/QUERY_*)가 났을 것이다.

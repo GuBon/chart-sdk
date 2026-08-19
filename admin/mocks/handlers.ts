@@ -603,23 +603,6 @@ export const handlers = [
   }),
 
   // ── 관리자 전체 차트(읽기 전용) ──────────────────
-  http.get('/api/v1/admin/charts', ({ request }) => {
-    const params = new URL(request.url).searchParams;
-    const ownerId = params.get('ownerId');
-    const q = params.get('q')?.toLowerCase();
-    const type = params.get('type');
-    const pageSize = Math.min(100, Math.max(1, Number(params.get('pageSize') ?? 20)));
-    const requestedPage = Math.max(1, Number(params.get('page') ?? 1));
-    let list = chartList.map(adminChartSummary);
-    if (ownerId) list = list.filter((chart) => chart.ownerId === Number(ownerId));
-    if (q) list = list.filter((chart) => chart.name.toLowerCase().includes(q)
-      || chart.description?.toLowerCase().includes(q));
-    if (type) list = list.filter((chart) => chart.chartType === type);
-    const total = list.length;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const page = Math.min(requestedPage, totalPages);
-    return HttpResponse.json({ charts: list.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages });
-  }),
   http.get('/api/v1/admin/charts/:chartId/preview', ({ params }) => {
     const id = Number(params.chartId);
     const chart = storedChart(id);

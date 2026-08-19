@@ -12,9 +12,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 @Repository
@@ -25,46 +23,6 @@ public class AdminChartRepository {
     public AdminChartRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.mapper = mapper;
-    }
-
-    public Map<String, Object> list(Long ownerId, String q, String type, Integer page, Integer pageSize) {
-        int size = Math.max(1, Math.min(pageSize == null ? 20 : pageSize, 100));
-        StringBuilder where = new StringBuilder(" FROM mc_chart c LEFT JOIN mc_user u ON u.id=c.owner_id WHERE 1=1");
-        List<Object> args = new ArrayList<>();
-        if (ownerId != null) {
-            where.append(" AND c.owner_id=?");
-            args.add(ownerId);
-        }
-        if (q != null && !q.isBlank()) {
-            where.append(" AND (c.name ILIKE ? OR COALESCE(c.description, '') ILIKE ?)");
-            args.add("%" + q.strip() + "%");
-            args.add("%" + q.strip() + "%");
-        }
-        if (type != null && !type.isBlank()) {
-            where.append(" AND c.chart_type=?");
-            args.add(type.strip());
-        }
-
-        Integer totalValue = jdbc.queryForObject("SELECT count(*)" + where, Integer.class, args.toArray());
-        int total = totalValue == null ? 0 : totalValue;
-        int totalPages = Math.max(1, (int) Math.ceil((double) total / size));
-        int currentPage = Math.max(1, Math.min(page == null ? 1 : page, totalPages));
-        String sql = """
-                SELECT c.id, c.owner_id, c.name, c.description, c.chart_type, c.refresh_mode,
-                       c.created_at, c.updated_at, u.username,
-                       COALESCE(NULLIF(u.display_name, ''), u.username) AS owner_display_name
-                """ + where + " ORDER BY c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?";
-        List<Object> queryArgs = new ArrayList<>(args);
-        queryArgs.add(size);
-        queryArgs.add((currentPage - 1) * size);
-
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("charts", jdbc.query(sql, (rs, rowNum) -> summary(rs), queryArgs.toArray()));
-        response.put("page", currentPage);
-        response.put("pageSize", size);
-        response.put("total", total);
-        response.put("totalPages", totalPages);
-        return response;
     }
 
     public Map<String, Object> detail(long chartId) {

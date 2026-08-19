@@ -26,10 +26,6 @@ public class AdminChartQueryService {
         this.converter = converter;
     }
 
-    public Map<String, Object> list(Long ownerId, String q, String type, Integer page, Integer pageSize) {
-        return charts.list(ownerId, q, type, page, pageSize);
-    }
-
     public Map<String, Object> detail(long chartId) {
         return charts.detail(chartId);
     }

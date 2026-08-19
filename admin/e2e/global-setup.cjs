@@ -21,7 +21,6 @@ const WARMUP_ROUTES = [
   '/signup',
   '/admin/users',
   '/admin/users/1',
-  '/admin/charts',
   '/admin/charts/1',
 ];
 const WARMUP_TIMEOUT_MS = 90_000;

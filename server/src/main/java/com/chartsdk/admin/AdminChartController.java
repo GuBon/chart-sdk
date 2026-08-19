@@ -3,7 +3,6 @@ package com.chartsdk.admin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -15,15 +14,6 @@ public class AdminChartController {
 
     public AdminChartController(AdminChartQueryService charts) {
         this.charts = charts;
-    }
-
-    @GetMapping
-    public Map<String, Object> list(@RequestParam(required = false) Long ownerId,
-                                    @RequestParam(required = false) String q,
-                                    @RequestParam(required = false) String type,
-                                    @RequestParam(required = false) Integer page,
-                                    @RequestParam(required = false) Integer pageSize) {
-        return charts.list(ownerId, q, type, page, pageSize);
     }
 
     @GetMapping("/{chartId}")

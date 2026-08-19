@@ -294,14 +294,6 @@ export interface AdminChartSummary {
   updatedAt: string;
 }
 
-export interface AdminChartListResponse {
-  charts: AdminChartSummary[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-}
-
 export interface AdminChartDetail extends AdminChartSummary {
   datasourceId: number;
   datasourceName: string | null;

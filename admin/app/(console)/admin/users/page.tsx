@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Search, Users } from 'lucide-react';
 import { adminUsersApi, apiErrorMessage } from '@/lib/api';
 import type { AdminUserListResponse } from '@/lib/api';
-import { AdminSectionNav } from '@/components/admin/AdminSectionNav';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
@@ -40,7 +39,6 @@ export default function AdminUsersPage() {
 
   return (
     <section>
-      <AdminSectionNav />
       <div className="mb-5 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-text-primary">사용자 관리</h1>
