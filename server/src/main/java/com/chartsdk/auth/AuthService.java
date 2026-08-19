@@ -1,6 +1,7 @@
 package com.chartsdk.auth;
 
 import com.chartsdk.web.ApiException;
+import com.chartsdk.web.ThrowableCauseWalker;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpStatus;
@@ -26,10 +27,15 @@ public class AuthService {
 
     @Transactional
     public AuthUserResponse signup(SignupRequest input) {
-        String username = input.username() == null ? "" : input.username().strip();
+        // 저장·표시는 canonical(NFKC+strip), 조회는 normalized(+소문자). 두 값 모두 VARCHAR(100)에 들어가므로
+        // 길이는 둘 다 검사한다 — NFKC 로 줄어들거나(조합형 자모) 소문자화로 늘어나는(İ→i̇) 경우가 있다.
+        String username = UsernameNormalizer.canonical(input.username());
         String normalized = UsernameNormalizer.normalize(username);
-        if (!UsernameNormalizer.hasValidLength(normalized)) {
+        if (!UsernameNormalizer.hasValidLength(username) || !UsernameNormalizer.hasValidLength(normalized)) {
             throw validation("username", "아이디는 1~100자여야 합니다.");
+        }
+        if (UsernameNormalizer.hasInvisibleCharacter(username)) {
+            throw validation("username", "아이디에 보이지 않는 제어 문자는 쓸 수 없습니다.");
         }
         if (input.password() == null
                 || input.password().codePointCount(0, input.password().length()) < MIN_PASSWORD_CODE_POINTS) {
@@ -51,10 +57,16 @@ public class AuthService {
                     """, Long.class, username, normalized, passwords.encode(input.password()), username);
             return new AuthUserResponse(id, username, username, "member");
         } catch (DataIntegrityViolationException e) {
+            // 중복(23505)만 409 로 번역한다. 그 외 제약 위반(길이·CHECK)은 사전검증이 막았어야 하는 버그이므로
+            // "이미 사용 중" 으로 위장하지 않고 공통 핸들러(INVALID_REQUEST 400)로 넘긴다.
+            if (!SQLSTATE_UNIQUE_VIOLATION.equals(ThrowableCauseWalker.firstSqlState(e))) throw e;
             throw new ApiException(HttpStatus.CONFLICT, "USERNAME_TAKEN",
                     "이미 사용 중인 아이디입니다.", Map.of("username", "이미 사용 중입니다."), e);
         }
     }
+
+    /** PostgreSQL SQLSTATE unique_violation. */
+    private static final String SQLSTATE_UNIQUE_VIOLATION = "23505";
 
     private static ApiException validation(String field, String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", message, Map.of(field, message));

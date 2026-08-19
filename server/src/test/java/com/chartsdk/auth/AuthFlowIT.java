@@ -174,6 +174,42 @@ class AuthFlowIT {
                 .andExpect(jsonPath("$.username").value(username));
     }
 
+    @Test
+    void signupStoresCanonicalUsernameAndReportsLengthAsValidationNotConflict() throws Exception {
+        // NBSP·전각 소문자·전각 공백으로 입력해도 저장·응답은 NFKC canonical("auth-it-Canon-…", 대소문자 보존)이고,
+        // 로그인은 원문 그대로 입력해도 같은 계정을 찾는다. (cleanUp 의 'auth-it-%' 세션 정리를 위해 소문자로 시작)
+        String typed = "\u00A0\uFF41\uFF55\uFF54\uFF48-it-Canon-" + UUID.randomUUID().toString().substring(0, 8) + "\u3000";
+        String canonical = UsernameNormalizer.canonical(typed);
+        assertThat(canonical).startsWith("auth-it-Canon-").doesNotContain("\u00A0", "\u3000");
+        usernames.add(canonical);
+        CsrfCredentials csrf = csrf();
+        mvc.perform(post("/api/v1/auth/signup")
+                        .cookie(csrf.cookie())
+                        .header(csrf.headerName(), csrf.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(
+                                Map.of("username", typed, "password", PASSWORD, "passwordConfirm", PASSWORD))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value(canonical));
+        assertThat(jdbc.queryForObject("SELECT username FROM mc_user WHERE username_normalized=?",
+                String.class, canonical.toLowerCase())).isEqualTo(canonical);
+        login(typed, canonical);
+
+        // 조합형 자모(ᄒ+ᅡ+ᆫ, 3 code point)는 NFKC 로 1자가 된다 — 원문 303 code point 지만 canonical 101 자라
+        // 길이 검증에 걸려야 하며, DB 제약이 아니라 사전검증(400)이 막고 409 로 위장하지 않는다.
+        String tooLong = "\u1112\u1161\u11AB".repeat(101);
+        csrf = csrf();
+        mvc.perform(post("/api/v1/auth/signup")
+                        .cookie(csrf.cookie())
+                        .header(csrf.headerName(), csrf.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(
+                                Map.of("username", tooLong, "password", PASSWORD, "passwordConfirm", PASSWORD))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.error.fields.username").value("아이디는 1~100자여야 합니다."));
+    }
+
     private void signup(String username) throws Exception {
         usernames.add(username);
         CsrfCredentials csrf = csrf();
@@ -190,14 +226,19 @@ class AuthFlowIT {
     }
 
     private Cookie login(String username) throws Exception {
+        return login(username, username);
+    }
+
+    /** {@code typed} 로 로그인하면 응답 username 은 저장된 canonical({@code expectedUsername}) 이어야 한다. */
+    private Cookie login(String typed, String expectedUsername) throws Exception {
         CsrfCredentials csrf = csrf();
         MvcResult result = mvc.perform(post("/api/v1/auth/login")
                         .cookie(csrf.cookie())
                         .header(csrf.headerName(), csrf.token())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"%s\",\"password\":\"%s\"}".formatted(username, PASSWORD)))
+                        .content(mapper.writeValueAsString(Map.of("username", typed, "password", PASSWORD))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.username").value(username))
+                .andExpect(jsonPath("$.username").value(expectedUsername))
                 .andReturn();
         Cookie cookie = result.getResponse().getCookie("chartsdk-session");
         assertThat(cookie).as("login session cookie").isNotNull();
