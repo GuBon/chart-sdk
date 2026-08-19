@@ -288,6 +288,7 @@ export function SchemaExplorer({
                   type="button"
                   data-testid={`schema-table-${key}`}
                   data-base-table={baseTable || undefined}
+                  aria-pressed={baseTable}
                   onClick={() => selectTable(t)}
                   disabled={disabled}
                   title={

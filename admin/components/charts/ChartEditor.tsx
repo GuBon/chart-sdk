@@ -90,6 +90,7 @@ function rawPreviewSignature(config: BuilderConfig): string {
   });
 }
 
+// 원본 테이블을 바꾸면 초기화되는 구성 항목. 표본 설정은 테이블과 무관한 실행 정책이라 유지되므로 제외한다.
 function configuredNoCodeSettings(config: BuilderConfig): string[] {
   const settings: string[] = [];
   const hasGeoPointFields = config.geoPoint != null
@@ -104,7 +105,6 @@ function configuredNoCodeSettings(config: BuilderConfig): string[] {
   if (config.seriesBy) settings.push('계열');
   if (config.where.length > 0) settings.push('조건');
   if (config.orderBy) settings.push('정렬');
-  if (config.sample) settings.push('표본 추출');
   if (config.limit != null) settings.push('조회 제한');
   if (
     hasGeoPointFields
@@ -595,9 +595,13 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
   // 원본 테이블 확정(나머지 구성 초기화 + 원본 미리보기). 확인 절차는 selectTable 이 담당.
   const applyBaseTable = async (t: SchemaTable) => {
     chartTypeDraftsRef.current = clearChartDataDrafts(chartTypeDraftsRef.current);
+    // 표본 크기·seed는 테이블 컬럼과 무관한 실행 정책이다. 원본을 바꿀 때 축·조인·조건은
+    // 초기화하되 사용자가 명시한 표본 정책까지 조용히 버리지는 않는다.
+    const preservedSample = builder.sample ? structuredClone(builder.sample) : null;
     replaceBuilderSnapshot({
       ...emptyBuilder(),
       table: { datasourceId: t.datasourceId, schema: t.schema, name: t.name },
+      sample: preservedSample,
     });
     setTableSelectionTarget(null);
     setAxisColumnSelectionTarget(null);
@@ -1491,12 +1495,12 @@ export function ChartEditor({ chartId }: { chartId?: number }) {
           }
         >
           <p className="text-[13px] text-text-secondary">
-            현재 {configuredNoCodeSettings(builder).join('·')} 항목이 설정되어 있습니다. 정말 변경하시겠습니까? 변경하면 원본 테이블 외의 설정은 초기화됩니다.
+            현재 {configuredNoCodeSettings(builder).join('·')} 항목이 설정되어 있습니다. 정말 변경하시겠습니까? 변경하면 표본 설정을 제외한 구성은 초기화됩니다.
           </p>
         </Modal>
       )}
 
-      {/* 임베드 코드 모달(S3) — 저장된 차트에서만. 내부 링크(/tokens)도 이탈 가드를 거치도록
+      {/* 임베드 코드 모달(S3) — 저장된 차트에서만. 모달 내부 이동도 이탈 가드를 거치도록
           onNavigate 를 주입한다(가드 없는 <Link> 는 미저장 변경을 경고 없이 유실시킨다). */}
       {embedOpen && savedId != null && (
         <EmbedModal
