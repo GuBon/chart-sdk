@@ -22,7 +22,8 @@ function stop() {
   if (stopping) return;
   stopping = true;
   if (process.platform === 'win32') {
-    spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    // PATH 에 System32 가 없는 셸(제한된 CI/에이전트 환경)에서도 동작하도록 절대 경로를 쓴다.
+    spawnSync('C:\\Windows\\System32\\taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   } else {
     child.kill('SIGTERM');
   }
