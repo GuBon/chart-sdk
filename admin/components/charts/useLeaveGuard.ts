@@ -71,9 +71,29 @@ export function useLeaveGuard(hasUnsavedChanges: boolean) {
     };
     navigation?.addEventListener('navigate', onNavigate);
 
+    // Navigation API 미지원 브라우저에서는 document-level click을 보조 경계로 사용한다.
+    // 공용 AppBar처럼 에디터 밖에서 렌더된 next/link도 같은 문서 이동이므로 beforeunload가 뜨지 않는다.
+    const onDocumentClick = (event: MouseEvent) => {
+      if (navigation || event.defaultPrevented || event.button !== 0
+          || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const element = event.target instanceof Element ? event.target : null;
+      const anchor = element?.closest('a[href]') as HTMLAnchorElement | null;
+      if (!anchor || anchor.hasAttribute('download')) return;
+      if (anchor.target && anchor.target !== '_self') return;
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.origin !== window.location.origin) return;
+      const path = appPath(destination);
+      if (path === appPath(new URL(window.location.href))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setLeaveTarget({ path });
+    };
+    if (!navigation) document.addEventListener('click', onDocumentClick, true);
+
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
       navigation?.removeEventListener('navigate', onNavigate);
+      if (!navigation) document.removeEventListener('click', onDocumentClick, true);
     };
   }, [hasUnsavedChanges]);
 
